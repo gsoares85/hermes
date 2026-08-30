@@ -10,6 +10,13 @@ import { defineConfig } from "vite";
 // always points at the current build. Use `npm run clean` to reset it.
 export default defineConfig({
   plugins: [react()],
+  // Dev mode runs Vite as the asset server and the Wails CLI picks the port,
+  // so it has to be honoured exactly rather than fall back to another one.
+  server: {
+    host: "127.0.0.1",
+    port: Number(process.env["WAILS_VITE_PORT"]) || 9245,
+    strictPort: true,
+  },
   build: {
     outDir: "dist",
     emptyOutDir: false,

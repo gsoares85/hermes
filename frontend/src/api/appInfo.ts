@@ -1,12 +1,8 @@
-import { Call } from "@wailsio/runtime";
+import { AppInfoService } from "../../bindings/github.com/gsoares85/hermes/internal/ui";
+import type { Info } from "../../bindings/github.com/gsoares85/hermes/internal/version";
 
 /** Build information of the running binary, produced by internal/version. */
-export interface AppInfo {
-  version: string;
-  commit: string;
-  date: string;
-  platform: string;
-}
+export type AppInfo = Info;
 
 /** Shown when the backend is unreachable, as in a browser-only dev session. */
 export const unknownAppInfo: AppInfo = {
@@ -16,31 +12,13 @@ export const unknownAppInfo: AppInfo = {
   platform: "unknown",
 };
 
-const infoMethod = "ui.AppInfoService.Info";
-
-function isAppInfo(value: unknown): value is AppInfo {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate["version"] === "string" &&
-    typeof candidate["commit"] === "string" &&
-    typeof candidate["date"] === "string" &&
-    typeof candidate["platform"] === "string"
-  );
-}
-
 /**
  * Reads the build information from the Go side.
  *
- * The value crossing the boundary is untrusted input as far as the compiler is
- * concerned, so it is validated instead of cast.
+ * The call goes through the generated bindings, so the shape of the payload is
+ * the Go struct itself: if internal/version changes, this stops compiling
+ * instead of failing at runtime.
  */
 export async function fetchAppInfo(): Promise<AppInfo> {
-  const result: unknown = await Call.ByName(infoMethod);
-  if (!isAppInfo(result)) {
-    throw new TypeError(`${infoMethod} returned an unexpected payload`);
-  }
-  return result;
+  return await AppInfoService.Info();
 }

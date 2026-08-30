@@ -3,7 +3,9 @@ import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "node_modules"] },
+  // bindings/ is generated from the Go services on every build; it is
+  // type-checked by tsc but not linted, because nobody edits it.
+  { ignores: ["dist", "node_modules", "bindings"] },
   js.configs.recommended,
   {
     files: ["**/*.{ts,tsx}"],

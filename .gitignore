@@ -5,8 +5,9 @@ CLAUDE.md
 
 # Build output
 /bin/
-/build/
 *.exe
+# Task runner fingerprint cache
+.task/
 *.dll
 *.so
 *.dylib

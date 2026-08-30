@@ -1,0 +1,43 @@
+# Project configuration read by the Wails CLI.
+#
+# Only what this project actually uses is kept here: application metadata and
+# the dev-mode watcher. Packaging and signing options arrive with 1.0.
+version: "3"
+
+info:
+  companyName: "Guilherme Soares"
+  productName: "Hermes"
+  productIdentifier: "com.gsoares85.hermes"
+  description: "A native, open source database manager for PostgreSQL"
+  copyright: "(c) 2026, Guilherme Soares"
+  comments: "https://github.com/gsoares85/hermes"
+  # The real version comes from the release tag, injected at build time. This
+  # field only feeds the platform metadata of a local build.
+  version: "0.0.0"
+
+dev_mode:
+  root_path: .
+  log_level: warn
+  debounce: 1000
+  ignore:
+    dir:
+      - .git
+      - .github
+      - bin
+      - frontend
+      - node_modules
+    file:
+      - .DS_Store
+      - .gitignore
+      - .gitkeep
+      - "*_test.go"
+    watched_extension:
+      - "*.go"
+    git_ignore: true
+  executes:
+    - cmd: wails3 task build DEV=true
+      type: blocking
+    - cmd: wails3 task dev:frontend
+      type: background
+    - cmd: wails3 task run
+      type: primary

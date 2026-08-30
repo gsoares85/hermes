@@ -1,0 +1,86 @@
+# Tasks the Wails CLI drives. `wails3 dev` reads build/config.yml, which calls
+# the build, dev:frontend and run tasks below.
+#
+# Everyday commands live in the Makefile — this file exists because the Wails
+# CLI expects it, and it stays as small as that requirement allows. The two do
+# not duplicate each other: the Makefile delegates the desktop targets here.
+version: "3"
+
+vars:
+  APP_NAME: hermes
+  BIN_DIR: bin
+  MAIN_PACKAGE: ./cmd/hermes
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
+  BINARY: '{{.BIN_DIR}}/{{.APP_NAME}}{{exeExt}}'
+
+tasks:
+  install:frontend:
+    summary: Installs the frontend dependencies
+    dir: frontend
+    sources:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules/**/*
+    cmds:
+      - npm install
+
+  generate:bindings:
+    summary: Generates the typed frontend bindings from the Go services
+    sources:
+      - "**/*.go"
+      - exclude: frontend/**/*
+      - go.mod
+    generates:
+      - frontend/bindings/**/*
+    cmds:
+      # The pattern matters: the services live under internal/, not in the
+      # directory of the main package, and without it the generator finds
+      # nothing and quietly wipes the previous output.
+      - wails3 generate bindings -ts -i -clean=true ./...
+
+  build:frontend:
+    summary: Builds the embedded frontend
+    dir: frontend
+    deps:
+      - install:frontend
+      - generate:bindings
+    cmds:
+      - npm run {{if eq .DEV "true"}}build:dev{{else}}build{{end}}
+
+  build:
+    summary: Builds the desktop binary
+    deps:
+      - build:frontend
+    cmds:
+      - go build {{.BUILD_FLAGS}} -o "{{.BINARY}}" {{.MAIN_PACKAGE}}
+    vars:
+      # A development build keeps the console window and the debug symbols; a
+      # release build is stripped. The version itself is never set here: it is
+      # injected by the release workflow from the tag.
+      BUILD_FLAGS: '{{if eq .DEV "true"}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production -trimpath -buildvcs=false{{end}}'
+
+  run:
+    summary: Runs the built binary
+    cmds:
+      - '"{{.BINARY}}"'
+
+  dev:
+    summary: Runs the application in development mode
+    cmds:
+      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+
+  dev:frontend:
+    summary: Runs the Vite dev server used by dev mode
+    dir: frontend
+    deps:
+      - install:frontend
+    cmds:
+      - npm run dev -- --port {{.VITE_PORT}} --strictPort
+
+  package:
+    summary: Builds the distributable binary
+    cmds:
+      - task: build
+      - cmd: echo "Binary at {{.BINARY}}. Installers and code signing arrive with 1.0."
+        silent: true

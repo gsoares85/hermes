@@ -68,11 +68,11 @@ build-frontend: ## Build the embedded frontend
 
 .PHONY: dev
 dev: ## Run the desktop app in development mode
-	wails3 dev
+	wails3 task dev
 
 .PHONY: package
 package: ## Package the desktop app for the current platform
-	wails3 package
+	wails3 task package
 
 .PHONY: clean
 clean: ## Remove build and coverage output
