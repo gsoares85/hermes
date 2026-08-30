@@ -2,3 +2,24 @@
 docs
 CLAUDE.md
 .claude
+
+# Build output
+/bin/
+/build/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test and coverage output
+coverage.out
+coverage.html
+
+# Frontend
+frontend/node_modules/
+frontend/dist/*
+!frontend/dist/.gitkeep
+
+# Local environment
+.env
+.env.local
