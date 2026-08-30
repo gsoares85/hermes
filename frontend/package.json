@@ -1,0 +1,31 @@
+{
+  "name": "hermes-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "clean": "node -e \"fs.rmSync('dist/assets',{recursive:true,force:true})\"",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . && prettier --check src",
+    "format": "prettier --write src"
+  },
+  "dependencies": {
+    "@wailsio/runtime": "3.0.0-beta.16",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.36.0",
+    "@types/react": "19.1.13",
+    "@types/react-dom": "19.1.9",
+    "@vitejs/plugin-react": "5.0.2",
+    "eslint": "9.36.0",
+    "eslint-plugin-react-hooks": "5.2.0",
+    "prettier": "3.6.2",
+    "typescript": "5.9.2",
+    "typescript-eslint": "8.44.0",
+    "vite": "7.1.5"
+  }
+}
