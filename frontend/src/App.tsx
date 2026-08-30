@@ -9,17 +9,17 @@ export function App(): React.JSX.Element {
     let active = true;
 
     fetchAppInfo()
-      .then((loaded) => {
+      .then((loaded): void => {
         if (active) {
           setInfo(loaded);
         }
       })
-      .catch(() => {
+      .catch((): void => {
         // Running outside the desktop shell: keep the placeholder rather than
         // breaking the window over build metadata.
       });
 
-    return () => {
+    return (): void => {
       active = false;
     };
   }, []);
@@ -33,8 +33,7 @@ export function App(): React.JSX.Element {
 
       <main className="app__main">
         <p>
-          The shell is up. Connections, object tree and SQL editor arrive in the tasks that
-          follow.
+          The shell is up. Connections, object tree and SQL editor arrive in the tasks that follow.
         </p>
       </main>
 

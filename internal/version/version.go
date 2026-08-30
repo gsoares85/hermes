@@ -115,7 +115,12 @@ func parseComponent(part string) (int, error) {
 		}
 	}
 
-	return strconv.Atoi(part)
+	n, err := strconv.Atoi(part)
+	if err != nil {
+		return 0, fmt.Errorf("component out of range: %w", err)
+	}
+
+	return n, nil
 }
 
 // ParseBump reads an increment, accepting both the bare name and the pull

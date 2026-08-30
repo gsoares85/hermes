@@ -52,5 +52,9 @@ func run() error {
 		MinHeight: 600,
 	})
 
-	return app.Run()
+	if err := app.Run(); err != nil {
+		return fmt.Errorf("running the application: %w", err)
+	}
+
+	return nil
 }

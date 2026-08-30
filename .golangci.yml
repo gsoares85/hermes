@@ -1,0 +1,72 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errcheck
+    - errorlint
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - nolintlint
+    - revive
+    - staticcheck
+    - unconvert
+    - unused
+    - wrapcheck
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      # check-blank stays off: assigning to _ is an explicit decision to ignore
+      # an error, which is exactly what we want people to write when they mean
+      # it. An unchecked call, which errcheck still catches, is not.
+      check-blank: false
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: early-return
+        - name: unused-parameter
+    wrapcheck:
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Join(
+        - .Wrap(
+        - .Wrapf(
+
+  exclusions:
+    paths:
+      # Go sources shipped inside node packages are not ours to lint.
+      - frontend/node_modules
+    rules:
+      # Assertions are the point of a test; wrapping every error there adds
+      # noise without adding information.
+      - path: _test\.go
+        linters:
+          - gosec
+          - wrapcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    paths:
+      - frontend/node_modules
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/gsoares85/hermes
