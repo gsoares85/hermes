@@ -40,6 +40,10 @@ linters:
         - name: early-return
         - name: unused-parameter
     wrapcheck:
+      # Errors from our own packages already carry their context; wrapcheck is
+      # here to catch bare errors coming out of third-party code.
+      ignore-package-globs:
+        - github.com/gsoares85/hermes/*
       ignore-sigs:
         - .Errorf(
         - errors.New(

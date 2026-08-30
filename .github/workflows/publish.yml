@@ -1,0 +1,140 @@
+name: Publish
+
+# Builds the binaries for a tag and publishes the GitHub release. Called by the
+# release workflow after it creates the tag, and reusable on its own for a
+# republish.
+#
+# It runs apart from the pull request pipeline on purpose: when code signing
+# arrives with 1.0, its credentials belong here, where a pull request from a
+# fork can never reach them.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-amd64
+          - os: macos-latest
+            target: darwin-arm64
+          - os: windows-latest
+            target: windows-amd64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Linux webview dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Build the frontend
+        run: |
+          npm ci
+          npm run build
+        working-directory: frontend
+
+      # The version is injected, never written into a file: the release is the
+      # version, so a build outside this workflow keeps reporting "dev".
+      - name: Build the binaries
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          mkdir -p dist
+          suffix=""
+          if [ "$RUNNER_OS" = "Windows" ]; then suffix=".exe"; fi
+          module="github.com/gsoares85/hermes/internal/version"
+          built="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ldflags="-s -w -X $module.Version=$TAG -X $module.Commit=${GITHUB_SHA::7} -X $module.Date=$built"
+          go build -trimpath -ldflags "$ldflags" -o "dist/hermes-${{ matrix.target }}$suffix" ./cmd/hermes
+          go build -trimpath -ldflags "$ldflags" -o "dist/hermes-cli-${{ matrix.target }}$suffix" ./cmd/hermes-cli
+
+      - name: Check the injected version
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          suffix=""
+          if [ "$RUNNER_OS" = "Windows" ]; then suffix=".exe"; fi
+          reported="$(./dist/hermes-cli-${{ matrix.target }}$suffix -version)"
+          echo "$reported"
+          case "$reported" in
+            *"$TAG"*) ;;
+            *) echo "the binary reports $reported, expected it to carry $TAG" && exit 1 ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.target }}
+          path: dist/*
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: binaries-*
+          merge-multiple: true
+
+      - name: Checksum every artifact
+        working-directory: artifacts
+        run: sha256sum * > SHA256SUMS
+
+      # Before 1.0 the release is published as it is built. From 1.0 on it is
+      # created as a draft, because from then on the notes are reviewed by hand
+      # and the signing step lands in this workflow.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          major="${TAG#v}"
+          major="${major%%.*}"
+          draft=""
+          if [ "$major" -ge 1 ]; then draft="--draft"; fi
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            --verify-tag \
+            $draft \
+            artifacts/*

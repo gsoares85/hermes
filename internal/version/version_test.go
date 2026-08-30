@@ -185,3 +185,107 @@ func TestInfoString(t *testing.T) {
 		t.Errorf("Info.String() = %q, want %q", got, want)
 	}
 }
+
+func TestBumpFromLabels(t *testing.T) {
+	t.Parallel()
+
+	got, err := version.BumpFromLabels([]string{"bug", "release:minor", "needs-review"})
+	if err != nil {
+		t.Fatalf("BumpFromLabels returned error: %v", err)
+	}
+	if got != version.BumpMinor {
+		t.Errorf("BumpFromLabels = %q, want %q", got, version.BumpMinor)
+	}
+}
+
+func TestBumpFromLabelsRequiresExactlyOne(t *testing.T) {
+	t.Parallel()
+
+	if _, err := version.BumpFromLabels([]string{"bug"}); !errors.Is(err, version.ErrNoBumpLabel) {
+		t.Errorf("no release label: error = %v, want ErrNoBumpLabel", err)
+	}
+	if _, err := version.BumpFromLabels(nil); !errors.Is(err, version.ErrNoBumpLabel) {
+		t.Errorf("nil labels: error = %v, want ErrNoBumpLabel", err)
+	}
+	// Two labels is not a tie to break silently: it is a mistake to report.
+	if _, err := version.BumpFromLabels([]string{"release:minor", "release:patch"}); !errors.Is(err, version.ErrAmbiguousBump) {
+		t.Errorf("two release labels: error = %v, want ErrAmbiguousBump", err)
+	}
+}
+
+func TestBumpFromCommits(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		messages []string
+		want     version.Bump
+	}{
+		{"feature wins over fix", []string{"fix: a", "feat: b"}, version.BumpMinor},
+		{"fix alone", []string{"fix: a", "docs: b"}, version.BumpPatch},
+		{"refactor counts as patch", []string{"refactor: a"}, version.BumpPatch},
+		{"bang marks a break", []string{"feat!: drop the old profile format"}, version.BumpMajor},
+		{"scoped bang", []string{"feat(profile)!: rename a field"}, version.BumpMajor},
+		{"breaking change footer", []string{"feat: a\n\nBREAKING CHANGE: the CLI flag is gone"}, version.BumpMajor},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := version.BumpFromCommits(tc.messages)
+			if err != nil {
+				t.Fatalf("BumpFromCommits returned error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("BumpFromCommits(%v) = %q, want %q", tc.messages, got, tc.want)
+			}
+		})
+	}
+}
+
+// Guessing a release from commits nobody wrote for that purpose is how a
+// pipeline publishes a version nobody meant. When the history says nothing, the
+// workflow must stop and ask for the label.
+func TestBumpFromCommitsRefusesToGuess(t *testing.T) {
+	t.Parallel()
+
+	for _, messages := range [][]string{
+		nil,
+		{"chore: tidy"},
+		{"docs: fix a typo", "style: reformat"},
+		{"whatever this is"},
+	} {
+		if _, err := version.BumpFromCommits(messages); !errors.Is(err, version.ErrAmbiguousBump) {
+			t.Errorf("BumpFromCommits(%v) error = %v, want ErrAmbiguousBump", messages, err)
+		}
+	}
+}
+
+func TestResolveBumpPrefersTheLabel(t *testing.T) {
+	t.Parallel()
+
+	got, err := version.ResolveBump([]string{"release:patch"}, []string{"feat: a big feature"})
+	if err != nil {
+		t.Fatalf("ResolveBump returned error: %v", err)
+	}
+	if got != version.BumpPatch {
+		t.Errorf("ResolveBump = %q, want the label to win with %q", got, version.BumpPatch)
+	}
+}
+
+func TestResolveBumpFallsBackToCommits(t *testing.T) {
+	t.Parallel()
+
+	got, err := version.ResolveBump(nil, []string{"feat: a new capability"})
+	if err != nil {
+		t.Fatalf("ResolveBump returned error: %v", err)
+	}
+	if got != version.BumpMinor {
+		t.Errorf("ResolveBump = %q, want %q", got, version.BumpMinor)
+	}
+
+	if _, err := version.ResolveBump(nil, []string{"chore: tidy"}); !errors.Is(err, version.ErrAmbiguousBump) {
+		t.Errorf("with nothing to go on: error = %v, want ErrAmbiguousBump", err)
+	}
+}
