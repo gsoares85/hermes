@@ -1,0 +1,45 @@
+# PostgreSQL versions used during development. The integration tests do not use
+# this file — they start their own containers with testcontainers — but the same
+# five majors are covered, so what passes here passes there.
+#
+#   docker compose up -d
+#   psql "postgres://hermes:hermes@localhost:5436/hermes"
+
+name: hermes-dev
+
+x-postgres: &postgres
+  environment:
+    POSTGRES_DB: hermes
+    POSTGRES_USER: hermes
+    POSTGRES_PASSWORD: hermes
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U hermes -d hermes"]
+    interval: 5s
+    timeout: 5s
+    retries: 10
+
+services:
+  postgres-13:
+    <<: *postgres
+    image: postgres:13-alpine
+    ports: ["5433:5432"]
+
+  postgres-15:
+    <<: *postgres
+    image: postgres:15-alpine
+    ports: ["5435:5432"]
+
+  postgres-16:
+    <<: *postgres
+    image: postgres:16-alpine
+    ports: ["5436:5432"]
+
+  postgres-17:
+    <<: *postgres
+    image: postgres:17-alpine
+    ports: ["5437:5432"]
+
+  postgres-18:
+    <<: *postgres
+    image: postgres:18-alpine
+    ports: ["5438:5432"]
