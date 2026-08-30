@@ -50,6 +50,13 @@ func run() error {
 		Height:    800,
 		MinWidth:  900,
 		MinHeight: 600,
+
+		// Both fields are set on purpose. Left unset, the zero value is a fully
+		// transparent black, which the webview takes literally: everything the
+		// page has not painted itself shows the black window behind it, and the
+		// window opens black.
+		BackgroundType:   application.BackgroundTypeSolid,
+		BackgroundColour: application.NewRGB(255, 255, 255),
 	})
 
 	if err := app.Run(); err != nil {
