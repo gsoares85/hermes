@@ -1,5 +1,12 @@
 # Hermes
 
+[![CI](https://github.com/gsoares85/hermes/actions/workflows/ci.yml/badge.svg)](https://github.com/gsoares85/hermes/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/gsoares85/hermes/branch/main/graph/badge.svg)](https://codecov.io/gh/gsoares85/hermes)
+[![Release](https://img.shields.io/github/v/release/gsoares85/hermes?include_prereleases&sort=semver)](https://github.com/gsoares85/hermes/releases)
+[![License](https://img.shields.io/github/license/gsoares85/hermes)](LICENSE)
+[![Go](https://img.shields.io/github/go-mod/go-version/gsoares85/hermes)](go.mod)
+[![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macos%20%7C%20windows-blue)](#installation)
+
 A **native, open source desktop database manager** for PostgreSQL, written in Go.
 
 Fast, lightweight clients (TablePlus, Postico, Beekeeper) can't compare structure, compare
@@ -51,34 +58,36 @@ section does not.
 
 ### Binaries
 
-Signed installers for Linux, macOS, and Windows will be published on the Releases page
-starting with version 1.0. Until then, build from source.
+Every release publishes binaries for Linux, macOS, and Windows, plus `SHA256SUMS`, on the
+[releases page](https://github.com/gsoares85/hermes/releases). Signed installers arrive with
+version 1.0.
+
+Check what you have:
+
+```console
+$ hermes --version
+hermes v0.1.0 (a1b2c3d, 2026-08-30T12:00:00Z, linux/amd64)
+```
 
 ### From source
 
-Requires [Go 1.22+](https://go.dev/dl/), [Node.js 20+](https://nodejs.org/), and the
+Requires [Go 1.25+](https://go.dev/dl/), [Node.js 20+](https://nodejs.org/), and the
 [Wails v3](https://wails.io/) CLI.
 
 ```sh
 git clone https://github.com/gsoares85/hermes.git
 cd hermes
 
-# dependencies and core build
-go mod download
-go build ./...
-
-# desktop app in development mode
-wails3 dev
-
-# package for the current platform
-wails3 package
+make build   # frontend and every binary
+make dev     # the desktop app, in development mode
+make package # package for the current platform
 ```
 
-The packaged binary lands in `bin/`.
+`make help` lists every target.
 
 ## Features
 
-No features have shipped yet. This section is filled in as each one lands, always with a real
+No feature has shipped yet. This section is filled in as each one lands, always with a real
 usage example.
 
 ## Roadmap
@@ -111,21 +120,21 @@ hermes run profiles/sync-staging.toml
 
 ## Contributing
 
-The project follows TDD with a minimum of 85% coverage, Conventional Commits, and both a code
-review and a security review on every PR.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) — it describes the whole process, including the
+version label every pull request needs.
+
+The short version: TDD with a minimum of 85% statement coverage, Conventional Commits, one
+commit per phase, and a code review plus a security review on every pull request.
 
 ```sh
-go test ./...                                        # full suite
-go test -race -coverprofile=coverage.out ./internal/...
-go tool cover -func=coverage.out                     # coverage (floor: 85%)
-golangci-lint run                                    # Go lint
-npm run lint                                         # frontend lint
+make lint              # Go and frontend linters
+make test              # unit tests
+make cover             # unit tests plus the 85% floor
+make test-integration  # PostgreSQL 13, 15, 16, 17 and 18 (needs Docker)
 ```
 
-Integration tests use testcontainers against PostgreSQL 13, 15, 16, 17, and 18 — you need
-Docker available to run them.
+Please report security vulnerabilities privately — see [SECURITY.md](SECURITY.md).
 
 ## License
 
-Open source. The final license (Apache-2.0) will be published in the `LICENSE` file before the
-first release.
+[Apache-2.0](LICENSE).
