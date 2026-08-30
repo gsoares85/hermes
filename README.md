@@ -1,31 +1,131 @@
-# Documentação do Hermes
+# Hermes
 
-Esta pasta é o sistema de gestão do projeto. Tudo que o Claude Code produz fora de código de
-aplicação mora aqui, versionado junto com o repositório.
+A **native, open source desktop database manager** for PostgreSQL, written in Go.
 
-## Como usar
+Fast, lightweight clients (TablePlus, Postico, Beekeeper) can't compare structure, compare
+data, transfer between databases, or run backups. The tools that can (Navicat, DBeaver PRO,
+dbForge) are heavy, expensive, or both. Hermes exists to fill that gap: the four operations
+people buy a license for — **structure sync, data sync, data transfer, and integrated
+backup/restore** — in a native app that is fast and free.
 
-| Quero... | Comando | Produz |
-|---|---|---|
-| Pesquisar mercado e propor funcionalidades | `/market-research <tema>` | `project-manager/market-research/MR-*.md` + entradas em `backlog.md` |
-| Criar uma task bem formada | `/create-task <ideia>` | `project-management/tasks/TASK-XXXX-*.md` + atualização do `index.md` |
-| Planejar a implementação de uma task | `/plan-task TASK-XXXX` | `plans/PLAN-TASK-XXXX-*.md` |
-| Gerar a descrição do PR | `/pr-description` | `pr-descriptions/PR-*.md` |
-| Revisar o PR (código + segurança) | `/pr-review` | `pr-reviews/REVIEW-PR-*.md` |
+The bet is focus: do for **one** engine what the competition tries to do for twenty.
 
-O ponto de partida de qualquer sessão é `project-management/index.md`: a tabela de tasks e o
-roteiro com a ordem de desenvolvimento.
+## Project status
 
-## O que ler antes de implementar
+**Pre-alpha — under active development, no usable release yet.** This README grows with every
+feature shipped: anything documented below with an example works. Anything in the *Roadmap*
+section does not.
 
-1. `technical/ARCHITECTURE.md` — onde cada coisa mora e por quê.
-2. `technical/FEATURE_CATALOG.md` — o que a funcionalidade deve fazer (procure pelo ID).
-3. A task em `project-management/tasks/` e o plano correspondente em `plans/`.
-4. Os ADRs relevantes em `decisions/`.
+## Principles
 
-## Regras de manutenção
+- **Nothing destructive without a preview.** Every operation that changes structure or data
+  produces SQL you can read, edit, and save before it runs.
+- **Whatever the wizard does, the CLI does too.** Every operation is a serializable profile
+  that runs headless — the same file works on your machine and in CI.
+- **Nothing blocks the UI.** Every long operation is a cancelable job with progress.
+- **Fast is a requirement, not a goal.** Startup under 1.5s; first page of a 50M-row table in
+  under 500ms; diff of 1,000 tables in under 20s.
+- **A false positive in the diff is a bug.** Comparing a schema against itself must report
+  zero differences.
 
-- Toda task referencia os IDs de funcionalidade que implementa (`SYN-08`, `BKP-11`...).
-- Toda decisão estrutural vira um ADR. Se a discussão durou mais de dez minutos, é ADR.
-- `index.md` é a fonte da verdade de status. Se o status está só no arquivo da task, está errado.
-- Planos concluídos não são apagados: viram histórico do porquê das coisas.
+## Requirements
+
+- **PostgreSQL 12 or newer** on the server you want to manage.
+- **PostgreSQL client tools** (`pg_dump`, `pg_restore`, `psql`) for the backup and restore
+  features. Hermes does **not** bundle these binaries: it detects your existing installation
+  and warns you when the client version is incompatible with the server. Install them with
+  your platform's package manager:
+
+  ```sh
+  # Debian / Ubuntu
+  sudo apt install postgresql-client
+
+  # macOS (Homebrew)
+  brew install libpq
+
+  # Windows (winget)
+  winget install PostgreSQL.PostgreSQL
+  ```
+
+## Installation
+
+### Binaries
+
+Signed installers for Linux, macOS, and Windows will be published on the Releases page
+starting with version 1.0. Until then, build from source.
+
+### From source
+
+Requires [Go 1.22+](https://go.dev/dl/), [Node.js 20+](https://nodejs.org/), and the
+[Wails v3](https://wails.io/) CLI.
+
+```sh
+git clone https://github.com/gsoares85/hermes.git
+cd hermes
+
+# dependencies and core build
+go mod download
+go build ./...
+
+# desktop app in development mode
+wails3 dev
+
+# package for the current platform
+wails3 package
+```
+
+The packaged binary lands in `bin/`.
+
+## Features
+
+No features have shipped yet. This section is filled in as each one lands, always with a real
+usage example.
+
+## Roadmap
+
+What is being built, in order:
+
+**Foundation** — connect to PostgreSQL 12+ with actionable failure diagnostics, passwords
+stored in the OS keychain, lazy object-tree navigation, and a cancelable job engine with
+progress reporting.
+
+**Query and data** — SQL editor with cancelable execution, a virtualized grid using keyset
+pagination (no `OFFSET` on large tables), and inline editing that shows the `UPDATE` before it
+runs.
+
+**Backup and restore** — wizards over `pg_dump` and `pg_restore`, with selective object
+restore and a local catalog of the backups you generate.
+
+**Structure sync** — native schema diff over `pg_catalog`, producing a reviewable migration
+script, a difference report, and a CI mode that turns the diff into a pipeline gate.
+
+**Data transfer and sync** — move and reconcile bulk data across environments, with a preview
+of everything that will change.
+
+All of these operations are TOML profiles: versioned alongside your project and runnable
+without a GUI.
+
+```sh
+hermes run profiles/sync-staging.toml
+```
+
+## Contributing
+
+The project follows TDD with a minimum of 85% coverage, Conventional Commits, and both a code
+review and a security review on every PR.
+
+```sh
+go test ./...                                        # full suite
+go test -race -coverprofile=coverage.out ./internal/...
+go tool cover -func=coverage.out                     # coverage (floor: 85%)
+golangci-lint run                                    # Go lint
+npm run lint                                         # frontend lint
+```
+
+Integration tests use testcontainers against PostgreSQL 13, 15, 16, 17, and 18 — you need
+Docker available to run them.
+
+## License
+
+Open source. The final license (Apache-2.0) will be published in the `LICENSE` file before the
+first release.
