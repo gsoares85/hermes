@@ -19,8 +19,20 @@ make lint       # Go and frontend linters
 make dev        # the desktop app, in development mode
 ```
 
-`make help` lists every target. CI runs the same targets, so a green `make lint
-test cover` locally means a green pipeline.
+`make help` lists every target. CI is built from these same targets, but `make
+lint test cover` is a part of it, not all of it: the pipeline also checks the
+README for references to files it does not publish, scans both dependency trees
+for known vulnerabilities, builds and vets on Linux, macOS and Windows, runs the
+integration suite, and checks the authorship and subject of every commit.
+
+To run locally what the pipeline runs:
+
+```sh
+make check-commits check-readme lint cover audit build test-integration
+```
+
+Only `make test-integration` needs Docker. The platform matrix is the one part
+that cannot be reproduced on a single machine.
 
 On Windows the race detector needs a C toolchain (mingw-w64). Without it, `make
 test`, `make cover` and `make test-integration` all fail to build with
