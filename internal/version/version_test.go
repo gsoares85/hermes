@@ -227,6 +227,9 @@ func TestBumpFromCommits(t *testing.T) {
 		{"bang marks a break", []string{"feat!: drop the old profile format"}, version.BumpMajor},
 		{"scoped bang", []string{"feat(profile)!: rename a field"}, version.BumpMajor},
 		{"breaking change footer", []string{"feat: a\n\nBREAKING CHANGE: the CLI flag is gone"}, version.BumpMajor},
+		// Both spellings are footers in the Conventional Commits specification,
+		// and the hyphenated one is the form Git trailers actually parse.
+		{"hyphenated breaking change footer", []string{"fix: a\n\nBREAKING-CHANGE: the CLI flag is gone"}, version.BumpMajor},
 	}
 
 	for _, tc := range cases {
@@ -262,6 +265,43 @@ func TestBumpFromCommitsRefusesToGuess(t *testing.T) {
 	}
 }
 
+// A breaking change is declared by a footer, which is a line of its own. Writing
+// about the convention is not declaring one, and a commit that only mentions the
+// words must never publish a major release nobody asked for.
+func TestBumpFromCommitsIgnoresBreakingChangeInProse(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		message string
+		want    version.Bump
+	}{
+		{"documented in the subject", "docs: explain that BREAKING CHANGE bumps major", ""},
+		{"mentioned mid-sentence", "fix: a\n\nThis is not a BREAKING CHANGE: the flag still works.", version.BumpPatch},
+		{"quoted in the body", "feat: a\n\nThe release notes say \"BREAKING CHANGE\" only when it breaks.", version.BumpMinor},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := version.BumpFromCommits([]string{tc.message})
+			if tc.want == "" {
+				if !errors.Is(err, version.ErrAmbiguousBump) {
+					t.Fatalf("BumpFromCommits(%q) error = %v, want ErrAmbiguousBump", tc.message, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("BumpFromCommits(%q) returned error: %v", tc.message, err)
+			}
+			if got != tc.want {
+				t.Errorf("BumpFromCommits(%q) = %q, want %q", tc.message, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolveBumpPrefersTheLabel(t *testing.T) {
 	t.Parallel()
 
@@ -287,5 +327,17 @@ func TestResolveBumpFallsBackToCommits(t *testing.T) {
 
 	if _, err := version.ResolveBump(nil, []string{"chore: tidy"}); !errors.Is(err, version.ErrAmbiguousBump) {
 		t.Errorf("with nothing to go on: error = %v, want ErrAmbiguousBump", err)
+	}
+}
+
+// A release: label that names no known increment is a typo on the pull request,
+// not an absent decision. Falling back to the commits there would publish a
+// version the author did not ask for, so the mistake has to surface.
+func TestResolveBumpReportsAnUnknownReleaseLabel(t *testing.T) {
+	t.Parallel()
+
+	_, err := version.ResolveBump([]string{"release:candidate"}, []string{"feat: a new capability"})
+	if !errors.Is(err, version.ErrInvalidBump) {
+		t.Errorf("ResolveBump with an unknown release label: error = %v, want ErrInvalidBump", err)
 	}
 }

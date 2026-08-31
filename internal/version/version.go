@@ -203,6 +203,12 @@ var patchTypes = map[string]bool{"fix": true, "perf": true, "refactor": true, "r
 
 var conventionalSubject = regexp.MustCompile(`^([a-z]+)(\([^)]*\))?(!)?:`)
 
+// A breaking change is declared by a footer, so the match is anchored to the
+// start of a line. Searching the whole message for the words instead would let a
+// commit that merely writes about the convention publish a major release, and
+// both spellings count: the hyphenated one is what Git parses as a trailer.
+var breakingChangeFooter = regexp.MustCompile(`(?m)^BREAKING[ -]CHANGE\s*:`)
+
 // BumpFromCommits derives the increment from Conventional Commit messages. It
 // refuses to answer when the history says nothing about the version: publishing
 // a release nobody asked for is worse than failing and asking for the label.
@@ -230,7 +236,7 @@ func BumpFromCommits(messages []string) (Bump, error) {
 }
 
 func commitBump(message string) Bump {
-	if strings.Contains(message, "BREAKING CHANGE") {
+	if breakingChangeFooter.MatchString(message) {
 		return BumpMajor
 	}
 
