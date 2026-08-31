@@ -169,6 +169,21 @@ func Next(lastTag string, bump Bump) (Semver, error) {
 	return last.Bumped(bump)
 }
 
+// SplitLabels reads the comma-separated label list the release workflow passes
+// on the command line. Blank entries are dropped: a pull request with no labels
+// arrives as an empty string, and joining an empty list can leave stray commas.
+func SplitLabels(list string) []string {
+	var labels []string
+
+	for _, label := range strings.Split(list, ",") {
+		if trimmed := strings.TrimSpace(label); trimmed != "" {
+			labels = append(labels, trimmed)
+		}
+	}
+
+	return labels
+}
+
 // BumpFromLabels reads the increment from the labels of a pull request. Exactly
 // one release: label is expected — none means the author has not decided yet,
 // and two is a mistake worth reporting rather than a tie to break silently.
@@ -201,7 +216,23 @@ func BumpFromLabels(labels []string) (Bump, error) {
 // — docs, chore, style, test, ci, build — says nothing about the version.
 var patchTypes = map[string]bool{"fix": true, "perf": true, "refactor": true, "revert": true}
 
-var conventionalSubject = regexp.MustCompile(`^([a-z]+)(\([^)]*\))?(!)?:`)
+// A type, an optional scope, an optional "!" for a break, and a description
+// that is actually there. The specification requires the space and the text
+// after the colon, and "feat:" alone says nothing worth releasing.
+var conventionalSubject = regexp.MustCompile(`^([a-z]+)(\([^)]*\))?(!)?: \S`)
+
+// ConventionalSubject reads a Conventional Commit subject line. It reports the
+// type, whether the subject declares a break with "!", and whether the subject
+// is well formed at all. The commit checker uses it to gate the convention that
+// this package depends on when a pull request carries no release label.
+func ConventionalSubject(subject string) (commitType string, breaking bool, ok bool) {
+	match := conventionalSubject.FindStringSubmatch(strings.TrimSpace(subject))
+	if match == nil {
+		return "", false, false
+	}
+
+	return match[1], match[3] == "!", true
+}
 
 // A breaking change is declared by a footer, so the match is anchored to the
 // start of a line. Searching the whole message for the words instead would let a
@@ -241,16 +272,15 @@ func commitBump(message string) Bump {
 	}
 
 	subject, _, _ := strings.Cut(message, "\n")
-	match := conventionalSubject.FindStringSubmatch(strings.TrimSpace(subject))
-	if match == nil {
+	commitType, breaking, ok := ConventionalSubject(subject)
+	if !ok {
 		return ""
 	}
 
-	if match[3] == "!" {
+	if breaking {
 		return BumpMajor
 	}
 
-	commitType := match[1]
 	switch {
 	case commitType == "feat":
 		return BumpMinor

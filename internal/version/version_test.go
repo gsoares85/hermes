@@ -213,6 +213,41 @@ func TestBumpFromLabelsRequiresExactlyOne(t *testing.T) {
 	}
 }
 
+func TestSplitLabels(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"single label", "release:minor", []string{"release:minor"}},
+		{"several labels", "bug,release:patch,needs-review", []string{"bug", "release:patch", "needs-review"}},
+		{"surrounding spaces", " bug , release:major ", []string{"bug", "release:major"}},
+		// A pull request with no labels arrives as an empty string, and a join
+		// of an empty list can leave stray commas. Neither is a label.
+		{"no labels", "", nil},
+		{"only spaces", "   ", nil},
+		{"empty entries", "bug,,release:minor,", []string{"bug", "release:minor"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := version.SplitLabels(tc.in)
+			if len(got) != len(tc.want) {
+				t.Fatalf("SplitLabels(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("SplitLabels(%q)[%d] = %q, want %q", tc.in, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestBumpFromCommits(t *testing.T) {
 	t.Parallel()
 

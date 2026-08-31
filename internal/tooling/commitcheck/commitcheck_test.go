@@ -19,6 +19,10 @@ func TestCommitsRejectsAttribution(t *testing.T) {
 		"session trailer":        "feat: add thing\n\nClaude-Session: https://example.com/session",
 		"vendor trailer value":   "feat: add thing\n\nGenerated-With: Anthropic Claude",
 		"copilot attribution":    "feat: add thing\n\nCreated by GitHub Copilot",
+		"implemented using":      "feat: add thing\n\nImplemented using Claude Code",
+		"written via":            "fix: correct path\n\nWritten via ChatGPT.",
+		"trailer without colon":  "feat: add thing\n\nCo-authored-by Claude <noreply@example.com>",
+		"with the help of":       "chore: tidy\n\nRefactored with the help of Gemini.",
 	}
 
 	for name, message := range cases {
@@ -49,6 +53,10 @@ func TestCommitsAcceptsLegitimateMentions(t *testing.T) {
 		"signed off":             "feat: add thing\n\nSigned-off-by: Guilherme Soares <guilherme@example.com>",
 		"ai in prose":            "feat: create the ai package placeholder for a later task",
 		"generated code":         "chore: regenerate the parser from the grammar file",
+		// Writing about the rule is not breaking it. A trailer names an
+		// identity; a sentence that merely opens with the words does not.
+		"trailer named in prose": "fix: tighten the checker\n\nCo-authored-by trailers are rejected even without their colon.",
+		"rule described":         "docs: explain the co-authored-by rule and why it exists",
 	}
 
 	for name, message := range cases {
@@ -59,6 +67,131 @@ func TestCommitsAcceptsLegitimateMentions(t *testing.T) {
 				t.Errorf("message %q produced %d violations (%v), want none", message, len(got), got)
 			}
 		})
+	}
+}
+
+// The rule is about the metadata too, not only the prose. A tool configured
+// with its own Git identity writes an impeccable message and still signs the
+// commit as itself, which is exactly the case a message-only check misses.
+func TestCommitsRejectsAnAssistantIdentity(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]commitcheck.Commit{
+		"author name": {
+			Hash: "abc", Message: "feat: add thing",
+			AuthorName: "Claude", AuthorEmail: "noreply@anthropic.com",
+		},
+		"author email only": {
+			Hash: "abc", Message: "feat: add thing",
+			AuthorName: "Someone", AuthorEmail: "noreply@anthropic.com",
+		},
+		"committer name": {
+			Hash: "abc", Message: "feat: add thing",
+			AuthorName: "Guilherme Soares", AuthorEmail: "guilherme@example.com",
+			CommitterName: "GitHub Copilot", CommitterEmail: "copilot@example.com",
+		},
+		"assistant handle": {
+			Hash: "abc", Message: "feat: add thing",
+			AuthorName: "chatgpt-bot", AuthorEmail: "bot@example.com",
+		},
+	}
+
+	for name, commit := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := commitcheck.Commits([]commitcheck.Commit{commit})
+			if len(got) == 0 {
+				t.Fatalf("commit %+v produced no violation, want one", commit)
+			}
+			if got[0].Hash != "abc" {
+				t.Errorf("violation hash = %q, want %q", got[0].Hash, "abc")
+			}
+		})
+	}
+}
+
+func TestCommitsAcceptsAHumanIdentity(t *testing.T) {
+	t.Parallel()
+
+	got := commitcheck.Commits([]commitcheck.Commit{{
+		Hash: "abc", Message: "feat: add version resolution",
+		AuthorName: "Guilherme Soares", AuthorEmail: "guilhermeluzsoares@gmail.com",
+		CommitterName: "Guilherme Soares", CommitterEmail: "guilhermeluzsoares@gmail.com",
+	}})
+	if len(got) != 0 {
+		t.Errorf("a human identity produced %d violations (%v), want none", len(got), got)
+	}
+}
+
+// The release falls back to Conventional Commits when a pull request carries no
+// label, so the convention has to be a gate. Trusting it to discipline is how
+// "Fix stuff" ends up deciding a version.
+func TestCommitsRejectsANonConventionalSubject(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"no type":           "Fix stuff",
+		"unknown type":      "improvement: make it faster",
+		"missing colon":     "feat add the thing",
+		"uppercase type":    "Feat: add the thing",
+		"empty description": "feat:",
+		"too long":          "feat: add a subject that is definitely longer than the seventy two character limit",
+	}
+
+	for name, subject := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := commitcheck.Commits([]commitcheck.Commit{{Hash: "abc", Message: subject}})
+			if len(got) == 0 {
+				t.Errorf("subject %q produced no violation, want one", subject)
+			}
+		})
+	}
+}
+
+func TestCommitsAcceptsConventionalSubjects(t *testing.T) {
+	t.Parallel()
+
+	for _, subject := range []string{
+		"feat: add version resolution and semver bump rules",
+		"fix(release): tag the commit that lands on main",
+		"feat!: drop the old profile format",
+		"refactor(core)!: rename a field",
+		"ci: pin actions by commit",
+		"docs: add project readme with status badges",
+		"chore: tidy",
+		"build: scaffold go module and package layout",
+		"test: add testcontainers harness",
+		"perf: keyset the grid",
+		"style: reformat",
+		"revert: undo the parser change",
+	} {
+		t.Run(subject, func(t *testing.T) {
+			t.Parallel()
+
+			body := subject + "\n\nA body explaining what and why."
+			if got := commitcheck.Commits([]commitcheck.Commit{{Message: body}}); len(got) != 0 {
+				t.Errorf("subject %q produced %d violations (%v), want none", subject, len(got), got)
+			}
+		})
+	}
+}
+
+// A merge commit is written by Git, not by a person, so the subject convention
+// does not apply to it. The attribution rules still do.
+func TestCommitsExemptsMergeCommitsFromTheSubjectRule(t *testing.T) {
+	t.Parallel()
+
+	merge := commitcheck.Commit{Hash: "abc", Merge: true, Message: "Merge branch 'main' into feat/TASK-0001"}
+	if got := commitcheck.Commits([]commitcheck.Commit{merge}); len(got) != 0 {
+		t.Errorf("merge commit produced %d violations (%v), want none", len(got), got)
+	}
+
+	credited := commitcheck.Commit{Hash: "abc", Merge: true, Message: "Merge pull request #1\n\nCo-Authored-By: x <x@y.z>"}
+	if got := commitcheck.Commits([]commitcheck.Commit{credited}); len(got) == 0 {
+		t.Error("merge commit with a trailer produced no violation, want one")
 	}
 }
 

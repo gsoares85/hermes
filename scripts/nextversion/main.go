@@ -1,9 +1,10 @@
 // Command nextversion prints the version that follows the last released tag.
 //
 // The release workflow calls it with the previous tag, the labels of the merged
-// pull request and, as a fallback, the commit messages of the range. All the
-// decisions live in internal/version, where they are covered by tests; this is
-// only the command line around them.
+// pull request and, as a fallback, the commit messages of the range. Every
+// decision lives in internal/version and every bit of parsing in
+// internal/tooling/gitlog, both covered by tests; this is only the command line
+// around them.
 package main
 
 import (
@@ -12,12 +13,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/gsoares85/hermes/internal/tooling/gitlog"
 	"github.com/gsoares85/hermes/internal/version"
 )
-
-// recordSeparator splits commit messages in the file written by the workflow.
-// It cannot appear inside a commit message.
-const recordSeparator = "\x1e"
 
 func main() {
 	last := flag.String("last", "", "last released tag, empty when there is none yet")
@@ -49,15 +47,7 @@ func resolveBump(bump, labels, messagesFile string) (version.Bump, error) {
 		return "", err
 	}
 
-	return version.ResolveBump(splitLabels(labels), messages)
-}
-
-func splitLabels(labels string) []string {
-	if strings.TrimSpace(labels) == "" {
-		return nil
-	}
-
-	return strings.Split(labels, ",")
+	return version.ResolveBump(version.SplitLabels(labels), messages)
 }
 
 func readMessages(path string) ([]string, error) {
@@ -73,11 +63,9 @@ func readMessages(path string) ([]string, error) {
 		return nil, fmt.Errorf("reading commit messages: %w", err)
 	}
 
-	var messages []string
-	for _, record := range strings.Split(string(content), recordSeparator) {
-		if trimmed := strings.TrimSpace(record); trimmed != "" {
-			messages = append(messages, trimmed)
-		}
+	messages, err := gitlog.Messages(string(content))
+	if err != nil {
+		return nil, fmt.Errorf("reading commit messages: %w", err)
 	}
 
 	return messages, nil
