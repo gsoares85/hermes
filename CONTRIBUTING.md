@@ -22,8 +22,16 @@ make dev        # the desktop app, in development mode
 `make help` lists every target. CI runs the same targets, so a green `make lint
 test cover` locally means a green pipeline.
 
-On Windows the race detector needs a C toolchain (mingw-w64). Without it, run
-`make test RACE=`.
+On Windows the race detector needs a C toolchain (mingw-w64). Without it, `make
+test`, `make cover` and `make test-integration` all fail to build with
+`cgo: C compiler "gcc" not found`. Either install mingw-w64, or pass `RACE=` to
+the target you are running:
+
+```sh
+make cover RACE=
+```
+
+CI runs on Linux with the detector enabled, so a race is still caught there.
 
 ## How the work is organised
 

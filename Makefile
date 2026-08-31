@@ -9,7 +9,9 @@ INTEGRATION_TAGS ?= integration
 GOVULNCHECK_VERSION ?= v1.7.0
 
 # The race detector needs a C toolchain, which Windows does not ship. Install
-# mingw-w64, or run `make test RACE=` to trade the detector for a green run.
+# mingw-w64, or pass RACE= to trade the detector for a green run. It applies to
+# every target that runs tests, not just test: `make cover RACE=`,
+# `make test-integration RACE=`. CI runs on Linux, where the detector is on.
 RACE ?= -race
 
 .DEFAULT_GOAL := help
