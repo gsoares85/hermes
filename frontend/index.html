@@ -3,6 +3,40 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!--
+      Declared while this page renders nothing but build metadata, because the
+      pages that follow render object names, column values and query results —
+      text controlled by whichever database the user connected to. Retrofitting
+      a policy onto a working UI is how it ends up with 'unsafe-inline'.
+
+      Everything is same-origin: the assets are embedded in the binary and the
+      Wails bridge posts to /wails/runtime on this same origin. Styles are the
+      one relaxation, since the webview sets style attributes of its own for
+      window dragging; script execution, the surface an injected object name
+      would need, is closed.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self';
+               script-src 'self';
+               style-src 'self' 'unsafe-inline';
+               img-src 'self' data:;
+               font-src 'self' data:;
+               connect-src 'self';
+               object-src 'none';
+               base-uri 'none';
+               form-action 'none';
+               frame-ancestors 'none'"
+    />
+
+    <!--
+      Read before the stylesheet is, so the webview paints its canvas in the
+      right scheme from the first frame instead of flashing white on a dark
+      desktop while the CSS loads.
+    -->
+    <meta name="color-scheme" content="light dark" />
+
     <title>Hermes</title>
   </head>
   <body>

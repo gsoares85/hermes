@@ -4,12 +4,19 @@ import type { Info } from "../../bindings/github.com/gsoares85/hermes/internal/v
 /** Build information of the running binary, produced by internal/version. */
 export type AppInfo = Info;
 
-/** Shown when the backend is unreachable, as in a browser-only dev session. */
+/**
+ * Shown when the backend is unreachable, as in a browser-only dev session.
+ *
+ * Deliberately not the placeholders internal/version falls back to. Repeating
+ * "dev" and "none" here would claim the two sides agree on a value while
+ * nothing keeps them in step, and would make an unreachable backend look
+ * exactly like an unreleased build.
+ */
 export const unknownAppInfo: AppInfo = {
-  version: "dev",
-  commit: "none",
-  date: "unknown",
-  platform: "unknown",
+  version: "unavailable",
+  commit: "unavailable",
+  date: "unavailable",
+  platform: "unavailable",
 };
 
 /**

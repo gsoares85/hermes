@@ -10,6 +10,14 @@ import (
 	"io/fs"
 )
 
+// The all: prefix is required, not incidental: dist/.gitkeep is tracked so that
+// a fresh clone compiles before anyone runs npm, and without all: embed skips
+// dotfiles and refuses a directory with nothing else in it.
+//
+// It also embeds whatever else happens to sit there, which is why `npm run
+// build` now empties the directory first. Otherwise a sourcemap from a
+// development build, or a stray .env, would travel inside a released binary.
+//
 //go:embed all:dist
 var assets embed.FS
 

@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "build:dev": "tsc --noEmit && vite build --mode development --minify false",
-    "clean": "node -e \"fs.rmSync('dist/assets',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc --noEmit && vite build",
+    "build:dev": "npm run clean && tsc --noEmit && vite build --mode development --minify false",
+    "clean": "node -e \"const fs=require('fs');for(const e of fs.readdirSync('dist')){if(e!=='.gitkeep')fs.rmSync('dist/'+e,{recursive:true,force:true})}\"",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . && prettier --check src",
     "format": "prettier --write src"
