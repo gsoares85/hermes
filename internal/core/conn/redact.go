@@ -10,7 +10,13 @@ import (
 const redacted = "xxxxx"
 
 // Passwords in a keyword connection string, quoted or bare.
-var passwordKeyword = regexp.MustCompile(`(?i)(password\s*=\s*)('[^']*'|"[^"]*"|\S+)`)
+//
+// Each alternative consumes a backslash together with whatever follows it,
+// because that is how a value escapes a quote, a backslash or a space. Matching
+// the quote alone would end the value early and leave the rest of the password —
+// the part after the escape — sitting in the output next to the placeholder.
+var passwordKeyword = regexp.MustCompile(
+	`(?i)(password\s*=\s*)('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|(?:\\.|\S)+)`)
 
 // Redact returns the connection string with its password replaced, in both the
 // URL and the keyword form.

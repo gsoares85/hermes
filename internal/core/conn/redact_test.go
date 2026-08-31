@@ -66,6 +66,25 @@ func TestRedactHidesThePasswordOfAKeywordString(t *testing.T) {
 			"HOST=localhost PASSWORD=s3cr3t",
 			"HOST=localhost PASSWORD=xxxxx",
 		},
+		// libpq escapes a quote or a backslash inside a value with a
+		// backslash, so the escaped quote does not close the value and the
+		// rest of it is still the password.
+		{
+			"escaped single quote inside the value",
+			`host=localhost password='abc\'def' dbname=hermes`,
+			"host=localhost password=xxxxx dbname=hermes",
+		},
+		{
+			"escaped double quote inside the value",
+			`host=localhost password="ab\"cd" dbname=hermes`,
+			"host=localhost password=xxxxx dbname=hermes",
+		},
+		// An unquoted value ends at a space unless the space is escaped.
+		{
+			"escaped space in an unquoted value",
+			`password=ab\ cd dbname=hermes`,
+			"password=xxxxx dbname=hermes",
+		},
 	}
 
 	for _, tc := range cases {
@@ -108,6 +127,11 @@ func TestRedactLeavesNoSecretBehind(t *testing.T) {
 		"postgres://hermes@localhost/hermes?password=" + secret,
 		"host=localhost password=" + secret + " dbname=hermes",
 		"password='" + secret + "'",
+		// The tail after an escaped quote is part of the secret, and a
+		// pattern that stops there leaves it in the output.
+		`password='abc\'` + secret + `'`,
+		`password="abc\"` + secret + `"`,
+		`password=abc\ ` + secret + ` dbname=hermes`,
 	} {
 		if got := conn.Redact(dsn); strings.Contains(got, secret) {
 			t.Errorf("Redact(%q) = %q, the secret survived", dsn, got)
