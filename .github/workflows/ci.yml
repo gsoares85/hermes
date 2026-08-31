@@ -33,11 +33,20 @@ jobs:
       # Authorship is exclusive and no commit credits an AI assistant. That is a
       # rule of the project, so it is checked by the pipeline instead of trusted
       # to discipline.
+      #
+      # The branch name is chosen by whoever opens the pull request, and Git
+      # allows $, backticks, semicolons and pipes in a ref. Interpolated into
+      # run: it would be a command; through the environment it is only ever a
+      # value, because the expansion happens before a shell exists.
       - name: Check commits and branch name
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BRANCH: ${{ github.head_ref }}
         run: |
           go run ./scripts/checkcommits \
-            -range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" \
-            -branch="${{ github.head_ref }}"
+            -range="$BASE_SHA..$HEAD_SHA" \
+            -branch="$BRANCH"
 
   lint:
     name: Lint
