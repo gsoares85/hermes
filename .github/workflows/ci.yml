@@ -141,6 +141,17 @@ jobs:
       - name: Enforce the coverage floor
         run: go run ./scripts/checkcoverage -profile=coverage.out -min=85
 
+      # A gate nobody has seen fail is a gate nobody knows works. This feeds it
+      # a profile that is deliberately below the floor and fails the job if the
+      # gate accepts it.
+      - name: Prove the coverage gate rejects a profile below the floor
+        run: |
+          printf 'mode: set\ninternal/x/y.go:1.1,2.2 10 0\n' > below-the-floor.out
+          if go run ./scripts/checkcoverage -profile=below-the-floor.out -min=85; then
+            echo "the coverage gate accepted 0% of 10 statements" && exit 1
+          fi
+          rm below-the-floor.out
+
       - name: Upload the coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

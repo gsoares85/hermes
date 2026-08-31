@@ -55,6 +55,52 @@ func TestParseSumsRepeatedBlocksOnce(t *testing.T) {
 
 // A profile with no statements must never read as success: that is exactly the
 // shape a misconfigured -coverpkg produces, and it would make the gate vacuous.
+// The pipeline runs with -coverpkg, so several test binaries report the same
+// block and the profile is written in count mode: the same region appears with
+// different hit counts. Counting it once, and as covered if any run reached it,
+// is what keeps the percentage honest.
+func TestParseCountsARepeatedBlockOnceInCountMode(t *testing.T) {
+	t.Parallel()
+
+	profile := "mode: count\n" +
+		"pkg/a.go:1.1,3.2 4 0\n" +
+		"pkg/a.go:1.1,3.2 4 7\n" +
+		"pkg/a.go:1.1,3.2 4 2\n" +
+		"pkg/b.go:1.1,2.2 6 0\n" +
+		"pkg/b.go:1.1,2.2 6 0\n"
+
+	got, err := coverage.Parse(strings.NewReader(profile))
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if got.Total != 10 {
+		t.Errorf("Total = %d, want 10: each block counts once", got.Total)
+	}
+	if got.Covered != 4 {
+		t.Errorf("Covered = %d, want 4: a block is covered if any run reached it", got.Covered)
+	}
+	if want := 40.0; got.Percent() != want {
+		t.Errorf("Percent() = %v, want %v", got.Percent(), want)
+	}
+}
+
+// Two blocks of the same file are different blocks, however similar they look.
+func TestParseKeepsDistinctBlocksApart(t *testing.T) {
+	t.Parallel()
+
+	profile := "mode: count\n" +
+		"pkg/a.go:1.1,3.2 2 1\n" +
+		"pkg/a.go:4.1,6.2 2 1\n"
+
+	got, err := coverage.Parse(strings.NewReader(profile))
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if got.Total != 4 {
+		t.Errorf("Total = %d, want 4", got.Total)
+	}
+}
+
 func TestParseRejectsProfileWithoutStatements(t *testing.T) {
 	t.Parallel()
 
