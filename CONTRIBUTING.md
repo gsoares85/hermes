@@ -5,7 +5,7 @@ else to read before your first pull request.
 
 ## Getting set up
 
-You need [Go 1.25+](https://go.dev/dl/), [Node.js 22+](https://nodejs.org/),
+You need [Go 1.25+](https://go.dev/dl/), [Node.js 22.12+](https://nodejs.org/),
 [Docker](https://docs.docker.com/get-docker/) for the integration tests, and the
 [Wails v3](https://wails.io/) CLI for the desktop app.
 
