@@ -138,6 +138,31 @@ func TestParseRejectsMalformedLines(t *testing.T) {
 	}
 }
 
+// A negative statement count subtracts from the total, which turns a large
+// numerator over a small denominator: 100 covered statements against a total of
+// 5 reads as 2000% and clears any floor. The gate exists so that it cannot be
+// passed vacuously, so the parser refuses the line rather than doing the
+// arithmetic.
+func TestParseRejectsNegativeCounts(t *testing.T) {
+	t.Parallel()
+
+	for name, profile := range map[string]string{
+		"negative statement count": header + "pkg/a.go:1.1,3.2 -5 1\n",
+		"negative hit count":       header + "pkg/a.go:1.1,3.2 5 -1\n",
+		"negative block cancelling a real one": header +
+			"pkg/a.go:1.1,3.2 100 1\n" +
+			"pkg/b.go:1.1,3.2 -95 0\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := coverage.Parse(strings.NewReader(profile)); !errors.Is(err, coverage.ErrMalformedProfile) {
+				t.Errorf("Parse(%q) error = %v, want ErrMalformedProfile", name, err)
+			}
+		})
+	}
+}
+
 func TestCheckAppliesTheFloor(t *testing.T) {
 	t.Parallel()
 

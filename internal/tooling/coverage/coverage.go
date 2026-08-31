@@ -97,17 +97,34 @@ func parseLine(line string) (block, int, int, error) {
 		return block{}, 0, 0, fmt.Errorf("%w: %q has no block position", ErrMalformedProfile, line)
 	}
 
-	count, err := strconv.Atoi(fields[1])
+	count, err := parseCount(fields[1], line, "statement count")
 	if err != nil {
-		return block{}, 0, 0, fmt.Errorf("%w: %q has a non-numeric statement count", ErrMalformedProfile, line)
+		return block{}, 0, 0, err
 	}
 
-	hits, err := strconv.Atoi(fields[2])
+	hits, err := parseCount(fields[2], line, "hit count")
 	if err != nil {
-		return block{}, 0, 0, fmt.Errorf("%w: %q has a non-numeric hit count", ErrMalformedProfile, line)
+		return block{}, 0, 0, err
 	}
 
 	return block{name: name, position: position}, count, hits, nil
+}
+
+// parseCount reads a field that counts something. Neither count can be
+// negative, and rejecting that is not pedantry: a negative statement count
+// shrinks the total, so a hundred covered statements against a total of five
+// report 2000% and clear any floor. A profile that can do that defeats the
+// gate as surely as an empty one.
+func parseCount(field, line, what string) (int, error) {
+	value, err := strconv.Atoi(field)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %q has a non-numeric %s", ErrMalformedProfile, line, what)
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("%w: %q has a negative %s", ErrMalformedProfile, line, what)
+	}
+
+	return value, nil
 }
 
 // Check reports whether the summary meets the minimum percentage.
