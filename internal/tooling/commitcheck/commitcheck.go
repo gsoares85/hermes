@@ -196,6 +196,13 @@ func isVendorTrailer(line string) bool {
 	return vendorWord.MatchString(match[1]) || vendorWord.MatchString(match[2])
 }
 
+// Separators in a branch name, turned into spaces so that a vendor becomes a
+// word of its own. The underscore has to be here with the other two: it is a
+// word character to the regexp engine, so \bai\b never matches inside
+// ai_generated_tests, and that name would pass while its hyphenated twin is
+// rejected.
+var branchSeparators = strings.NewReplacer("-", " ", "/", " ", "_", " ")
+
 // Branch reports whether a branch name credits an assistant.
 //
 // A branch name has no grammar to read, so this is stricter than the rule for a
@@ -204,8 +211,7 @@ func isVendorTrailer(line string) bool {
 // renamed in one command, while a check that let vendor names through here
 // would have nothing left to stand on.
 func Branch(name string) []Violation {
-	normalized := strings.ReplaceAll(strings.ToLower(name), "-", " ")
-	normalized = strings.ReplaceAll(normalized, "/", " ")
+	normalized := branchSeparators.Replace(strings.ToLower(name))
 
 	if !vendorWord.MatchString(normalized) {
 		return nil

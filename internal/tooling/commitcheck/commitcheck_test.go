@@ -234,7 +234,17 @@ func TestViolationExplainsItself(t *testing.T) {
 func TestBranchRejectsAttribution(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"claude/fix-thing", "feat/ai-generated-tests", "anthropic-experiment"} {
+	// The underscore separates words as much as the hyphen does, but it is a
+	// word character to the regexp engine, so a name that uses it must not be
+	// allowed to hide the word its hyphenated twin is rejected for.
+	for _, name := range []string{
+		"claude/fix-thing",
+		"feat/ai-generated-tests",
+		"feat/ai_generated_tests",
+		"anthropic-experiment",
+		"feat/llm_helper",
+		"feat/generated_by_copilot",
+	} {
 		if got := commitcheck.Branch(name); len(got) == 0 {
 			t.Errorf("branch %q produced no violation, want one", name)
 		}
@@ -249,6 +259,10 @@ func TestBranchAcceptsProjectNaming(t *testing.T) {
 		"fix/TASK-0007-statement-parser",
 		"main",
 		"refactor/TASK-0004-catalog-normalization",
+		// Treating the underscore as a separator must not start rejecting
+		// names that merely use one.
+		"feat/TASK-0009-connection_pool",
+		"fix/retry_email_loop",
 	} {
 		if got := commitcheck.Branch(name); len(got) != 0 {
 			t.Errorf("branch %q produced %d violations (%v), want none", name, len(got), got)
