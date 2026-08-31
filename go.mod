@@ -1,6 +1,6 @@
 module github.com/gsoares85/hermes
 
-go 1.25.11
+go 1.25.14
 
 require (
 	github.com/testcontainers/testcontainers-go v0.44.0

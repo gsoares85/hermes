@@ -6,6 +6,7 @@ GOLANGCI_LINT ?= golangci-lint
 COVERAGE_PROFILE ?= coverage.out
 COVERAGE_MINIMUM ?= 85
 INTEGRATION_TAGS ?= integration
+GOVULNCHECK_VERSION ?= v1.7.0
 
 # The race detector needs a C toolchain, which Windows does not ship. Install
 # mingw-w64, or run `make test RACE=` to trade the detector for a green run.
@@ -49,6 +50,11 @@ cover: ## Run the unit tests and enforce the coverage floor
 cover-html: cover ## Open the coverage report
 	$(GO) tool cover -html=$(COVERAGE_PROFILE)
 
+.PHONY: audit
+audit: ## Scan both dependency trees for known vulnerabilities
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+	cd frontend && npm audit --audit-level=high
+
 .PHONY: check-commits
 check-commits: ## Fail if a commit or the branch credits an AI assistant
 	$(GO) run ./scripts/checkcommits -range=origin/main..HEAD -branch=$$(git rev-parse --abbrev-ref HEAD)
@@ -64,7 +70,7 @@ build: build-frontend ## Build every binary
 
 .PHONY: build-frontend
 build-frontend: ## Build the embedded frontend
-	cd frontend && npm ci && npm run build
+	cd frontend && npm ci --ignore-scripts && npm run build
 
 .PHONY: dev
 dev: ## Run the desktop app in development mode

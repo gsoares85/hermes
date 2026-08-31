@@ -36,11 +36,15 @@ jobs:
     outputs:
       tag: ${{ steps.compute.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      # This is the one checkout in the repository that keeps its credentials:
+      # the job pushes the tag it creates. Every other job checks out with
+      # persist-credentials: false, so the token never sits in .git/config while
+      # third-party code runs.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: true

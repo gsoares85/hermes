@@ -1,0 +1,28 @@
+version: 2
+
+# The workflows pin every action to the commit of a release rather than to its
+# mutable tag, which is only safe if something keeps those commits current.
+# Dependabot is that something: it moves the pin and the version comment
+# together, and does the same for the two package ecosystems.
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
