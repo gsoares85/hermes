@@ -4,12 +4,32 @@ version: 2
 # mutable tag, which is only safe if something keeps those commits current.
 # Dependabot is that something: it moves the pin and the version comment
 # together, and does the same for the two package ecosystems.
+#
+# Two settings exist because merging here is not free. Every merge to main cuts
+# a release, so an ungrouped weekly run would publish a version, and binaries
+# for three platforms, per bumped dependency.
+#
+#   labels     the release workflow reads the version bump from a release:
+#              label, and falls back to Conventional Commits. A dependency bump
+#              is written as build: or ci:, neither of which carries a release,
+#              so without the label the fallback finds nothing and the release
+#              fails. Patch is the right size: CONTRIBUTING calls infrastructure
+#              work a patch, and a reviewer can raise it before merging.
+#
+#   groups     routine minor and patch updates arrive as one pull request per
+#              ecosystem. Majors are deliberately left out of the groups: they
+#              need a judgement call, so they keep coming one at a time.
 
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    labels: ["dependencies", "release:patch"]
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: ci
 
@@ -17,6 +37,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    labels: ["dependencies", "release:patch"]
+    groups:
+      go-modules:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: build
 
@@ -24,5 +49,10 @@ updates:
     directory: /frontend
     schedule:
       interval: weekly
+    labels: ["dependencies", "release:patch"]
+    groups:
+      frontend:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: build
