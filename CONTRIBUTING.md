@@ -33,7 +33,12 @@ Every change is a branch off `main`, one pull request, and one release.
 - **Commits** follow [Conventional Commits](https://www.conventionalcommits.org/):
   an imperative English subject of at most 72 characters, and a body that
   explains what changed and why. The work is split into phases, and each phase
-  is one commit — no `wip` commits, no single commit at the end.
+  is one commit — no `wip` commits, no single commit at the end. CI checks the
+  type, the length and the author of every commit.
+- **Pull requests are merged with a merge commit or a rebase, never squashed.**
+  One commit per phase is the point, and a squash throws that history away. It
+  would also replace the subjects with the title of the pull request, which is
+  what the release reads when no version label is present.
 - **Pull requests** describe everything inline: the problem, the change, and how
   to test it. A reviewer should not need to open anything else.
 
@@ -87,8 +92,9 @@ the model, applying it, and reading it back must produce the same model.
 
 Commits are authored by the people who write them. Attribution to an AI
 assistant is not accepted anywhere in the history — not in a commit message, a
-trailer, a branch name, or a pull request description. CI enforces this and will
-fail the build.
+trailer, a branch name, or a pull request description, and not in the author or
+committer identity of the commit either. CI enforces this and will fail the
+build.
 
 The rule is about attribution, not vocabulary: a commit that mentions a tool or a
 file by name is fine.

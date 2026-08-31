@@ -37,7 +37,9 @@ section does not.
 
 ## Requirements
 
-- **PostgreSQL 12 or newer** on the server you want to manage.
+- **PostgreSQL 12 or newer** on the server you want to manage. Every change is
+  tested against PostgreSQL 13, 15, 16, 17 and 18; 12 is within scope but is not
+  yet covered by that matrix.
 - **PostgreSQL client tools** (`pg_dump`, `pg_restore`, `psql`) for the backup and restore
   features. Hermes does **not** bundle these binaries: it detects your existing installation
   and warns you when the client version is incompatible with the server. Install them with
@@ -58,9 +60,18 @@ section does not.
 
 ### Binaries
 
-Every release publishes binaries for Linux, macOS, and Windows, plus `SHA256SUMS`, on the
-[releases page](https://github.com/gsoares85/hermes/releases). Signed installers arrive with
-version 1.0.
+Every release publishes binaries plus `SHA256SUMS` on the
+[releases page](https://github.com/gsoares85/hermes/releases):
+
+| Platform | Architecture | Artifact |
+|---|---|---|
+| Linux | x86-64 | `hermes-linux-amd64` |
+| macOS | Apple Silicon | `hermes-darwin-arm64` |
+| Windows | x86-64 | `hermes-windows-amd64` |
+
+Each one ships alongside a `hermes-cli-*` binary of the same platform. Intel Macs and
+arm64 Linux are not published yet — build from source there. Signed installers arrive
+with version 1.0.
 
 Check what you have:
 
@@ -130,6 +141,7 @@ commit per phase, and a code review plus a security review on every pull request
 make lint              # Go and frontend linters
 make test              # unit tests
 make cover             # unit tests plus the 85% floor
+make audit             # known vulnerabilities in both dependency trees
 make test-integration  # PostgreSQL 13, 15, 16, 17 and 18 (needs Docker)
 ```
 
