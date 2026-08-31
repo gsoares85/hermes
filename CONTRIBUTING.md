@@ -81,8 +81,9 @@ make cover             # unit tests plus the coverage floor
 make test-integration  # integration tests (starts PostgreSQL containers)
 ```
 
-Integration tests run against PostgreSQL 13, 15, 16, 17 and 18. Anything that
-reads the catalog or generates DDL has to pass on all five.
+Integration tests run against PostgreSQL 12, 13, 15, 16, 17 and 18. Anything
+that reads the catalog or generates DDL has to pass on all six. 12 is the
+oldest version Hermes supports, so it is tested rather than assumed.
 
 Two properties are treated as non-negotiable and are covered by tests: comparing
 a schema against itself must report zero differences, and generating DDL from

@@ -38,8 +38,7 @@ section does not.
 ## Requirements
 
 - **PostgreSQL 12 or newer** on the server you want to manage. Every change is
-  tested against PostgreSQL 13, 15, 16, 17 and 18; 12 is within scope but is not
-  yet covered by that matrix.
+  tested against PostgreSQL 12, 13, 15, 16, 17 and 18.
 - **PostgreSQL client tools** (`pg_dump`, `pg_restore`, `psql`) for the backup and restore
   features. Hermes does **not** bundle these binaries: it detects your existing installation
   and warns you when the client version is incompatible with the server. Install them with
@@ -142,7 +141,7 @@ make lint              # Go and frontend linters
 make test              # unit tests
 make cover             # unit tests plus the 85% floor
 make audit             # known vulnerabilities in both dependency trees
-make test-integration  # PostgreSQL 13, 15, 16, 17 and 18 (needs Docker)
+make test-integration  # PostgreSQL 12, 13, 15, 16, 17 and 18 (needs Docker)
 ```
 
 Please report security vulnerabilities privately — see [SECURITY.md](SECURITY.md).

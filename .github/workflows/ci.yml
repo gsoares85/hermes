@@ -219,7 +219,8 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Starts PostgreSQL 13, 15, 16, 17 and 18 with testcontainers. Everything
-      # that reads the catalog or generates DDL has to pass on all five.
+      # Starts PostgreSQL 12, 13, 15, 16, 17 and 18 with testcontainers. 12 is
+      # the announced minimum, so it is in the matrix rather than trusted.
+      # Everything that reads the catalog or generates DDL passes on all six.
       - name: Run integration tests
         run: go test -race -tags=integration -timeout=20m ./...

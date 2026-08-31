@@ -1,6 +1,9 @@
 # PostgreSQL versions used during development. The integration tests do not use
 # this file — they start their own containers with testcontainers — but the same
-# five majors are covered, so what passes here passes there.
+# six majors are covered, so what passes here passes there.
+#
+# The published port is 5420 plus the major version, which puts 12 on 5432. If a
+# PostgreSQL of your own already listens there, stop it or remap that one line.
 #
 #   docker compose up -d
 #   psql "postgres://hermes:hermes@localhost:5436/hermes"
@@ -24,6 +27,11 @@ x-postgres: &postgres
     retries: 10
 
 services:
+  postgres-12:
+    <<: *postgres
+    image: postgres:12-alpine
+    ports: ["127.0.0.1:5432:5432"]
+
   postgres-13:
     <<: *postgres
     image: postgres:13-alpine

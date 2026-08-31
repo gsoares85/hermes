@@ -15,7 +15,12 @@ import (
 
 // SupportedVersions are the PostgreSQL major versions every feature that reads
 // the catalog or generates DDL has to pass against.
-var SupportedVersions = []string{"13", "15", "16", "17", "18"}
+//
+// 12 is the oldest version the product claims to support, so it is the one the
+// matrix can least afford to skip: an announced minimum that is never exercised
+// is a promise nobody checks. It is out of upstream support, which is a reason
+// to keep testing it, not to stop.
+var SupportedVersions = []string{"12", "13", "15", "16", "17", "18"}
 
 // execTimeout bounds a single statement. Without it a psql that never returns
 // runs until the timeout of the whole test binary.
