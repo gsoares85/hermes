@@ -1,13 +1,22 @@
 name: Release
 
-# A merged pull request is a release. The size of the bump comes from the
-# release: label on that pull request; without one the workflow falls back to
-# Conventional Commits and, failing that, stops and asks for the label instead
-# of guessing a version nobody meant.
+# A merged pull request is a release. The workflow runs on the commit that
+# actually landed on main, never on the ephemeral merge ref of the pull request:
+# a tag has to point at history everyone else can see, and publish.yml builds the
+# distributed binaries from that tag. Under a squash or a rebase merge the merge
+# ref is not on main at all, so tagging it would publish binaries nobody can
+# reproduce from the repository.
+#
+# Running on main also means the code that computes the version is the reviewed
+# code, not the code of the pull request being released.
+#
+# The size of the bump comes from the release: label on the pull request that
+# brought the commit in; without one the workflow falls back to Conventional
+# Commits and, failing that, stops and asks for the label instead of guessing a
+# version nobody meant.
 
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches: [main]
 
 permissions:
@@ -20,10 +29,10 @@ concurrency:
 jobs:
   tag:
     name: Tag
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: read
     outputs:
       tag: ${{ steps.compute.outputs.tag }}
     steps:
@@ -36,23 +45,53 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Re-running a finished release must not publish a second version for the
+      # same commit, so an already tagged commit ends the job here.
+      - name: Stop if this commit is already released
+        id: guard
+        run: |
+          existing="$(git tag --points-at HEAD --list 'v*' | head -n 1)"
+          if [ -n "$existing" ]; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "$GITHUB_SHA is already released as $existing" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Read the last released tag
+        if: steps.guard.outputs.released != 'true'
         id: last
         run: echo "tag=$(git tag --list 'v*' --sort=-v:refname | head -n 1)" >> "$GITHUB_OUTPUT"
 
+      # The commit is on main, so the pull request that carried it is found from
+      # the commit itself. That works for a squash, a rebase and a merge commit
+      # alike, and it is why the release no longer needs the pull request event.
+      - name: Read the labels of the pull request that landed this commit
+        if: steps.guard.outputs.released != 'true'
+        id: labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          labels="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+            --jq '[.[0].labels[]?.name] | join(",")')"
+          echo "labels=$labels" >> "$GITHUB_OUTPUT"
+          echo "Release labels: ${labels:-none}"
+
       # Written to a file, not to an argument: a commit message can contain
       # anything, and nothing from it should reach a shell.
-      - name: Collect the commit messages of the pull request
+      - name: Collect the commit messages since the last release
+        if: steps.guard.outputs.released != 'true'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-        run: git log --format="%B%x1e" "$BASE_SHA..$HEAD_SHA" > commit-messages.txt
+          LAST_TAG: ${{ steps.last.outputs.tag }}
+        run: |
+          range="HEAD"
+          if [ -n "$LAST_TAG" ]; then range="$LAST_TAG..HEAD"; fi
+          git log --format="%B%x1e" "$range" > commit-messages.txt
 
       - name: Compute the next version
+        if: steps.guard.outputs.released != 'true'
         id: compute
         env:
           LAST_TAG: ${{ steps.last.outputs.tag }}
-          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          LABELS: ${{ steps.labels.outputs.labels }}
         run: |
           tag="$(go run ./scripts/nextversion \
             -last="$LAST_TAG" \
@@ -62,15 +101,20 @@ jobs:
           echo "Releasing $tag (previous: ${LAST_TAG:-none})" >> "$GITHUB_STEP_SUMMARY"
 
       # Values reach the shell through the environment, never through template
-      # interpolation, so nothing from the pull request can become a command.
+      # interpolation, so nothing carried by the commit can become a command.
       - name: Create the tag
+        if: steps.guard.outputs.released != 'true'
         env:
           TAG: ${{ steps.compute.outputs.tag }}
-          TAGGER_NAME: ${{ github.event.pull_request.merged_by.login }}
-          TAGGER_ID: ${{ github.event.pull_request.merged_by.id }}
+          TAGGER_NAME: ${{ github.event.head_commit.author.name }}
+          TAGGER_EMAIL: ${{ github.event.head_commit.author.email }}
         run: |
+          # True by construction on a push to main. Asserted anyway, so that a
+          # tag can never be pushed for a commit outside the released history if
+          # the trigger of this workflow ever changes.
+          git merge-base --is-ancestor HEAD origin/main
           git config user.name "$TAGGER_NAME"
-          git config user.email "${TAGGER_ID}+${TAGGER_NAME}@users.noreply.github.com"
+          git config user.email "$TAGGER_EMAIL"
           git tag -a "$TAG" -m "$TAG"
           git push origin "$TAG"
 
@@ -80,6 +124,7 @@ jobs:
   publish:
     name: Publish
     needs: tag
+    if: needs.tag.outputs.tag != ''
     uses: ./.github/workflows/publish.yml
     permissions:
       contents: write

@@ -75,7 +75,12 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then suffix=".exe"; fi
           module="github.com/gsoares85/hermes/internal/version"
           built="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          ldflags="-s -w -X $module.Version=$TAG -X $module.Commit=${GITHUB_SHA::7} -X $module.Date=$built"
+          # Read from the checked out tag, not from GITHUB_SHA: when this
+          # workflow is called by the release workflow, GITHUB_SHA is the commit
+          # that triggered it, and the binary would advertise a provenance that
+          # does not match the code it was built from.
+          commit="$(git rev-parse --short=7 HEAD)"
+          ldflags="-s -w -X $module.Version=$TAG -X $module.Commit=$commit -X $module.Date=$built"
           go build -trimpath -ldflags "$ldflags" -o "dist/hermes-${{ matrix.target }}$suffix" ./cmd/hermes
           go build -trimpath -ldflags "$ldflags" -o "dist/hermes-cli-${{ matrix.target }}$suffix" ./cmd/hermes-cli
 
@@ -86,12 +91,17 @@ jobs:
         run: |
           suffix=""
           if [ "$RUNNER_OS" = "Windows" ]; then suffix=".exe"; fi
+          commit="$(git rev-parse --short=7 HEAD)"
           reported="$(./dist/hermes-cli-${{ matrix.target }}$suffix -version)"
           echo "$reported"
-          case "$reported" in
-            *"$TAG"*) ;;
-            *) echo "the binary reports $reported, expected it to carry $TAG" && exit 1 ;;
-          esac
+          # The commit is checked alongside the tag: a binary that reports a
+          # commit nobody can resolve is as broken as one reporting no version.
+          for want in "$TAG" "$commit"; do
+            case "$reported" in
+              *"$want"*) ;;
+              *) echo "the binary reports $reported, expected it to carry $want" && exit 1 ;;
+            esac
+          done
 
       - uses: actions/upload-artifact@v4
         with:
@@ -128,6 +138,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
+          # The tag also arrives from workflow_dispatch and workflow_call, so it
+          # is checked before it is taken apart: a non-numeric major would abort
+          # the comparison below with a syntax error instead of a useful message.
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "refusing to publish $TAG: expected the form vX.Y.Z" && exit 1 ;;
+          esac
           major="${TAG#v}"
           major="${major%%.*}"
           draft=""
