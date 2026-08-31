@@ -1,0 +1,161 @@
+name: Publish
+
+# Builds the binaries for a tag and publishes the GitHub release. Called by the
+# release workflow after it creates the tag, and reusable on its own for a
+# republish.
+#
+# It runs apart from the pull request pipeline on purpose: when code signing
+# arrives with 1.0, its credentials belong here, where a pull request from a
+# fork can never reach them.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Declared here rather than written into the step, so the version the release is
+# built with cannot drift from the one the pull request pipeline tested.
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-amd64
+          - os: macos-latest
+            target: darwin-arm64
+          - os: windows-latest
+            target: windows-amd64
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: ./.github/actions/linux-webview
+        if: runner.os == 'Linux'
+
+      - name: Build the frontend
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+        working-directory: frontend
+
+      # The version is injected, never written into a file: the release is the
+      # version, so a build outside this workflow keeps reporting "dev".
+      - name: Build the binaries
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          mkdir -p dist
+          suffix=""
+          if [ "$RUNNER_OS" = "Windows" ]; then suffix=".exe"; fi
+          module="github.com/gsoares85/hermes/internal/version"
+          built="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          # Read from the checked out tag, not from GITHUB_SHA: when this
+          # workflow is called by the release workflow, GITHUB_SHA is the commit
+          # that triggered it, and the binary would advertise a provenance that
+          # does not match the code it was built from.
+          commit="$(git rev-parse --short=7 HEAD)"
+          ldflags="-s -w -X $module.Version=$TAG -X $module.Commit=$commit -X $module.Date=$built"
+          go build -trimpath -ldflags "$ldflags" -o "dist/hermes-${{ matrix.target }}$suffix" ./cmd/hermes
+          go build -trimpath -ldflags "$ldflags" -o "dist/hermes-cli-${{ matrix.target }}$suffix" ./cmd/hermes-cli
+
+      - name: Check the injected version
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          suffix=""
+          if [ "$RUNNER_OS" = "Windows" ]; then suffix=".exe"; fi
+          commit="$(git rev-parse --short=7 HEAD)"
+          reported="$(./dist/hermes-cli-${{ matrix.target }}$suffix -version)"
+          echo "$reported"
+          # The commit is checked alongside the tag: a binary that reports a
+          # commit nobody can resolve is as broken as one reporting no version.
+          for want in "$TAG" "$commit"; do
+            case "$reported" in
+              *"$want"*) ;;
+              *) echo "the binary reports $reported, expected it to carry $want" && exit 1 ;;
+            esac
+          done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: binaries-${{ matrix.target }}
+          path: dist/*
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: artifacts
+          pattern: binaries-*
+          merge-multiple: true
+
+      - name: Checksum every artifact
+        working-directory: artifacts
+        run: sha256sum * > SHA256SUMS
+
+      # Before 1.0 the release is published as it is built. From 1.0 on it is
+      # created as a draft, because from then on the notes are reviewed by hand
+      # and the signing step lands in this workflow.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          # The tag also arrives from workflow_dispatch and workflow_call, so it
+          # is checked before it is taken apart: a non-numeric major would abort
+          # the comparison below with a syntax error instead of a useful message.
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "refusing to publish $TAG: expected the form vX.Y.Z" && exit 1 ;;
+          esac
+          major="${TAG#v}"
+          major="${major%%.*}"
+          draft=""
+          if [ "$major" -ge 1 ]; then draft="--draft"; fi
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            --verify-tag \
+            $draft \
+            artifacts/*

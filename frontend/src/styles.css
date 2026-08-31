@@ -1,0 +1,74 @@
+/*
+ * The page paints its own surface and text. Relying on the user-agent defaults
+ * is what leaves a webview showing whatever colour sits behind it, so every
+ * colour used here is declared, in both schemes.
+ */
+:root {
+  color-scheme: light dark;
+
+  --surface: #ffffff;
+  --surface-raised: #f7f7f8;
+  --text: #17181c;
+  --text-muted: #5f6169;
+  --border: rgb(0 0 0 / 12%);
+
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  font-size: 14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #16181d;
+    --surface-raised: #1c1f26;
+    --text: #e7e8ec;
+    --text-muted: #a1a4ad;
+    --border: rgb(255 255 255 / 14%);
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--surface);
+}
+
+.app__header {
+  padding: 1.5rem 1.5rem 0;
+}
+
+.app__header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.app__header p {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+}
+
+.app__main {
+  flex: 1;
+  padding: 1.5rem;
+}
+
+.app__status {
+  display: flex;
+  gap: 1rem;
+  justify-content: flex-end;
+  padding: 0.5rem 1.5rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}

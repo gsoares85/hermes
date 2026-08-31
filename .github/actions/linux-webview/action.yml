@@ -1,0 +1,26 @@
+name: Linux webview dependencies
+description: >
+  Installs the GTK and WebKit development packages the Wails webview links
+  against on Linux.
+
+# Every job that compiles a package importing Wails needs these, which is more
+# jobs than it looks: building, vetting, linting, scanning for vulnerabilities
+# and running the integration suite all type-check cmd/hermes, and cgo runs
+# pkg-config for each of them. Listing the packages in each job is what let the
+# build install GTK 3 while Wails asked pkg-config for GTK 4, so the list lives
+# here and every job installs the same thing.
+#
+# Wails v3 targets GTK 4 and WebKitGTK 6.0 unless built with the gtk3 tag, which
+# this project does not use. glib-2.0, gio-unix-2.0 and libsoup-3.0 arrive as
+# dependencies of these two: libgtk-4-dev pulls libglib2.0-dev, and
+# libwebkitgtk-6.0-dev pulls libsoup-3.0-dev.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libgtk-4-dev \
+          libwebkitgtk-6.0-dev
