@@ -17,6 +17,10 @@ import (
 // the catalog or generates DDL has to pass against.
 var SupportedVersions = []string{"13", "15", "16", "17", "18"}
 
+// execTimeout bounds a single statement. Without it a psql that never returns
+// runs until the timeout of the whole test binary.
+const execTimeout = 2 * time.Minute
+
 // Credentials of the throwaway database. They are fixed on purpose: nothing
 // here is a secret, and a constant keeps failure output readable.
 const (
@@ -37,7 +41,10 @@ type Instance struct {
 func StartPostgres(t *testing.T, version string) *Instance {
 	t.Helper()
 
-	ctx := context.Background()
+	// Tied to the test, not to the process: a container that never comes up
+	// has to die with the test that asked for it, not hold the whole run
+	// until the timeout of the test binary.
+	ctx := t.Context()
 	image := "postgres:" + version + "-alpine"
 
 	container, err := postgres.Run(ctx, image,
@@ -76,7 +83,9 @@ func StartPostgres(t *testing.T, version string) *Instance {
 func (i *Instance) Exec(t *testing.T, statement string) string {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), execTimeout)
+	defer cancel()
+
 	// Multiplexed demuxes the Docker stream: without it the output still
 	// carries the per-frame header Docker puts in front of every chunk.
 	code, reader, err := i.container.Exec(ctx, []string{

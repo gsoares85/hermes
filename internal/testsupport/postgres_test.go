@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gsoares85/hermes/internal/core/conn"
 	"github.com/gsoares85/hermes/internal/testsupport"
 )
 
@@ -21,8 +22,11 @@ func TestPostgresStartsForEverySupportedVersion(t *testing.T) {
 
 			instance := testsupport.StartPostgres(t, version)
 
+			// Reported redacted even though this password is a throwaway:
+			// the first test in the repository is where the habit of never
+			// printing a connection string in full either starts or does not.
 			if !strings.Contains(instance.DSN, "sslmode=disable") {
-				t.Errorf("DSN = %q, want it to carry the requested options", instance.DSN)
+				t.Errorf("DSN = %q, want it to carry the requested options", conn.Redact(instance.DSN))
 			}
 
 			if got := instance.Exec(t, "SELECT 1"); got != "1" {

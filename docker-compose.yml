@@ -4,6 +4,11 @@
 #
 #   docker compose up -d
 #   psql "postgres://hermes:hermes@localhost:5436/hermes"
+#
+# Every port is bound to the loopback address. Docker publishes on 0.0.0.0 by
+# default and writes its own firewall rules ahead of ufw and firewalld, so a
+# bare "5433:5432" would offer these servers, password hermes, to the whole
+# network the developer happens to be on.
 
 name: hermes-dev
 
@@ -22,24 +27,24 @@ services:
   postgres-13:
     <<: *postgres
     image: postgres:13-alpine
-    ports: ["5433:5432"]
+    ports: ["127.0.0.1:5433:5432"]
 
   postgres-15:
     <<: *postgres
     image: postgres:15-alpine
-    ports: ["5435:5432"]
+    ports: ["127.0.0.1:5435:5432"]
 
   postgres-16:
     <<: *postgres
     image: postgres:16-alpine
-    ports: ["5436:5432"]
+    ports: ["127.0.0.1:5436:5432"]
 
   postgres-17:
     <<: *postgres
     image: postgres:17-alpine
-    ports: ["5437:5432"]
+    ports: ["127.0.0.1:5437:5432"]
 
   postgres-18:
     <<: *postgres
     image: postgres:18-alpine
-    ports: ["5438:5432"]
+    ports: ["127.0.0.1:5438:5432"]
