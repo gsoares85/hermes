@@ -17,7 +17,9 @@ concurrency:
 # every runner. The comment names the version the commit belongs to, and
 # Dependabot moves both together.
 env:
-  NODE_VERSION: "20"
+  # Node 20 reached end of life in April 2026, so it no longer receives security
+  # patches. 22 is the supported line the frontend is developed and built on.
+  NODE_VERSION: "22"
   GOLANGCI_LINT_VERSION: v2.13.2
   GOVULNCHECK_VERSION: v1.7.0
 
