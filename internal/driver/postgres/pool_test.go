@@ -43,13 +43,13 @@ func TestOpenDoesNotConnect(t *testing.T) {
 	}
 }
 
-// An sslmode the implementation cannot honour yet must be refused. Dropping it
-// would connect with less protection than was asked for, and nothing on screen
-// would say so.
-func TestOpenRefusesAnUnsupportedSSLMode(t *testing.T) {
+// An sslmode that is not a libpq mode at all must be refused rather than
+// dropped. Dropping it would connect with less protection than was asked for,
+// and nothing on screen would say so.
+func TestOpenRefusesAnUnknownSSLMode(t *testing.T) {
 	t.Parallel()
 
-	for _, mode := range []string{"require", "verify-ca", "verify-full", "allow"} {
+	for _, mode := range []string{"sometimes", "yes", "true", "verify"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 
@@ -70,10 +70,10 @@ func TestOpenRefusesAnUnsupportedSSLMode(t *testing.T) {
 	}
 }
 
-func TestOpenAcceptsTheModesThatNeedNoCertificates(t *testing.T) {
+func TestOpenAcceptsEveryLibpqSSLMode(t *testing.T) {
 	t.Parallel()
 
-	for _, mode := range []string{"", "prefer", "disable"} {
+	for _, mode := range []string{"", "disable", "allow", "prefer", "require", "verify-ca", "verify-full"} {
 		t.Run("mode="+mode, func(t *testing.T) {
 			t.Parallel()
 

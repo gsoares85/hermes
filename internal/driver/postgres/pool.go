@@ -59,27 +59,25 @@ func (Opener) Open(ctx context.Context, target driver.Target) (driver.Pool, erro
 }
 
 func poolConfig(target driver.Target) (*pgxpool.Config, error) {
-	// Parsed from an empty string to get the libpq defaults, then filled in
-	// field by field. The password never becomes part of a connection string:
-	// a string is what ends up quoted into a log or an error message.
-	config, err := pgxpool.ParseConfig("")
-	if err != nil {
-		return nil, fmt.Errorf("building the pool configuration: %w", err)
-	}
-
 	if target.Port < 1 || target.Port > 65535 {
 		return nil, fmt.Errorf("%w: port %d is outside 1-65535", ErrUnsupported, target.Port)
 	}
 
-	config.ConnConfig.Host = target.Host
-	config.ConnConfig.Port = uint16(target.Port)
-	config.ConnConfig.Database = target.Database
-	config.ConnConfig.User = target.User
-	config.ConnConfig.Password = target.Password
-
-	if err := applyTLS(config, target.SSLMode); err != nil {
+	settings, err := connString(target)
+	if err != nil {
 		return nil, err
 	}
+
+	config, err := pgxpool.ParseConfig(settings)
+	if err != nil {
+		// The string is built here and carries no secret, so quoting it back
+		// is what makes a bad certificate path findable.
+		return nil, fmt.Errorf("%w: %s: %w", ErrUnsupported, settings, err)
+	}
+
+	// Set on the parsed configuration rather than in the string above, which
+	// is the whole reason the string is built without it.
+	config.ConnConfig.Password = target.Password
 
 	if len(target.Params) > 0 {
 		config.ConnConfig.RuntimeParams = make(map[string]string, len(target.Params))
@@ -96,21 +94,6 @@ func poolConfig(target driver.Target) (*pgxpool.Config, error) {
 	config.MaxConnLifetime = maxConnLifetime
 
 	return config, nil
-}
-
-// applyTLS honours the two modes that need no certificate handling and refuses
-// the rest. Verification arrives with the TLS step of this task; until then an
-// unsupported mode is an error, never a silent downgrade to a weaker one.
-func applyTLS(config *pgxpool.Config, mode string) error {
-	switch mode {
-	case "", "prefer":
-		return nil
-	case "disable":
-		config.ConnConfig.TLSConfig = nil
-		return nil
-	default:
-		return fmt.Errorf("%w: sslmode %q is not wired yet", ErrUnsupported, mode)
-	}
 }
 
 // connPool adapts pgxpool to the engine contract. It exists so that no pgx type
