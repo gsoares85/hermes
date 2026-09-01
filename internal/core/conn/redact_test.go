@@ -98,6 +98,36 @@ func TestRedactHidesThePasswordOfAKeywordString(t *testing.T) {
 	}
 }
 
+// A driver error embeds the connection string it was given, so the text that
+// reaches a log is a sentence with a DSN inside it, not a bare DSN.
+func TestRedactHidesAPasswordInsideAMessage(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct{ message, survives string }{
+		"driver prefix":   {"auth: failed to connect: postgres://hermes:s3cr3t@db.example.com:5432/hermes", "db.example.com"},
+		"trailing text":   {"connecting to postgres://hermes:s3cr3t@localhost/app failed after 3 tries", "failed after 3 tries"},
+		"postgresql form": {"error: postgresql://hermes:s3cr3t@localhost/app is unreachable", "is unreachable"},
+		"keyword form":    {"error: could not connect using host=localhost password=s3cr3t dbname=app", "dbname=app"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := conn.Redact(tc.message)
+			if strings.Contains(got, "s3cr3t") {
+				t.Errorf("Redact(%q) = %q, the secret survived", tc.message, got)
+			}
+			// Redaction must remove the secret and nothing else: an error
+			// stripped of the context that makes it findable is no better
+			// than one that leaks.
+			if !strings.Contains(got, tc.survives) {
+				t.Errorf("Redact(%q) = %q, want it to keep %q", tc.message, got, tc.survives)
+			}
+		})
+	}
+}
+
 // Redaction must never be the reason a connection string stops being readable:
 // everything that is not the secret has to survive it.
 func TestRedactKeepsEverythingElse(t *testing.T) {

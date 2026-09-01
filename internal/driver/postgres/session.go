@@ -24,7 +24,7 @@ type session struct {
 func (p *connPool) Session(ctx context.Context) (driver.Session, error) {
 	conn, err := p.pool.Acquire(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("checking out a connection: %w", err)
+		return nil, classify(fmt.Errorf("checking out a connection: %w", err))
 	}
 
 	return &session{conn: conn}, nil

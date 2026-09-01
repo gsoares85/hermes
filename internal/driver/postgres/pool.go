@@ -52,7 +52,7 @@ func (Opener) Open(ctx context.Context, target driver.Target) (driver.Pool, erro
 
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
-		return nil, fmt.Errorf("opening a pool for %s:%d: %w", target.Host, target.Port, err)
+		return nil, classify(fmt.Errorf("opening a pool for %s:%d: %w", target.Host, target.Port, err))
 	}
 
 	return &connPool{pool: pool}, nil
@@ -102,9 +102,12 @@ type connPool struct {
 	pool *pgxpool.Pool
 }
 
+// Ping is where a connection is actually made, so it is where a failure gets
+// classified. The class is what the layer above turns into something readable;
+// the driver error stays underneath for whoever can read it.
 func (p *connPool) Ping(ctx context.Context) error {
 	if err := p.pool.Ping(ctx); err != nil {
-		return fmt.Errorf("reaching the server: %w", err)
+		return classify(fmt.Errorf("reaching the server: %w", err))
 	}
 
 	return nil

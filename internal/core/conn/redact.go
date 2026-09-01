@@ -3,11 +3,22 @@ package conn
 import (
 	"net/url"
 	"regexp"
+	"strings"
 )
 
 // Placeholder left where a password was. It is fixed rather than derived from
 // the secret, so that the length of the original never leaks either.
 const redacted = "xxxxx"
+
+// Schemes a connection URI uses. Checked before the text is treated as a URI at
+// all: url.Parse reads "auth:" in "auth: failed to connect" as a scheme, so any
+// message beginning with a word and a colon used to be mistaken for a DSN and
+// skipped the keyword redaction below entirely.
+var uriScheme = regexp.MustCompile(`(?i)^postgres(ql)?$`)
+
+// A connection URI embedded in a larger message, which is the shape a driver
+// error actually has: the DSN it was given, wrapped in a sentence.
+var embeddedURI = regexp.MustCompile(`(?i)(postgres(?:ql)?://[^\s:@/]+):[^\s@]*@`)
 
 // Passwords in a keyword connection string, quoted or bare.
 //
@@ -25,14 +36,17 @@ var passwordKeyword = regexp.MustCompile(
 // and every one of those is read by someone who should not learn the password.
 // Redacting is therefore not a courtesy: it is the only form in which a DSN is
 // allowed to leave this package.
-func Redact(dsn string) string {
-	// A keyword string carries no scheme, which is what tells the two forms
-	// apart: "host=localhost password=x" never parses as a URL.
-	if parsed, err := url.Parse(dsn); err == nil && parsed.Scheme != "" {
+func Redact(text string) string {
+	// A bare connection URI goes through the parser, which also reaches the
+	// password carried as a query parameter. Anything else is a message that
+	// may have a URI or a keyword string inside it.
+	if parsed, err := url.Parse(strings.TrimSpace(text)); err == nil && uriScheme.MatchString(parsed.Scheme) {
 		return redactURL(parsed)
 	}
 
-	return passwordKeyword.ReplaceAllString(dsn, "${1}"+redacted)
+	redactedText := embeddedURI.ReplaceAllString(text, "${1}:"+redacted+"@")
+
+	return passwordKeyword.ReplaceAllString(redactedText, "${1}"+redacted)
 }
 
 func redactURL(parsed *url.URL) string {
