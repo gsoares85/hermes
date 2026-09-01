@@ -24,10 +24,21 @@ import (
 // context and its cleanup die with that test while later ones still need the
 // server. It is owned by the package instead, and released by StopShared from
 // TestMain.
+//
+// The lock is held only while the map is read or written, never while a
+// container starts: a three-minute startup underneath it would serialise the
+// six versions that the parallel subtests exist to start at once.
 var (
 	sharedMu        sync.Mutex
-	sharedInstances = map[string]*Instance{}
+	sharedInstances = map[string]*sharedInstance{}
 )
+
+// sharedInstance is a server that starts exactly once, however many tests ask
+// for it at the same time.
+type sharedInstance struct {
+	once     sync.Once
+	instance *Instance
+}
 
 // SharedPostgres returns a running server of the given version, starting it on
 // first use and reusing it afterwards.
@@ -40,16 +51,22 @@ func SharedPostgres(t *testing.T, version string) *Instance {
 	t.Helper()
 
 	sharedMu.Lock()
-	defer sharedMu.Unlock()
+	entry, known := sharedInstances[version]
+	if !known {
+		entry = &sharedInstance{}
+		sharedInstances[version] = entry
+	}
+	sharedMu.Unlock()
 
-	if instance, running := sharedInstances[version]; running {
-		return instance
+	entry.once.Do(func() {
+		entry.instance = startShared(t, version)
+	})
+
+	if entry.instance == nil {
+		t.Fatalf("the shared PostgreSQL %s failed to start", version)
 	}
 
-	instance := startShared(t, version)
-	sharedInstances[version] = instance
-
-	return instance
+	return entry.instance
 }
 
 // startShared brings up a container owned by the package rather than by a test.
@@ -92,8 +109,10 @@ func StopShared() {
 	sharedMu.Lock()
 	defer sharedMu.Unlock()
 
-	for version, instance := range sharedInstances {
-		_ = testcontainers.TerminateContainer(instance.container)
+	for version, entry := range sharedInstances {
+		if entry.instance != nil {
+			_ = testcontainers.TerminateContainer(entry.instance.container)
+		}
 		delete(sharedInstances, version)
 	}
 }

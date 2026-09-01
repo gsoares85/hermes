@@ -75,6 +75,8 @@ export function ConnectionForm(): React.JSX.Element {
     setDiagnosis(null);
     try {
       setDiagnosis(await testConnection(form));
+    } catch (err) {
+      setNotice(String(err));
     } finally {
       setBusy(false);
     }
@@ -89,6 +91,9 @@ export function ConnectionForm(): React.JSX.Element {
       // Asked for straight away: someone who connected without naming a
       // database did it precisely to find out what is there.
       setAvailable(await listDatabases(opened.id));
+      // The connection is open and the password has been used. Keeping it in
+      // the state of a page that is redrawn and inspected buys nothing.
+      update("password", "");
     } catch (err) {
       setNotice(String(err));
     } finally {
@@ -100,7 +105,11 @@ export function ConnectionForm(): React.JSX.Element {
     if (status === null) {
       return;
     }
-    await closeConnection(status.id);
+    try {
+      await closeConnection(status.id);
+    } catch (err) {
+      setNotice(String(err));
+    }
     setStatus(null);
     setAvailable([]);
   }

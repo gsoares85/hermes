@@ -26,8 +26,17 @@ var embeddedURI = regexp.MustCompile(`(?i)(postgres(?:ql)?://[^\s:@/]+):[^\s@]*@
 // because that is how a value escapes a quote, a backslash or a space. Matching
 // the quote alone would end the value early and leave the rest of the password —
 // the part after the escape — sitting in the output next to the placeholder.
+// The bare alternative stops at a query separator as well as at a space. It
+// used to run to the next space, so "password=x&sslmode=require" collapsed to
+// "password=xxxxx" — the secret went and the most useful part of the message
+// went with it.
 var passwordKeyword = regexp.MustCompile(
-	`(?i)(password\s*=\s*)('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|(?:\\.|\S)+)`)
+	`(?i)(password\s*=\s*)('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|(?:\\.|[^\s&;])+)`)
+
+// Passwords in a JSON object, which is the shape the frontend boundary uses:
+// the window serialises its form, so a message quoting one carries the secret
+// as "password":"…" rather than as password=….
+var passwordJSON = regexp.MustCompile(`(?i)("(?:ssl)?password"\s*:\s*)"(?:\\.|[^"\\])*"`)
 
 // Redact returns the connection string with its password replaced, in both the
 // URL and the keyword form.
@@ -37,14 +46,23 @@ var passwordKeyword = regexp.MustCompile(
 // Redacting is therefore not a courtesy: it is the only form in which a DSN is
 // allowed to leave this package.
 func Redact(text string) string {
-	// A bare connection URI goes through the parser, which also reaches the
-	// password carried as a query parameter. Anything else is a message that
-	// may have a URI or a keyword string inside it.
-	if parsed, err := url.Parse(strings.TrimSpace(text)); err == nil && uriScheme.MatchString(parsed.Scheme) {
-		return redactURL(parsed)
+	trimmed := strings.TrimSpace(text)
+
+	// Only a text that is nothing but a URI goes through the parser, which is
+	// the path that also reaches a password carried as a query parameter.
+	//
+	// The space is what tells the two apart. A message beginning with a URI —
+	// which is what a driver error looks like — used to take this path as well,
+	// and url.Parse swallowed the rest of the sentence into the path and handed
+	// it back percent-encoded: the secret went, and the message with it.
+	if !strings.ContainsAny(trimmed, " \t\n") {
+		if parsed, err := url.Parse(trimmed); err == nil && uriScheme.MatchString(parsed.Scheme) {
+			return redactURL(parsed)
+		}
 	}
 
 	redactedText := embeddedURI.ReplaceAllString(text, "${1}:"+redacted+"@")
+	redactedText = passwordJSON.ReplaceAllString(redactedText, `${1}"`+redacted+`"`)
 
 	return passwordKeyword.ReplaceAllString(redactedText, "${1}"+redacted)
 }

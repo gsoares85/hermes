@@ -77,13 +77,23 @@ func poolConfig(target driver.Target) (*pgxpool.Config, error) {
 
 	// Set on the parsed configuration rather than in the string above, which
 	// is the whole reason the string is built without it.
-	config.ConnConfig.Password = target.Password
+	//
+	// Only when there is one: ParseConfig has already resolved a password from
+	// PGPASSWORD or from .pgpass, and overwriting that with an empty form field
+	// would turn off the one way of connecting that keeps no secret inside the
+	// application.
+	if target.Password != "" {
+		config.ConnConfig.Password = target.Password
+	}
 
-	if len(target.Params) > 0 {
-		config.ConnConfig.RuntimeParams = make(map[string]string, len(target.Params))
-		for key, value := range target.Params {
-			config.ConnConfig.RuntimeParams[key] = value
+	// Merged, not replaced. ParseConfig derives runtime parameters of its own
+	// from PGAPPNAME and PGOPTIONS, and assigning a fresh map would discard
+	// them without saying so.
+	for key, value := range target.Params {
+		if config.ConnConfig.RuntimeParams == nil {
+			config.ConnConfig.RuntimeParams = make(map[string]string, len(target.Params))
 		}
+		config.ConnConfig.RuntimeParams[key] = value
 	}
 
 	config.MaxConns = maxConns
@@ -116,7 +126,7 @@ func (p *connPool) Ping(ctx context.Context) error {
 func (p *connPool) ServerVersion(ctx context.Context) (string, error) {
 	var version string
 	if err := p.pool.QueryRow(ctx, "SHOW server_version").Scan(&version); err != nil {
-		return "", fmt.Errorf("reading the server version: %w", err)
+		return "", classify(fmt.Errorf("reading the server version: %w", err))
 	}
 
 	return version, nil

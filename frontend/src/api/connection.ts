@@ -16,6 +16,11 @@ export type { ConnectionForm, ConnectionView, DiagnosisView, StatusView };
  */
 export const emptyForm: ConnectionForm = {
   name: "",
+  // Session settings go to the server; connection settings configure the
+  // client. Kept apart because sending one as the other loses it — and for
+  // the ones that pin the authentication method, removes the protection.
+  params: null,
+  options: null,
   host: "localhost",
   // Left empty on purpose: connecting without naming a database opens the
   // maintenance database, and the list of what is there comes back.
@@ -93,6 +98,10 @@ export function applyParsed(form: ConnectionForm, parsed: ConnectionView): Conne
     database: parsed.database,
     user: parsed.user,
     sslMode: parsed.sslMode || form.sslMode,
+    // Carried through rather than dropped: a pasted URI that sets
+    // application_name or connect_timeout meant it.
+    params: parsed.params,
+    options: parsed.options,
     rootCert: parsed.rootCert,
     cert: parsed.cert,
     key: parsed.key,

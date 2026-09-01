@@ -37,7 +37,9 @@ func (s *stubPool) Session(context.Context) (driver.Session, error) {
 		return nil, s.pingErr
 	}
 
-	return nil, errors.New("sessions are not part of this test")
+	// A nil session is enough: what the tests here look at is the state the
+	// connection records, not what is done with the session afterwards.
+	return nil, nil
 }
 
 func (s *stubPool) ServerVersion(context.Context) (string, error) { return "16.2", nil }
@@ -330,6 +332,91 @@ func TestACheckAgainstASilentServerGivesUp(t *testing.T) {
 	}
 	if !status.Diagnosis.Failed() {
 		t.Errorf("a timed out check produced no diagnosis: %+v", status.Diagnosis)
+	}
+}
+
+// Closing a pool waits for the connections it handed out. Doing that while
+// holding the write lock blocks every Status call, which is what a window does
+// on each repaint — so closing a connection to a server that has gone away
+// would freeze the interface drawing it. Published state first, pool second.
+func TestClosingDoesNotBlockStatus(t *testing.T) {
+	t.Parallel()
+
+	pool := &closeBlockingPool{released: make(chan struct{}), entered: make(chan struct{})}
+	connection, err := conn.Open(t.Context(), closeBlockingOpener{pool}, sample())
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		connection.Close()
+		close(closed)
+	}()
+
+	// Wait until Close is actually inside pool.Close, or the read below would
+	// be racing the publication rather than the lock.
+	<-pool.entered
+
+	read := make(chan conn.State, 1)
+	go func() {
+		read <- connection.Status().State
+	}()
+
+	select {
+	case state := <-read:
+		if state != conn.StateClosed {
+			t.Errorf("State = %q, want %q to be visible while the pool is still closing", state, conn.StateClosed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reading the status blocked while the pool was closing")
+	}
+
+	close(pool.released)
+	<-closed
+}
+
+// closeBlockingPool stands in for a pool whose Close waits on connections that
+// are not coming back.
+type closeBlockingPool struct {
+	stubPool
+	released chan struct{}
+	entered  chan struct{}
+}
+
+func (c *closeBlockingPool) Close() {
+	close(c.entered)
+	<-c.released
+}
+
+type closeBlockingOpener struct{ pool *closeBlockingPool }
+
+func (c closeBlockingOpener) Open(context.Context, driver.Target) (driver.Pool, error) {
+	return c.pool, nil
+}
+
+// A pool hands back an idle connection without asking the server anything, so a
+// session checked out successfully proves nothing about the server being alive.
+func TestASuccessfulSessionDoesNotClaimTheServerIsUp(t *testing.T) {
+	t.Parallel()
+
+	connection, pool := openStub(t)
+	pool.fail(&driver.Failure{Class: driver.FailureRefused, Err: errors.New("refused")})
+	connection.Check(t.Context())
+
+	if got := connection.Status().State; got != conn.StateDown {
+		t.Fatalf("State = %q, want %q", got, conn.StateDown)
+	}
+
+	// The stub hands one out without complaint, the way a pool with an idle
+	// connection does.
+	pool.recover()
+	if _, err := connection.Session(t.Context()); err != nil {
+		t.Fatalf("Session returned error: %v", err)
+	}
+
+	if got := connection.Status().State; got == conn.StateConnected {
+		t.Error("checking out a session was taken as proof that the server answered")
 	}
 }
 

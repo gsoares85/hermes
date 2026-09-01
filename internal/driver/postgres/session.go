@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -10,6 +11,11 @@ import (
 
 	"github.com/gsoares85/hermes/internal/driver"
 )
+
+// rollbackTimeout bounds the rollback a closing session performs. Short on
+// purpose: the connection is being given up either way, and the alternative to
+// giving up on the rollback is holding the pool open indefinitely.
+const rollbackTimeout = 5 * time.Second
 
 // session is one connection checked out of the pool.
 //
@@ -118,10 +124,14 @@ func (s *session) Close() {
 	}
 
 	if s.tx != nil {
-		// The context is gone by the time a tab closes, so this cannot use the
-		// caller's. A rollback on a connection about to be released is quick,
-		// and pgx cancels it with the connection if it is not.
-		_ = s.tx.Rollback(context.Background())
+		// The caller's context is gone by the time a tab closes, so this needs
+		// one of its own — and it needs a deadline. A rollback is an ordinary
+		// statement: against a backend that stopped answering without closing
+		// the socket it would wait forever, and the pool that is trying to
+		// release this connection would wait behind it.
+		ctx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
+		_ = s.tx.Rollback(ctx)
+		cancel()
 		s.tx = nil
 	}
 

@@ -3,6 +3,7 @@ package ui_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -61,6 +62,19 @@ func TestNothingReturnedCarriesACredential(t *testing.T) {
 		ui.ConnectionView{},
 		ui.DiagnosisView{},
 		ui.StatusView{},
+	}
+
+	// The walk itself is checked before it is trusted. A secret is planted in
+	// the nested field and the helper must find it — the previous version
+	// returned "<ui.DiagnosisView Value>" there and would have reported a real
+	// leak as clean.
+	planted := ui.StatusView{
+		ID:        "1",
+		State:     "down",
+		Diagnosis: ui.DiagnosisView{Failed: true, Detail: "postgres://hermes:" + secret + "@host/db"},
+	}
+	if !strings.Contains(renderAll(planted), secret) {
+		t.Fatal("the field walk does not descend into nested structs, so it cannot detect a leak there")
 	}
 
 	forbidden := []string{"password", "secret", "credential", "token", "passphrase"}
@@ -270,21 +284,14 @@ func TestSSLModesComeFromTheCore(t *testing.T) {
 	}
 }
 
+// renderAll prints every field, however deeply nested.
+//
+// The earlier version called reflect.Value.String() field by field, which
+// returns "<ui.DiagnosisView Value>" for anything that is not a string and
+// never descended into it — so the field most likely to carry a secret, the
+// driver detail inside a status, was never actually looked at.
 func renderAll(value any) string {
-	return strings.ToLower(reflect.ValueOf(value).String() + valueString(value))
-}
-
-// valueString walks the fields so that a secret hiding in any of them is found,
-// rather than relying on a String method the type may not have.
-func valueString(value any) string {
-	v := reflect.ValueOf(value)
-	var parts []string
-
-	for i := range v.NumField() {
-		parts = append(parts, v.Field(i).String())
-	}
-
-	return strings.Join(parts, " ")
+	return strings.ToLower(fmt.Sprintf("%+v", value))
 }
 
 func slicesContains(haystack []string, needle string) bool {

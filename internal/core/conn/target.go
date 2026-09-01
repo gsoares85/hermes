@@ -22,12 +22,8 @@ func (c Config) Target() driver.Target {
 		Key:      c.TLS.Key,
 	}
 
-	if c.Params != nil {
-		target.Params = make(map[string]string, len(c.Params))
-		for key, value := range c.Params {
-			target.Params[key] = value
-		}
-	}
+	target.Params = copyOf(c.Params)
+	target.Options = copyOf(c.Options)
 
 	return target
 }

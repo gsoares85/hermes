@@ -11,6 +11,8 @@ package driver
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 )
 
 // Errors a session raises about its own transaction state. They are sentinels
@@ -42,8 +44,15 @@ type Target struct {
 	Cert     string
 	Key      string
 
-	// Params are session parameters applied on connect.
+	// Params are session parameters sent to the server on connect.
 	Params map[string]string
+
+	// Options are client-side connection settings, which must reach the driver
+	// as connection settings rather than as parameters for the server. The
+	// distinction matters: some of them, such as the ones pinning the
+	// authentication method, protect the connection, and passing one to the
+	// server instead both loses the setting and removes the protection.
+	Options map[string]string
 }
 
 // Pool hands out connections to one server.
@@ -127,4 +136,29 @@ type Session interface {
 // implementation provides and the only thing the core layer needs to be handed.
 type Opener interface {
 	Open(ctx context.Context, target Target) (Pool, error)
+}
+
+// String renders the target without its password.
+//
+// It exists for the same reason Config has one: this is the type that actually
+// carries the secret across the seam, and without a rendering of its own a
+// %v in an error or a logger handed the whole struct prints every field.
+func (t Target) String() string {
+	mode := t.SSLMode
+	if mode == "" {
+		mode = "default"
+	}
+
+	return fmt.Sprintf("%s@%s:%d/%s (sslmode=%s)", t.User, t.Host, t.Port, t.Database, mode)
+}
+
+// LogValue is what a structured logger prints for a target.
+func (t Target) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("host", t.Host),
+		slog.Int("port", t.Port),
+		slog.String("database", t.Database),
+		slog.String("user", t.User),
+		slog.String("sslmode", t.SSLMode),
+	)
 }

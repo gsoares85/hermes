@@ -117,16 +117,21 @@ func (c *Connection) Check(ctx context.Context) Status {
 	return c.record(c.pool.Ping(ctx))
 }
 
-// Session checks out a session and records the outcome, so that a tab failing
-// to open one updates the state without a separate probe.
+// Session checks out a session, recording a failure so that a tab that cannot
+// open one updates the state without a separate probe.
+//
+// Only the failure. A pool hands back an idle connection without asking the
+// server anything, so a session that was checked out successfully is no
+// evidence that the server is alive, and recording it as such would have the
+// window claim a connection nobody confirmed.
 func (c *Connection) Session(ctx context.Context) (driver.Session, error) {
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
 
 	session, err := c.pool.Session(ctx)
-	c.record(err)
-
 	if err != nil {
+		c.record(err)
+
 		return nil, err
 	}
 
@@ -135,6 +140,9 @@ func (c *Connection) Session(ctx context.Context) (driver.Session, error) {
 
 // ServerVersion reads the version and records the outcome.
 func (c *Connection) ServerVersion(ctx context.Context) (string, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
 	version, err := c.pool.ServerVersion(ctx)
 	c.record(err)
 
@@ -154,16 +162,23 @@ func (c *Connection) Databases(ctx context.Context) ([]string, error) {
 }
 
 // Close releases the pool. It is safe to call more than once.
+//
+// The state is published before the pool is closed, and the lock is let go in
+// between. Closing a pool waits for every connection it handed out to come
+// back, which is unbounded while a session is open and takes up to fifteen
+// seconds otherwise — and holding the write lock across that would block every
+// Status call, freezing the window that is drawing the connection it is trying
+// to close.
 func (c *Connection) Close() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if c.status.State == StateClosed {
+		c.mu.Unlock()
 		return
 	}
+	c.status = Status{State: StateClosed, Since: time.Now()}
+	c.mu.Unlock()
 
 	c.pool.Close()
-	c.status = Status{State: StateClosed, Since: time.Now()}
 }
 
 // withTimeout applies the default deadline unless the caller brought one. A

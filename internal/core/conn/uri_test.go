@@ -94,7 +94,9 @@ func TestParseURIKeepsSessionParameters(t *testing.T) {
 		t.Fatalf("ParseURI returned error: %v", err)
 	}
 
-	want := map[string]string{"application_name": "hermes", "search_path": "public", "connect_timeout": "10"}
+	// connect_timeout is deliberately absent: it configures the client, not
+	// the session, and this test used to enshrine sending it to the server.
+	want := map[string]string{"application_name": "hermes", "search_path": "public"}
 	if len(got.Params) != len(want) {
 		t.Fatalf("Params = %v, want %v", got.Params, want)
 	}

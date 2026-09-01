@@ -23,6 +23,7 @@ func TestEveryClassIsDiagnosed(t *testing.T) {
 		driver.FailureDNS,
 		driver.FailureTimeout,
 		driver.FailureRefused,
+		driver.FailureDropped,
 		driver.FailureTLS,
 		driver.FailureAuth,
 		driver.FailureNotAuthorized,

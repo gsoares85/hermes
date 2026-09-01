@@ -62,6 +62,16 @@ var projectRules = []deps.Rule{
 			"database/sql",
 		},
 	},
+	{
+		// The same rule the core has. The UI is handed an engine by the
+		// command that wires the application together; reaching for one
+		// itself would make the boundary a suggestion.
+		Reason:   "the UI layer must talk to the engine contract, never to an implementation",
+		Packages: module + "/internal/ui",
+		Forbidden: []string{
+			module + "/internal/driver/",
+		},
+	},
 }
 
 func TestCheckReportsAForbiddenImport(t *testing.T) {

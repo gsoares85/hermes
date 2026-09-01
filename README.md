@@ -166,11 +166,16 @@ postgres://reporting@db.example.com/analytics?sslmode=verify-full&sslrootcert=/e
 `verify-full` also checks that the host you typed matches the certificate. Hermes never quietly
 falls back to a weaker mode than the one you asked for.
 
-### Sessions
+### Session parameters
 
-Each tab gets its own session on the connection, so a transaction opened in one tab is invisible
-to the others until it is committed. Closing a tab with an open transaction rolls it back rather
-than leaving the outcome to the server.
+Anything in a pasted URI that PostgreSQL understands as a session setting is carried through:
+
+```
+postgres://reporting@db.example.com/analytics?application_name=hermes&search_path=reporting,public
+```
+
+Connection settings such as `connect_timeout` or `require_auth` are carried too, and kept apart
+from session settings — sending one as the other would quietly drop it.
 
 ## Roadmap
 

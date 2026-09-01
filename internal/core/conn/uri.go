@@ -128,15 +128,49 @@ func readQuery(query url.Values, config *Config) error {
 		case keyPassword:
 			config.Password = value
 		default:
-			if config.Params == nil {
-				config.Params = make(map[string]string)
+			if err := readUnmodelled(key, value, config); err != nil {
+				return err
 			}
-			config.Params[key] = value
 		}
 	}
 
 	if err := config.TLS.Mode.validate(); err != nil {
 		return fmt.Errorf("%w: %s", ErrInvalidURI, strings.TrimPrefix(err.Error(), ErrInvalidConfig.Error()+": "))
+	}
+
+	return nil
+}
+
+// readUnmodelled sorts a query key that has no field of its own.
+//
+// A connection keyword and a session parameter look identical in a URI and are
+// completely different things, so guessing is not an option: one configures the
+// client, the other is sent to the server. Getting it wrong is how
+// require_auth stops pinning the authentication method while still appearing
+// to be set.
+func readUnmodelled(key, value string, config *Config) error {
+	switch classifyKeyword(key) {
+	case keywordUnsupported:
+		return fmt.Errorf("%w: %s is not supported: %s", ErrInvalidURI, key, unsupportedKeywords[key])
+
+	case keywordConnection:
+		if config.Options == nil {
+			config.Options = make(map[string]string)
+		}
+		config.Options[key] = value
+
+	case keywordModelled:
+		// Reached only for a keyword the switch above does not already take,
+		// which today means none. Kept so that adding one to the modelled set
+		// without adding a case is a compile-time-visible gap rather than a
+		// silent reclassification.
+		return fmt.Errorf("%w: %s must be given as a field, not as a query parameter", ErrInvalidURI, key)
+
+	default:
+		if config.Params == nil {
+			config.Params = make(map[string]string)
+		}
+		config.Params[key] = value
 	}
 
 	return nil

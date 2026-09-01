@@ -32,6 +32,14 @@ export function Close(id: string): $CancellablePromise<void> {
 }
 
 /**
+ * CloseAll releases every open connection. The window calls it on shutdown, so
+ * that reloading or quitting does not leave pools alive until the process dies.
+ */
+export function CloseAll(): $CancellablePromise<void> {
+    return $Call.ByID(2364498479);
+}
+
+/**
  * Databases lists what the open connection may reach, which is how someone who
  * connected without naming a database chooses one.
  */

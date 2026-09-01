@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -52,6 +53,14 @@ func connString(target driver.Target) (string, error) {
 		parts = append(parts, setting.key+"="+quote(setting.value))
 	}
 
+	// Client-side options go through the same string, which is what puts them
+	// in front of the driver's own handling instead of past it. Sorted so that
+	// the string is the same for the same target, which is what makes it
+	// comparable in a test and in a log.
+	for _, key := range sortedKeys(target.Options) {
+		parts = append(parts, key+"="+quote(target.Options[key]))
+	}
+
 	return strings.Join(parts, " "), nil
 }
 
@@ -64,4 +73,14 @@ func quote(value string) string {
 	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
 
 	return "'" + escaped + "'"
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+
+	return keys
 }

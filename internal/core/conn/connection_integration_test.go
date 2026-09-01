@@ -134,8 +134,17 @@ func TestASessionFailureUpdatesTheState(t *testing.T) {
 	}
 	session.Close()
 
-	if got := connection.Status().State; got != conn.StateConnected {
-		t.Errorf("State = %q after a session was checked out, want %q", got, conn.StateConnected)
+	// Deliberately still idle. The pool hands back a connection without asking
+	// the server anything, so checking one out is no evidence that the server
+	// answered — and an earlier version of this recorded it as if it were.
+	if got := connection.Status().State; got != conn.StateIdle {
+		t.Errorf("State = %q after a session was checked out, want %q: a checkout proves nothing",
+			got, conn.StateIdle)
+	}
+
+	// A check does reach the server, and that is what may claim it is up.
+	if got := connection.Check(t.Context()); got.State != conn.StateConnected {
+		t.Fatalf("State = %q after a check, want %q (%s)", got.State, conn.StateConnected, got.Diagnosis)
 	}
 
 	instance.Stop(t)

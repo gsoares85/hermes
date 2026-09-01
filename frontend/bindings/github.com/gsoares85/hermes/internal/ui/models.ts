@@ -11,6 +11,14 @@
  */
 export interface ConnectionForm {
     "name": string;
+
+    /**
+     * Params are session parameters; Options are libpq connection settings.
+     * Both are carried so that a pasted URI does not quietly lose them
+     * between the parser and the connection.
+     */
+    "params": { [_ in string]?: string } | null;
+    "options": { [_ in string]?: string } | null;
     "host": string;
     "port": number;
     "database": string;
@@ -28,6 +36,8 @@ export interface ConnectionForm {
  */
 export interface ConnectionView {
     "name": string;
+    "params": { [_ in string]?: string } | null;
+    "options": { [_ in string]?: string } | null;
     "host": string;
     "port": number;
     "database": string;

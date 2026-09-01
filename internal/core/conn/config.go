@@ -85,9 +85,16 @@ type Config struct {
 
 	TLS TLS
 
-	// Params are session parameters sent on connect: application_name,
-	// search_path, connect_timeout and the like.
+	// Params are session parameters sent to the server on connect: GUCs like
+	// application_name, search_path or statement_timeout.
 	Params map[string]string
+
+	// Options are libpq connection keywords, which configure the client and
+	// must never be sent to the server: connect_timeout, require_auth,
+	// channel_binding and the like. They are kept apart from Params because
+	// sending one as the other both loses the setting and, for the ones that
+	// protect the connection, silently removes the protection.
+	Options map[string]string
 
 	// Archived hides the connection from the usual listing without deleting
 	// it. Archiving is reversible; deleting is not.
@@ -102,11 +109,20 @@ type Config struct {
 func (c Config) Clone() Config {
 	copied := c
 
-	if c.Params != nil {
-		copied.Params = make(map[string]string, len(c.Params))
-		for key, value := range c.Params {
-			copied.Params[key] = value
-		}
+	copied.Params = copyOf(c.Params)
+	copied.Options = copyOf(c.Options)
+
+	return copied
+}
+
+func copyOf(original map[string]string) map[string]string {
+	if original == nil {
+		return nil
+	}
+
+	copied := make(map[string]string, len(original))
+	for key, value := range original {
+		copied[key] = value
 	}
 
 	return copied

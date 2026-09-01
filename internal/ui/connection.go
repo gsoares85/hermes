@@ -2,8 +2,10 @@ package ui
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
-	"strconv"
 	"sync"
 
 	"github.com/gsoares85/hermes/internal/core/conn"
@@ -17,7 +19,13 @@ import (
 // the view below are separate types rather than one shared struct with a rule
 // about when to blank a member.
 type ConnectionForm struct {
-	Name     string `json:"name"`
+	Name string `json:"name"`
+	// Params are session parameters; Options are libpq connection settings.
+	// Both are carried so that a pasted URI does not quietly lose them
+	// between the parser and the connection.
+	Params  map[string]string `json:"params"`
+	Options map[string]string `json:"options"`
+
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	Database string `json:"database"`
@@ -33,7 +41,10 @@ type ConnectionForm struct {
 // ConnectionView is a connection as the window draws it. There is deliberately
 // no password field: a type that cannot carry a secret cannot leak one.
 type ConnectionView struct {
-	Name     string `json:"name"`
+	Name    string            `json:"name"`
+	Params  map[string]string `json:"params"`
+	Options map[string]string `json:"options"`
+
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
 	Database string `json:"database"`
@@ -73,9 +84,8 @@ type StatusView struct {
 type ConnectionService struct {
 	opener driver.Opener
 
-	mu     sync.Mutex
-	open   map[string]*conn.Connection
-	nextID int
+	mu   sync.Mutex
+	open map[string]*conn.Connection
 }
 
 // NewConnectionService creates the service bound to the frontend.
@@ -123,7 +133,7 @@ func (s *ConnectionService) Open(ctx context.Context, form ConnectionForm) (Stat
 
 	connection, err := conn.Open(ctx, s.opener, config)
 	if err != nil {
-		return StatusView{}, err
+		return StatusView{}, redactErr(err)
 	}
 
 	status := connection.Check(ctx)
@@ -131,8 +141,12 @@ func (s *ConnectionService) Open(ctx context.Context, form ConnectionForm) (Stat
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.nextID++
-	id := strconv.Itoa(s.nextID)
+	id, err := newID()
+	if err != nil {
+		connection.Close()
+
+		return StatusView{}, err
+	}
 	s.open[id] = connection
 
 	return statusView(id, status), nil
@@ -183,7 +197,9 @@ func (s *ConnectionService) Databases(ctx context.Context, id string) ([]string,
 		return nil, err
 	}
 
-	return connection.Databases(ctx)
+	databases, err := connection.Databases(ctx)
+
+	return databases, redactErr(err)
 }
 
 // SSLModes lists the modes the form offers, so that the list lives in one place
@@ -196,6 +212,46 @@ func (s *ConnectionService) SSLModes() []string {
 	}
 
 	return names
+}
+
+// CloseAll releases every open connection. The window calls it on shutdown, so
+// that reloading or quitting does not leave pools alive until the process dies.
+func (s *ConnectionService) CloseAll() {
+	s.mu.Lock()
+	open := make([]*conn.Connection, 0, len(s.open))
+	for id, connection := range s.open {
+		open = append(open, connection)
+		delete(s.open, id)
+	}
+	s.mu.Unlock()
+
+	for _, connection := range open {
+		connection.Close()
+	}
+}
+
+// newID returns an unguessable handle. Sequential ones would be fine for what
+// they address, but the cost of not having to think about it is one line.
+func newID() (string, error) {
+	raw := make([]byte, 8)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("generating a connection identifier: %w", err)
+	}
+
+	return hex.EncodeToString(raw), nil
+}
+
+// redactErr is the last thing every error crosses on its way to the window.
+//
+// Nothing that reaches here carries a password today, but the pool builder
+// deliberately quotes the whole connection string into one of its errors, and
+// the boundary is the wrong place to be relying on that staying true.
+func redactErr(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	return errors.New(conn.Redact(err.Error()))
 }
 
 func (s *ConnectionService) lookup(id string) (*conn.Connection, error) {
@@ -229,6 +285,8 @@ func configOf(form ConnectionForm) conn.Config {
 			Cert:     form.Cert,
 			Key:      form.Key,
 		},
+		Params:  form.Params,
+		Options: form.Options,
 	}
 }
 
@@ -243,6 +301,8 @@ func viewOf(config conn.Config) ConnectionView {
 		RootCert:    config.TLS.RootCert,
 		Cert:        config.TLS.Cert,
 		Key:         config.TLS.Key,
+		Params:      config.Params,
+		Options:     config.Options,
 		HasPassword: config.Password != "",
 	}
 }

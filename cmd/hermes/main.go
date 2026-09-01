@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -36,6 +37,11 @@ func run() error {
 	app := application.New(application.Options{
 		Name:        "Hermes",
 		Description: "A native, open source database manager for PostgreSQL",
+		// Pinned rather than left to the framework default. At debug level
+		// Wails logs the arguments of every bound call, and the arguments of
+		// a connection call are a form with a password in it. The level a
+		// secret depends on is a level this application chooses.
+		LogLevel: slog.LevelInfo,
 		Services: []application.Service{
 			application.NewService(ui.NewAppInfoService()),
 			// The engine implementation is chosen here and nowhere else: the
