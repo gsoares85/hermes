@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"syscall"
 	"testing"
@@ -91,6 +92,21 @@ func TestClassifyReadsTheTransport(t *testing.T) {
 		"server without tls": {
 			errors.New("server refused TLS connection"),
 			driver.FailureTLS,
+		},
+		"connection reset": {
+			fmt.Errorf("read tcp: %w", syscall.ECONNRESET),
+			driver.FailureDropped,
+		},
+		// A stopped server closes the socket while the client is waiting for
+		// the next protocol message, and that arrives as an EOF rather than as
+		// an error number.
+		"eof mid protocol": {
+			fmt.Errorf("failed to receive message: %w", io.ErrUnexpectedEOF),
+			driver.FailureDropped,
+		},
+		"plain eof": {
+			fmt.Errorf("reading: %w", io.EOF),
+			driver.FailureDropped,
 		},
 		"nothing recognisable": {
 			errors.New("something nobody predicted"),

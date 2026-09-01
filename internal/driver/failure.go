@@ -29,6 +29,11 @@ const (
 	// FailureTLS is a handshake that did not complete, whether because the
 	// server does not offer TLS or because its certificate was not accepted.
 	FailureTLS FailureClass = "tls"
+	// FailureDropped is a connection that was established and then lost: the
+	// server stopped, was restarted, or terminated the backend. It is not the
+	// same as a refusal, which happens before anything is established, and it
+	// is what a pooled connection sees first when a server goes away.
+	FailureDropped FailureClass = "dropped"
 	// FailureAuth is a server that answered and rejected the credentials.
 	FailureAuth FailureClass = "auth"
 	// FailureNotAuthorized is a server with no pg_hba rule for this user

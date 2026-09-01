@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"io"
 	"net"
 	"strings"
 
@@ -82,6 +83,15 @@ func fromTransport(err error) driver.FailureClass {
 
 	if isRefused(err) {
 		return driver.FailureRefused
+	}
+
+	// After a refusal, because a connection that was never established cannot
+	// have been dropped. An EOF in the middle of the protocol counts: the
+	// socket closed cleanly while a message was expected, which is what a
+	// server being stopped looks like from this side, and it arrives as often
+	// as the reset does depending on when the probe lands.
+	if isDropped(err) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return driver.FailureDropped
 	}
 
 	// Checked after the causes above because a deadline is what a caller sees

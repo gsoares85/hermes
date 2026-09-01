@@ -88,6 +88,13 @@ func explain(class driver.FailureClass, c Config) Diagnosis {
 			NextStep: fmt.Sprintf("Check that PostgreSQL is running and listening on %d, and that listen_addresses covers the address this machine connects from.", c.Port),
 		}
 
+	case driver.FailureDropped:
+		return Diagnosis{
+			Summary:  fmt.Sprintf("The connection to %s was dropped.", address),
+			Cause:    "It was established and then lost: the server was stopped or restarted, an administrator terminated the backend, or something between here and there closed the socket.",
+			NextStep: "Try again — a pool opens a new connection on the next attempt. If it keeps happening, check whether the server is restarting or whether an idle timeout is closing connections.",
+		}
+
 	case driver.FailureTLS:
 		return Diagnosis{
 			Summary:  fmt.Sprintf("The TLS handshake with %s failed.", address),

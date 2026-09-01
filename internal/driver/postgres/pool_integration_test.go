@@ -25,7 +25,7 @@ func TestPoolConnectsToEverySupportedVersion(t *testing.T) {
 		t.Run("postgres-"+version, func(t *testing.T) {
 			t.Parallel()
 
-			instance := testsupport.StartPostgres(t, version)
+			instance := testsupport.SharedPostgres(t, version)
 
 			config, err := conn.ParseURI(instance.DSN)
 			if err != nil {
@@ -64,7 +64,7 @@ func TestPoolConnectsToEverySupportedVersion(t *testing.T) {
 func TestPingFailsWithWrongCredentials(t *testing.T) {
 	t.Parallel()
 
-	instance := testsupport.StartPostgres(t, testsupport.SupportedVersions[0])
+	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
 
 	config, err := conn.ParseURI(instance.DSN)
 	if err != nil {
@@ -93,7 +93,7 @@ func TestPingFailsWithWrongCredentials(t *testing.T) {
 func TestPingFailsForAMissingDatabase(t *testing.T) {
 	t.Parallel()
 
-	instance := testsupport.StartPostgres(t, testsupport.SupportedVersions[0])
+	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
 
 	config, err := conn.ParseURI(instance.DSN)
 	if err != nil {

@@ -16,7 +16,7 @@ import (
 func openPool(t *testing.T, version string) driver.Pool {
 	t.Helper()
 
-	instance := testsupport.StartPostgres(t, version)
+	instance := testsupport.SharedPostgres(t, version)
 
 	config, err := conn.ParseURI(instance.DSN)
 	if err != nil {

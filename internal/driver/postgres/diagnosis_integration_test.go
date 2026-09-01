@@ -32,7 +32,7 @@ func diagnose(t *testing.T, config conn.Config) conn.Diagnosis {
 func TestRealFailuresAreClassified(t *testing.T) {
 	t.Parallel()
 
-	instance := testsupport.StartPostgres(t, testsupport.SupportedVersions[0])
+	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
 
 	working, err := conn.ParseURI(instance.DSN)
 	if err != nil {
@@ -91,7 +91,7 @@ func TestRealFailuresAreClassified(t *testing.T) {
 func TestRequiringTLSAgainstAPlainServerIsDiagnosed(t *testing.T) {
 	t.Parallel()
 
-	instance := testsupport.StartPostgres(t, testsupport.SupportedVersions[0])
+	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
 
 	config, err := conn.ParseURI(instance.DSN)
 	if err != nil {
@@ -129,7 +129,7 @@ func TestAnUntrustedCertificateIsDiagnosed(t *testing.T) {
 func TestADiagnosisFromARealFailureCarriesNoPassword(t *testing.T) {
 	t.Parallel()
 
-	instance := testsupport.StartPostgres(t, testsupport.SupportedVersions[0])
+	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
 
 	config, err := conn.ParseURI(instance.DSN)
 	if err != nil {

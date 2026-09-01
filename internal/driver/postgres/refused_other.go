@@ -12,3 +12,8 @@ import (
 func isRefused(err error) bool {
 	return errors.Is(err, syscall.ECONNREFUSED)
 }
+
+// isDropped reports a connection that was established and then lost.
+func isDropped(err error) bool {
+	return errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED)
+}
