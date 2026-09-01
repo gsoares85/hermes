@@ -13,6 +13,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/gsoares85/hermes/frontend"
+	"github.com/gsoares85/hermes/internal/driver/postgres"
 	"github.com/gsoares85/hermes/internal/ui"
 	"github.com/gsoares85/hermes/internal/version"
 )
@@ -37,6 +38,10 @@ func run() error {
 		Description: "A native, open source database manager for PostgreSQL",
 		Services: []application.Service{
 			application.NewService(ui.NewAppInfoService()),
+			// The engine implementation is chosen here and nowhere else: the
+			// UI and the core both program against the contract, and this is
+			// the outermost place that can name a driver.
+			application.NewService(ui.NewConnectionService(postgres.New())),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(frontend.Dist()),
