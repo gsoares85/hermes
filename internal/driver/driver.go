@@ -8,7 +8,18 @@
 // arrangement ADR-0009 settled.
 package driver
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// Errors a session raises about its own transaction state. They are sentinels
+// because the layer above reacts to them — a tab that thinks it is inside a
+// transaction and is not has to be told, not shown a driver message.
+var (
+	ErrNoTransaction     = errors.New("no transaction is open on this session")
+	ErrTransactionActive = errors.New("a transaction is already open on this session")
+)
 
 // Target is everything the engine needs to reach a server, and nothing else.
 //
@@ -41,6 +52,15 @@ type Target struct {
 // fail when it is used, not when the application starts. The startup budget in
 // the testing strategy depends on that, and so does the window opening at all.
 type Pool interface {
+	// Session checks out a connection for exclusive use. Two sessions from the
+	// same pool are independent: a transaction open on one is invisible to the
+	// other until it commits, which is what lets two tabs share a connection
+	// without sharing a transaction.
+	//
+	// The caller closes the session, and only then does the connection go back
+	// to the pool.
+	Session(ctx context.Context) (Session, error)
+
 	// Ping acquires a connection and checks that the server answers.
 	Ping(ctx context.Context) error
 
@@ -50,6 +70,47 @@ type Pool interface {
 
 	// Close releases every connection the pool holds. It is safe to call more
 	// than once.
+	Close()
+}
+
+// Row is a single result row, scanned into destinations the caller owns. It is
+// this package's own interface on purpose: a pgx row must never cross the seam,
+// or the core layer would depend on the driver through a return value.
+type Row interface {
+	Scan(dest ...any) error
+}
+
+// Session is one connection checked out of a pool, with a transaction scope of
+// its own.
+//
+// Statements run inside the transaction once Begin succeeds, and directly on
+// the connection otherwise. Closing a session with a transaction still open
+// rolls it back: leaving the decision to the server's disconnect handling would
+// make the outcome depend on timing.
+type Session interface {
+	// Exec runs a statement that returns no rows.
+	Exec(ctx context.Context, sql string, args ...any) error
+
+	// QueryRow runs a query expected to return a single row. The error, if
+	// any, surfaces from Scan.
+	QueryRow(ctx context.Context, sql string, args ...any) Row
+
+	// Begin opens a transaction. It fails with ErrTransactionActive if one is
+	// already open: nested transactions are a different feature, and silently
+	// reusing the outer one would make a rollback undo more than it should.
+	Begin(ctx context.Context) error
+
+	// Commit and Rollback close the transaction, and fail with
+	// ErrNoTransaction when there is none.
+	Commit(ctx context.Context) error
+	Rollback(ctx context.Context) error
+
+	// InTransaction reports whether a transaction is open, which is what a tab
+	// shows in its status area.
+	InTransaction() bool
+
+	// Close rolls back any open transaction and returns the connection to the
+	// pool. It is safe to call more than once.
 	Close()
 }
 
