@@ -141,6 +141,18 @@ func (c *Connection) ServerVersion(ctx context.Context) (string, error) {
 	return version, err
 }
 
+// Databases lists what this connection may open, recording the outcome so that
+// a failure to list is as visible as a failure to connect.
+func (c *Connection) Databases(ctx context.Context) ([]string, error) {
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+
+	databases, err := c.pool.Databases(ctx)
+	c.record(err)
+
+	return databases, err
+}
+
 // Close releases the pool. It is safe to call more than once.
 func (c *Connection) Close() {
 	c.mu.Lock()

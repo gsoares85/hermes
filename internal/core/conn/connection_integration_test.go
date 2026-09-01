@@ -3,6 +3,7 @@
 package conn_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/gsoares85/hermes/internal/core/conn"
@@ -158,4 +159,90 @@ func TestASessionFailureUpdatesTheState(t *testing.T) {
 	if got := connection.Status(); got.State != conn.StateDown {
 		t.Errorf("State = %q after the server was stopped, want %q (%s)", got.State, conn.StateDown, got.Diagnosis)
 	}
+}
+
+// The point of making the database optional: connect with a host, a user and a
+// password, then find out what is there.
+func TestConnectingWithoutADatabaseListsWhatIsThere(t *testing.T) {
+	t.Parallel()
+
+	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
+
+	config, err := conn.ParseURI(instance.DSN)
+	if err != nil {
+		t.Fatalf("parsing the DSN: %v", err)
+	}
+	// Exactly what someone typing into an empty form would send.
+	config.Database = ""
+
+	connection, err := conn.Open(t.Context(), postgres.New(), config)
+	if err != nil {
+		t.Fatalf("opening a connection with no database: %v", err)
+	}
+	t.Cleanup(connection.Close)
+
+	if got := connection.Check(t.Context()); got.State != conn.StateConnected {
+		t.Fatalf("State = %q, want %q (%s)", got.State, conn.StateConnected, got.Diagnosis)
+	}
+
+	databases, err := connection.Databases(t.Context())
+	if err != nil {
+		t.Fatalf("listing the databases: %v", err)
+	}
+
+	for _, want := range []string{conn.MaintenanceDatabase, testsupport.Database} {
+		if !contains(databases, want) {
+			t.Errorf("the list %v does not include %q", databases, want)
+		}
+	}
+	// Templates exist to be copied, not opened, so offering them would be
+	// offering a choice that fails.
+	for _, unwanted := range []string{"template0", "template1"} {
+		if contains(databases, unwanted) {
+			t.Errorf("the list %v includes the template %q", databases, unwanted)
+		}
+	}
+}
+
+// A URI with no database at all is the pasted form of the same thing.
+func TestAURIWithoutADatabaseConnects(t *testing.T) {
+	t.Parallel()
+
+	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
+
+	full, err := conn.ParseURI(instance.DSN)
+	if err != nil {
+		t.Fatalf("parsing the DSN: %v", err)
+	}
+
+	bare := fmt.Sprintf("postgres://%s:%s@%s:%d?sslmode=disable",
+		full.User, testsupport.Password, full.Host, full.Port)
+
+	config, err := conn.ParseURI(bare)
+	if err != nil {
+		t.Fatalf("parsing a URI without a database: %v", err)
+	}
+	if config.Database != "" {
+		t.Fatalf("Database = %q, want it empty", config.Database)
+	}
+
+	connection, err := conn.Open(t.Context(), postgres.New(), config)
+	if err != nil {
+		t.Fatalf("opening: %v", err)
+	}
+	t.Cleanup(connection.Close)
+
+	if got := connection.Check(t.Context()); got.State != conn.StateConnected {
+		t.Errorf("State = %q, want %q (%s)", got.State, conn.StateConnected, got.Diagnosis)
+	}
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, item := range haystack {
+		if item == needle {
+			return true
+		}
+	}
+
+	return false
 }

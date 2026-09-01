@@ -49,10 +49,9 @@ func ParseURI(raw string) (Config, error) {
 		return Config{}, err
 	}
 
+	// An empty path is allowed: postgres://user@host is a request to connect
+	// and look around, and the maintenance database is where that happens.
 	database := strings.TrimPrefix(parsed.Path, "/")
-	if database == "" {
-		return Config{}, fmt.Errorf("%w: no database in the path", ErrInvalidURI)
-	}
 
 	config := Config{Host: host, Port: port, Database: database}
 	readUserInfo(parsed, &config)

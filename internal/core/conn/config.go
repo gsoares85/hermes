@@ -13,6 +13,15 @@ var ErrInvalidConfig = errors.New("invalid connection")
 // DefaultPort is the port PostgreSQL listens on unless told otherwise.
 const DefaultPort = 5432
 
+// MaintenanceDatabase is what a connection opens when no database was named.
+//
+// Naming one should not be a precondition for looking: someone with a host and
+// a password wants to see what is there. libpq would default to the user's own
+// name, which is right far less often than postgres, and postgres exists on
+// essentially every server precisely so that there is somewhere to connect to
+// before you know what you are looking for.
+const MaintenanceDatabase = "postgres"
+
 // SSLMode is one of the six values libpq accepts for sslmode.
 type SSLMode string
 
@@ -39,6 +48,19 @@ type TLS struct {
 	RootCert string
 	Cert     string
 	Key      string
+}
+
+// EffectiveDatabase is the database this configuration will actually open.
+//
+// It is separate from the field so that the field can stay empty: the
+// difference between "no database was named" and "this database was named"
+// decides what a failure to find it should say.
+func (c Config) EffectiveDatabase() string {
+	if strings.TrimSpace(c.Database) == "" {
+		return MaintenanceDatabase
+	}
+
+	return c.Database
 }
 
 // Config describes how to reach a PostgreSQL server.
@@ -100,8 +122,6 @@ func (c Config) Validate() error {
 		return fmt.Errorf("%w: no host", ErrInvalidConfig)
 	case c.Port < 1 || c.Port > 65535:
 		return fmt.Errorf("%w: port %d is outside 1-65535", ErrInvalidConfig, c.Port)
-	case strings.TrimSpace(c.Database) == "":
-		return fmt.Errorf("%w: no database", ErrInvalidConfig)
 	case strings.TrimSpace(c.User) == "":
 		return fmt.Errorf("%w: no user", ErrInvalidConfig)
 	}

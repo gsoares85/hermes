@@ -175,6 +175,17 @@ func (s *ConnectionService) Close(id string) error {
 	return nil
 }
 
+// Databases lists what the open connection may reach, which is how someone who
+// connected without naming a database chooses one.
+func (s *ConnectionService) Databases(ctx context.Context, id string) ([]string, error) {
+	connection, err := s.lookup(id)
+	if err != nil {
+		return nil, err
+	}
+
+	return connection.Databases(ctx)
+}
+
 // SSLModes lists the modes the form offers, so that the list lives in one place
 // rather than being retyped in the window.
 func (s *ConnectionService) SSLModes() []string {

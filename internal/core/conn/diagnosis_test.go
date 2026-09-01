@@ -108,6 +108,28 @@ func TestAuthAndAuthorizationAreDifferentDiagnoses(t *testing.T) {
 	}
 }
 
+// Blaming a name the user never typed is how a message stops being useful.
+func TestAMissingDefaultDatabaseIsExplainedAsSuch(t *testing.T) {
+	t.Parallel()
+
+	unnamed := sample()
+	unnamed.Database = ""
+
+	got := conn.Diagnose(failure(driver.FailureMissingDatabase), unnamed)
+
+	if !strings.Contains(got.Summary, conn.MaintenanceDatabase) {
+		t.Errorf("Summary = %q, want it to name the default that is missing", got.Summary)
+	}
+	if strings.Contains(got.Summary, `""`) {
+		t.Errorf("Summary = %q, blames an empty name the user never typed", got.Summary)
+	}
+
+	named := sample()
+	if same := conn.Diagnose(failure(driver.FailureMissingDatabase), named); same.Summary == got.Summary {
+		t.Error("a named and an unnamed database produce the same message")
+	}
+}
+
 // An error the engine could not classify must still produce something usable,
 // and must not claim to know more than it does.
 func TestUnclassifiedFailureIsHonest(t *testing.T) {

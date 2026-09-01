@@ -68,6 +68,15 @@ type Pool interface {
 	// catalog queries and the client tools are allowed to assume.
 	ServerVersion(ctx context.Context) (string, error)
 
+	// Databases lists the databases this connection may open, so that someone
+	// who connected without naming one can pick from what they actually have
+	// access to rather than guess.
+	//
+	// It is on the contract rather than assembled above it because the answer
+	// comes from a system catalog, and which catalog that is belongs to the
+	// engine.
+	Databases(ctx context.Context) ([]string, error)
+
 	// Close releases every connection the pool holds. It is safe to call more
 	// than once.
 	Close()

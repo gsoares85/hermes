@@ -13,7 +13,7 @@ func (c Config) Target() driver.Target {
 	target := driver.Target{
 		Host:     c.Host,
 		Port:     c.Port,
-		Database: c.Database,
+		Database: c.EffectiveDatabase(),
 		User:     c.User,
 		Password: c.Password,
 		SSLMode:  string(c.TLS.Mode),

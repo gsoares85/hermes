@@ -151,6 +151,39 @@ func TestValidateAcceptsAUsableConfig(t *testing.T) {
 	}
 }
 
+// Naming a database must not be a precondition for connecting: someone with a
+// host and a password wants to see what is there before deciding.
+func TestADatabaseIsOptional(t *testing.T) {
+	t.Parallel()
+
+	config := conn.Config{Host: "localhost", Port: 5432, User: "hermes"}
+
+	if err := config.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want a connection without a database to be valid", err)
+	}
+	if got := config.EffectiveDatabase(); got != conn.MaintenanceDatabase {
+		t.Errorf("EffectiveDatabase() = %q, want %q", got, conn.MaintenanceDatabase)
+	}
+	if got := config.Target().Database; got != conn.MaintenanceDatabase {
+		t.Errorf("the target opens %q, want %q", got, conn.MaintenanceDatabase)
+	}
+	// The field stays empty, because the difference between "none was named"
+	// and "this one was named" changes what a failure should say.
+	if config.Database != "" {
+		t.Errorf("Database = %q, want the field left as the user left it", config.Database)
+	}
+}
+
+func TestANamedDatabaseIsUsedAsGiven(t *testing.T) {
+	t.Parallel()
+
+	config := conn.Config{Host: "localhost", Port: 5432, User: "hermes", Database: "app"}
+
+	if got := config.EffectiveDatabase(); got != "app" {
+		t.Errorf("EffectiveDatabase() = %q, want app", got)
+	}
+}
+
 func TestValidateRejectsWhatCannotConnect(t *testing.T) {
 	t.Parallel()
 
@@ -161,7 +194,6 @@ func TestValidateRejectsWhatCannotConnect(t *testing.T) {
 		"port zero":     func(c *conn.Config) { c.Port = 0 },
 		"port negative": func(c *conn.Config) { c.Port = -1 },
 		"port too high": func(c *conn.Config) { c.Port = 70000 },
-		"no database":   func(c *conn.Config) { c.Database = "" },
 		"no user":       func(c *conn.Config) { c.User = "" },
 		"unknown mode":  func(c *conn.Config) { c.TLS.Mode = "sometimes" },
 	}

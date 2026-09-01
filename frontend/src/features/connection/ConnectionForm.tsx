@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import {
   applyParsed,
   closeConnection,
+  databases as listDatabases,
   emptyForm,
   openConnection,
   parseURI,
@@ -29,6 +30,7 @@ export function ConnectionForm(): React.JSX.Element {
   const [status, setStatus] = useState<StatusView | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [available, setAvailable] = useState<string[]>([]);
 
   useEffect(() => {
     let active = true;
@@ -81,8 +83,12 @@ export function ConnectionForm(): React.JSX.Element {
   async function onOpen(): Promise<void> {
     setBusy(true);
     try {
-      setStatus(await openConnection(form));
+      const opened = await openConnection(form);
+      setStatus(opened);
       setDiagnosis(null);
+      // Asked for straight away: someone who connected without naming a
+      // database did it precisely to find out what is there.
+      setAvailable(await listDatabases(opened.id));
     } catch (err) {
       setNotice(String(err));
     } finally {
@@ -96,6 +102,7 @@ export function ConnectionForm(): React.JSX.Element {
     }
     await closeConnection(status.id);
     setStatus(null);
+    setAvailable([]);
   }
 
   return (
@@ -143,7 +150,7 @@ export function ConnectionForm(): React.JSX.Element {
           }}
         />
         <Field
-          label="Database"
+          label="Database (optional)"
           value={form.database}
           onChange={(v): void => {
             update("database", v);
@@ -206,6 +213,15 @@ export function ConnectionForm(): React.JSX.Element {
       </div>
 
       {status !== null && <StateIndicator status={status} />}
+      {available.length > 0 && (
+        <DatabaseList
+          databases={available}
+          selected={form.database}
+          onSelect={(name): void => {
+            update("database", name);
+          }}
+        />
+      )}
       {diagnosis !== null && <DiagnosisPanel diagnosis={diagnosis} />}
     </section>
   );
@@ -228,6 +244,40 @@ function Field(props: {
         }}
       />
     </label>
+  );
+}
+
+/**
+ * What this connection can reach.
+ *
+ * Shown after connecting rather than before, because it is the server that
+ * knows: the list is what this role may actually open, not every name that
+ * exists.
+ */
+function DatabaseList(props: {
+  databases: string[];
+  selected: string;
+  onSelect: (name: string) => void;
+}): React.JSX.Element {
+  return (
+    <div className="connection__databases">
+      <p>Databases you can open</p>
+      <ul>
+        {props.databases.map((name): React.JSX.Element => (
+          <li key={name}>
+            <button
+              type="button"
+              className={name === props.selected ? "is-selected" : ""}
+              onClick={(): void => {
+                props.onSelect(name);
+              }}
+            >
+              {name}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

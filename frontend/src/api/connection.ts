@@ -17,6 +17,8 @@ export type { ConnectionForm, ConnectionView, DiagnosisView, StatusView };
 export const emptyForm: ConnectionForm = {
   name: "",
   host: "localhost",
+  // Left empty on purpose: connecting without naming a database opens the
+  // maintenance database, and the list of what is there comes back.
   port: 5432,
   database: "",
   user: "",
@@ -57,6 +59,17 @@ export async function connectionStatus(id: string): Promise<StatusView> {
 /** Releases a connection. */
 export async function closeConnection(id: string): Promise<void> {
   await ConnectionService.Close(id);
+}
+
+/**
+ * The databases this connection may open.
+ *
+ * It is how someone who connected without naming one chooses: the server
+ * answers with what this role may actually reach, so the list is not a set of
+ * names most of which would be refused.
+ */
+export async function databases(id: string): Promise<string[]> {
+  return (await ConnectionService.Databases(id)) ?? [];
 }
 
 /**

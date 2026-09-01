@@ -125,3 +125,37 @@ func (p *connPool) ServerVersion(ctx context.Context) (string, error) {
 func (p *connPool) Close() {
 	p.pool.Close()
 }
+
+// listDatabases asks the catalog which databases this role may open.
+//
+// datallowconn excludes the ones the server itself refuses; datistemplate drops
+// template0 and template1, which are there to be copied rather than opened; and
+// has_database_privilege is what makes the answer specific to who is asking
+// instead of a list of names most of which would be refused.
+const listDatabases = `SELECT datname FROM pg_database
+	WHERE datallowconn AND NOT datistemplate
+	  AND has_database_privilege(current_user, datname, 'CONNECT')
+	ORDER BY datname`
+
+func (p *connPool) Databases(ctx context.Context) ([]string, error) {
+	rows, err := p.pool.Query(ctx, listDatabases)
+	if err != nil {
+		return nil, classify(fmt.Errorf("listing the databases: %w", err))
+	}
+	defer rows.Close()
+
+	var databases []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("reading a database name: %w", err)
+		}
+		databases = append(databases, name)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, classify(fmt.Errorf("listing the databases: %w", err))
+	}
+
+	return databases, nil
+}

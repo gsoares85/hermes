@@ -32,6 +32,14 @@ export function Close(id: string): $CancellablePromise<void> {
 }
 
 /**
+ * Databases lists what the open connection may reach, which is how someone who
+ * connected without naming a database chooses one.
+ */
+export function Databases(id: string): $CancellablePromise<string[] | null> {
+    return $Call.ByID(1404509674, id);
+}
+
+/**
  * Open connects and keeps the connection, returning the identifier the window
  * uses to refer to it.
  */

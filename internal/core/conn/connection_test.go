@@ -42,6 +42,17 @@ func (s *stubPool) Session(context.Context) (driver.Session, error) {
 
 func (s *stubPool) ServerVersion(context.Context) (string, error) { return "16.2", nil }
 
+func (s *stubPool) Databases(context.Context) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.pingErr != nil {
+		return nil, s.pingErr
+	}
+
+	return []string{"hermes", "postgres"}, nil
+}
+
 func (s *stubPool) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

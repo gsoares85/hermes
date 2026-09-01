@@ -186,3 +186,17 @@ body {
 .connection__state--down .connection__dot {
   background: #e03131;
 }
+
+.connection__databases ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+}
+
+.connection__databases button.is-selected {
+  border-color: var(--text);
+  font-weight: 600;
+}

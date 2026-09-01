@@ -29,7 +29,14 @@ func (s stubPool) Session(context.Context) (driver.Session, error) {
 	return nil, errors.New("not part of this test")
 }
 func (s stubPool) ServerVersion(context.Context) (string, error) { return "16.2", nil }
-func (s stubPool) Close()                                        {}
+func (s stubPool) Databases(context.Context) ([]string, error) {
+	if s.pingErr != nil {
+		return nil, s.pingErr
+	}
+
+	return []string{"app", "hermes", "postgres"}, nil
+}
+func (s stubPool) Close() {}
 
 type stubOpener struct {
 	pingErr error

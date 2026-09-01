@@ -105,6 +105,28 @@ func TestParseURIKeepsSessionParameters(t *testing.T) {
 	}
 }
 
+// A URI with no database is a request to connect and look around, which is the
+// whole point of being able to connect without naming one.
+func TestParseURIAcceptsAURIWithoutADatabase(t *testing.T) {
+	t.Parallel()
+
+	for _, uri := range []string{"postgres://hermes@localhost", "postgres://hermes@localhost/"} {
+		got, err := conn.ParseURI(uri)
+		if err != nil {
+			t.Fatalf("ParseURI(%q) returned error: %v", uri, err)
+		}
+		if got.Database != "" {
+			t.Errorf("Database = %q, want it left empty", got.Database)
+		}
+		if err := got.Validate(); err != nil {
+			t.Errorf("ParseURI(%q) produced a config that does not validate: %v", uri, err)
+		}
+		if got.EffectiveDatabase() != conn.MaintenanceDatabase {
+			t.Errorf("EffectiveDatabase() = %q, want %q", got.EffectiveDatabase(), conn.MaintenanceDatabase)
+		}
+	}
+}
+
 func TestParseURIRejectsWhatItCannotUse(t *testing.T) {
 	t.Parallel()
 
@@ -114,8 +136,6 @@ func TestParseURIRejectsWhatItCannotUse(t *testing.T) {
 		"no scheme":         "hermes@localhost/app",
 		"wrong scheme":      "mysql://hermes@localhost/app",
 		"http scheme":       "http://localhost/app",
-		"no database":       "postgres://hermes@localhost",
-		"empty database":    "postgres://hermes@localhost/",
 		"unknown sslmode":   "postgres://hermes@localhost/app?sslmode=sometimes",
 		"port not numeric":  "postgres://hermes@localhost:pgport/app",
 		"port out of range": "postgres://hermes@localhost:70000/app",

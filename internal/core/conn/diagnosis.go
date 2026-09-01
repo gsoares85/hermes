@@ -2,6 +2,7 @@ package conn
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/gsoares85/hermes/internal/driver"
 )
@@ -117,6 +118,17 @@ func explain(class driver.FailureClass, c Config) Diagnosis {
 		}
 
 	case driver.FailureMissingDatabase:
+		// Blaming a name the user never typed is how a message stops being
+		// useful. When no database was named, what is missing is the default.
+		if strings.TrimSpace(c.Database) == "" {
+			return Diagnosis{
+				Summary: fmt.Sprintf("No database was given, and %s has no %q database to connect to instead.",
+					address, MaintenanceDatabase),
+				Cause:    "Connecting without naming a database opens the maintenance database, which almost every server has. This one does not, or this role may not connect to it.",
+				NextStep: "Name a database you can connect to in the form.",
+			}
+		}
+
 		return Diagnosis{
 			Summary:  fmt.Sprintf("The database %q does not exist on %s.", c.Database, address),
 			Cause:    "The server accepted the credentials and then found no database by that name. Database names are case-sensitive when they were created quoted.",
