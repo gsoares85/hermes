@@ -17,6 +17,17 @@ on:
         description: Tag to publish
         required: true
         type: string
+  # Run by hand against a tag that already exists. Two uses: finishing a release
+  # whose publish failed after the tag was pushed, and exercising this workflow
+  # on demand — nothing in the pull request pipeline runs it, so a change to the
+  # build, the checksums or the artifact actions is otherwise only tested by the
+  # next real release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to publish, in the form vX.Y.Z
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -149,6 +160,16 @@ jobs:
             v[0-9]*.[0-9]*.[0-9]*) ;;
             *) echo "refusing to publish $TAG: expected the form vX.Y.Z" && exit 1 ;;
           esac
+          # A published release is never rewritten, so an existing one ends the
+          # job here instead of failing it. That is what makes a dispatch run
+          # usable as a check: everything above — building on three platforms,
+          # verifying the injected version and commit, uploading, downloading
+          # and checksumming — has already run by this point.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG is already published; nothing was rewritten." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           major="${TAG#v}"
           major="${major%%.*}"
           draft=""
