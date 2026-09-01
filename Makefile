@@ -5,6 +5,13 @@ GO ?= go
 GOLANGCI_LINT ?= golangci-lint
 COVERAGE_PROFILE ?= coverage.out
 COVERAGE_MINIMUM ?= 85
+
+# Left out of the coverage count, not out of testing. The pgx adapter is behind
+# the thin interfaces of internal/driver and is exercised by the integration
+# suite, which `make cover` does not run: counting its statements while ignoring
+# its coverage would drag the number down for code that is in fact tested.
+# Every run prints what was ignored, and ignoring everything is refused.
+COVERAGE_IGNORE ?= github.com/gsoares85/hermes/internal/driver/postgres
 INTEGRATION_TAGS ?= integration
 GOVULNCHECK_VERSION ?= v1.7.0
 
@@ -46,7 +53,7 @@ test-integration: ## Run the integration tests (requires Docker)
 .PHONY: cover
 cover: ## Run the unit tests and enforce the coverage floor
 	$(GO) test $(RACE) -coverprofile=$(COVERAGE_PROFILE) -coverpkg=./internal/... ./internal/...
-	$(GO) run ./scripts/checkcoverage -profile=$(COVERAGE_PROFILE) -min=$(COVERAGE_MINIMUM)
+	$(GO) run ./scripts/checkcoverage -profile=$(COVERAGE_PROFILE) -min=$(COVERAGE_MINIMUM) -ignore=$(COVERAGE_IGNORE)
 
 .PHONY: cover-html
 cover-html: cover ## Open the coverage report

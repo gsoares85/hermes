@@ -148,8 +148,15 @@ jobs:
 
       # Below the floor the build fails, and a profile that measured nothing
       # fails too, so the gate can never pass vacuously.
+      # internal/driver/postgres is left out of the count, not out of testing:
+      # the pgx adapter sits behind the thin interfaces of internal/driver and
+      # is exercised by the integration job, which this one does not run.
+      # Counting its statements while ignoring its coverage would drag the
+      # number down for code that is in fact tested. The run prints what it
+      # ignored, and a profile with everything ignored is refused.
       - name: Enforce the coverage floor
-        run: go run ./scripts/checkcoverage -profile=coverage.out -min=85
+        run: |
+          go run ./scripts/checkcoverage -profile=coverage.out -min=85             -ignore=github.com/gsoares85/hermes/internal/driver/postgres
 
       # A gate nobody has seen fail is a gate nobody knows works. This feeds it
       # a profile that is deliberately below the floor and fails the job if the

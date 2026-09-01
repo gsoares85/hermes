@@ -163,6 +163,102 @@ func TestParseRejectsNegativeCounts(t *testing.T) {
 	}
 }
 
+// Some packages are exercised only by the integration suite, which the gate
+// does not run: their statements would count while their coverage would not,
+// dragging the number down for code that is in fact tested. Ignoring them is
+// how that is stated out loud instead of absorbed into a falling metric.
+func TestParseIgnoresThePackagesItIsTold(t *testing.T) {
+	t.Parallel()
+
+	profile := header +
+		"github.com/x/y/internal/core/a.go:1.1,3.2 10 1\n" +
+		"github.com/x/y/internal/driver/postgres/pool.go:1.1,3.2 40 0\n" +
+		"github.com/x/y/internal/driver/postgres/session.go:1.1,3.2 50 0\n"
+
+	got, err := coverage.Parse(strings.NewReader(profile), "github.com/x/y/internal/driver/postgres")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if got.Total != 10 {
+		t.Errorf("Total = %d, want 10: the ignored packages must not count", got.Total)
+	}
+	if got.Covered != 10 {
+		t.Errorf("Covered = %d, want 10", got.Covered)
+	}
+	if got.Ignored != 90 {
+		t.Errorf("Ignored = %d, want 90: what was skipped has to be reportable", got.Ignored)
+	}
+	if got.Percent() != 100 {
+		t.Errorf("Percent() = %v, want 100", got.Percent())
+	}
+}
+
+// The ignored count has the same duplication to deal with as the counted one:
+// with -coverpkg every test binary reports the same block, so adding them up
+// line by line reports several times what the package actually holds.
+func TestParseCountsAnIgnoredBlockOnce(t *testing.T) {
+	t.Parallel()
+
+	profile := header +
+		"github.com/x/y/internal/core/a.go:1.1,3.2 10 1\n" +
+		"github.com/x/y/internal/driver/postgres/pool.go:1.1,3.2 40 0\n" +
+		"github.com/x/y/internal/driver/postgres/pool.go:1.1,3.2 40 1\n" +
+		"github.com/x/y/internal/driver/postgres/pool.go:1.1,3.2 40 0\n"
+
+	got, err := coverage.Parse(strings.NewReader(profile), "github.com/x/y/internal/driver/postgres")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if got.Ignored != 40 {
+		t.Errorf("Ignored = %d, want 40: the same block reported three times is one block", got.Ignored)
+	}
+}
+
+func TestParseWithoutIgnoresIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	profile := header + "pkg/a.go:1.1,3.2 4 1\n" + "pkg/b.go:1.1,3.2 6 0\n"
+
+	got, err := coverage.Parse(strings.NewReader(profile))
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if got.Total != 10 || got.Covered != 4 || got.Ignored != 0 {
+		t.Errorf("Summary = %+v, want Total 10, Covered 4, Ignored 0", got)
+	}
+}
+
+// The escape hatch must not become a way to switch the gate off. A profile
+// whose every statement was ignored has measured nothing, which is the same
+// vacuous pass an empty profile would be.
+func TestParseRefusesToIgnoreEverything(t *testing.T) {
+	t.Parallel()
+
+	profile := header + "github.com/x/y/internal/driver/postgres/pool.go:1.1,3.2 40 1\n"
+
+	if _, err := coverage.Parse(strings.NewReader(profile), "github.com/x/y/internal/driver"); !errors.Is(err, coverage.ErrNoStatements) {
+		t.Errorf("Parse ignoring every package error = %v, want ErrNoStatements", err)
+	}
+}
+
+// A prefix matches at a package boundary, not any path that happens to start
+// with the same letters.
+func TestParseIgnoreMatchesOnThePackagePath(t *testing.T) {
+	t.Parallel()
+
+	profile := header +
+		"github.com/x/y/internal/driver/postgres/pool.go:1.1,3.2 10 0\n" +
+		"github.com/x/y/internal/drivers/other.go:1.1,3.2 10 1\n"
+
+	got, err := coverage.Parse(strings.NewReader(profile), "github.com/x/y/internal/driver")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if got.Total != 10 {
+		t.Errorf("Total = %d, want 10: internal/drivers is a different package", got.Total)
+	}
+}
+
 func TestCheckAppliesTheFloor(t *testing.T) {
 	t.Parallel()
 

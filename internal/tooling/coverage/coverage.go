@@ -26,6 +26,11 @@ var (
 type Summary struct {
 	Total   int
 	Covered int
+
+	// Ignored counts the statements skipped by an ignore prefix. It is
+	// reported rather than discarded so that every run says how much of the
+	// codebase the number does not speak for.
+	Ignored int
 }
 
 // Percent is the share of covered statements, from 0 to 100.
@@ -45,9 +50,22 @@ type block struct {
 }
 
 // Parse reads a profile in the format written by `go test -coverprofile`.
-func Parse(r io.Reader) (Summary, error) {
+//
+// Blocks in a package matching one of the ignore prefixes are left out of the
+// count entirely. That exists for packages the unit run cannot exercise — an
+// engine adapter behind a thin interface, covered by the integration suite the
+// gate does not run — whose statements would otherwise count while their
+// coverage would not, dragging the number down for code that is in fact tested.
+//
+// It is not a way to switch the gate off: ignoring every statement leaves
+// nothing measured, which is refused exactly like an empty profile.
+func Parse(r io.Reader, ignore ...string) (Summary, error) {
 	statements := make(map[block]int)
 	covered := make(map[block]bool)
+	// Keyed by block for the same reason the counted ones are: with -coverpkg
+	// every test binary reports the same block, and adding them up line by
+	// line would report several times what the package actually holds.
+	ignored := make(map[block]int)
 
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
@@ -61,6 +79,11 @@ func Parse(r io.Reader) (Summary, error) {
 			return Summary{}, err
 		}
 
+		if isIgnored(key.name, ignore) {
+			ignored[key] = count
+			continue
+		}
+
 		statements[key] = count
 		if hits > 0 {
 			covered[key] = true
@@ -71,6 +94,9 @@ func Parse(r io.Reader) (Summary, error) {
 	}
 
 	summary := Summary{}
+	for _, count := range ignored {
+		summary.Ignored += count
+	}
 	for key, count := range statements {
 		summary.Total += count
 		if covered[key] {
@@ -83,6 +109,23 @@ func Parse(r io.Reader) (Summary, error) {
 	}
 
 	return summary, nil
+}
+
+// isIgnored reports whether a block belongs to an ignored package. The match is
+// on a path boundary, so ignoring internal/driver does not also silence
+// internal/drivers.
+func isIgnored(name string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if prefix == "" {
+			continue
+		}
+		trimmed := strings.TrimSuffix(prefix, "/")
+		if name == trimmed || strings.HasPrefix(name, trimmed+"/") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // parseLine reads one entry: "path/file.go:1.2,3.4 5 6".
