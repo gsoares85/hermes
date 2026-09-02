@@ -46,16 +46,30 @@ type runner interface {
 // runner picks between the two, once, so that no method below repeats the
 // branch — and so that forgetting it cannot send a statement outside the
 // transaction the caller opened.
+//
+// It returns nil for a closed session. The explicit check is what makes that
+// possible: a nil *pgxpool.Conn returned as a runner would be a non-nil
+// interface holding a nil pointer, which compares unequal to nil and panics on
+// the first call instead of failing.
 func (s *session) runner() runner {
 	if s.tx != nil {
 		return s.tx
+	}
+
+	if s.conn == nil {
+		return nil
 	}
 
 	return s.conn
 }
 
 func (s *session) Exec(ctx context.Context, sql string, args ...any) error {
-	if _, err := s.runner().Exec(ctx, sql, args...); err != nil {
+	run := s.runner()
+	if run == nil {
+		return driver.ErrSessionClosed
+	}
+
+	if _, err := run.Exec(ctx, sql, args...); err != nil {
 		return fmt.Errorf("running the statement: %w", err)
 	}
 
@@ -63,12 +77,28 @@ func (s *session) Exec(ctx context.Context, sql string, args ...any) error {
 }
 
 func (s *session) QueryRow(ctx context.Context, sql string, args ...any) driver.Row {
-	return s.runner().QueryRow(ctx, sql, args...)
+	run := s.runner()
+	if run == nil {
+		return failedRow{err: driver.ErrSessionClosed}
+	}
+
+	return run.QueryRow(ctx, sql, args...)
 }
+
+// failedRow carries a failure that was found before the query was sent.
+// QueryRow has no error to return — the contract says the error surfaces from
+// Scan — so this is the shape such a failure has to travel in.
+type failedRow struct{ err error }
+
+func (r failedRow) Scan(...any) error { return r.err }
 
 func (s *session) Begin(ctx context.Context) error {
 	if s.tx != nil {
 		return driver.ErrTransactionActive
+	}
+
+	if s.conn == nil {
+		return driver.ErrSessionClosed
 	}
 
 	tx, err := s.conn.Begin(ctx)

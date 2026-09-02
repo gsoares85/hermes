@@ -21,6 +21,12 @@ import (
 var (
 	ErrNoTransaction     = errors.New("no transaction is open on this session")
 	ErrTransactionActive = errors.New("a transaction is already open on this session")
+
+	// ErrSessionClosed is what a session answers once it has been closed. A
+	// tab that kept a session past its close is a bug above this layer, and
+	// the layer above has to be told which bug it is — not handed a panic, and
+	// not left to guess from a driver message.
+	ErrSessionClosed = errors.New("the session is closed")
 )
 
 // Target is everything the engine needs to reach a server, and nothing else.

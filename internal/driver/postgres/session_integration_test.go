@@ -263,3 +263,40 @@ func TestSessionsWorkOnEverySupportedVersion(t *testing.T) {
 		})
 	}
 }
+
+// The same guard against a real closed session rather than a hand-built one:
+// this is the path where the connection was genuinely acquired and released, so
+// it proves the field the guard reads is the field Close actually clears.
+func TestAClosedSessionRefusesWorkOnARealServer(t *testing.T) {
+	t.Parallel()
+
+	pool := openPool(t, testsupport.SupportedVersions[0])
+
+	session, err := pool.Session(t.Context())
+	if err != nil {
+		t.Fatalf("checking out a session: %v", err)
+	}
+	session.Close()
+
+	if err := session.Exec(t.Context(), "SELECT 1"); !errors.Is(err, driver.ErrSessionClosed) {
+		t.Errorf("Exec on a closed session = %v, want ErrSessionClosed", err)
+	}
+
+	var value int
+	if err := session.QueryRow(t.Context(), "SELECT 1").Scan(&value); !errors.Is(err, driver.ErrSessionClosed) {
+		t.Errorf("Scan after QueryRow on a closed session = %v, want ErrSessionClosed", err)
+	}
+
+	if err := session.Begin(t.Context()); !errors.Is(err, driver.ErrSessionClosed) {
+		t.Errorf("Begin on a closed session = %v, want ErrSessionClosed", err)
+	}
+
+	// Unchanged: with no transaction open, these already answered for
+	// themselves and the guard must not have taken that over.
+	if err := session.Commit(t.Context()); !errors.Is(err, driver.ErrNoTransaction) {
+		t.Errorf("Commit on a closed session = %v, want ErrNoTransaction", err)
+	}
+	if session.InTransaction() {
+		t.Error("a closed session reports an open transaction")
+	}
+}
