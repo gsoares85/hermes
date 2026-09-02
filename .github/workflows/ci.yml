@@ -23,11 +23,19 @@ env:
   GOLANGCI_LINT_VERSION: v2.13.2
   GOVULNCHECK_VERSION: v1.7.0
 
+# Every job carries a timeout. Without one GitHub applies its own default of six
+# hours, which is not a limit so much as the absence of one: a step that stalls
+# rather than fails — an apt mirror that stops answering mid-install is the one
+# seen here — holds a runner for the rest of the working day and reports nothing
+# while it does. The numbers below are several times the observed duration of
+# each job, so they are reached by a hang and not by a slow morning.
+
 jobs:
   commits:
     name: Commit authorship
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -59,6 +67,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -103,6 +112,7 @@ jobs:
   security:
     name: Dependency vulnerabilities
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -134,6 +144,7 @@ jobs:
   test:
     name: Unit tests and coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -187,6 +198,7 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -224,6 +236,10 @@ jobs:
   integration:
     name: Integration tests
     runs-on: ubuntu-latest
+    # Above the 20m the test run gives itself, on purpose: when the suite is
+    # what hangs, go test hitting its own deadline first prints the stack of
+    # every goroutine, and the job being killed instead prints nothing.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
