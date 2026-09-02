@@ -162,7 +162,11 @@ body {
 
 .connection__diagnosis pre {
   white-space: pre-wrap;
-  word-break: break-word;
+  /* The detail is a driver message, which carries unbroken runs a panel this
+     narrow cannot fit: a DSN, a certificate path, a host name. Breaking
+     anywhere is what keeps one of those from widening the panel instead of
+     wrapping inside it. */
+  overflow-wrap: anywhere;
   font-size: 0.85em;
 }
 
