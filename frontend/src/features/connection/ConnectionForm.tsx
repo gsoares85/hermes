@@ -88,12 +88,14 @@ export function ConnectionForm(): React.JSX.Element {
       const opened = await openConnection(form);
       setStatus(opened);
       setDiagnosis(null);
+      // The connection is open and the password has been used. Keeping it in
+      // the state of a page that is redrawn and inspected buys nothing, and
+      // clearing it here rather than after the listing below means a failure
+      // to list does not leave the secret behind on an open connection.
+      update("password", "");
       // Asked for straight away: someone who connected without naming a
       // database did it precisely to find out what is there.
       setAvailable(await listDatabases(opened.id));
-      // The connection is open and the password has been used. Keeping it in
-      // the state of a page that is redrawn and inspected buys nothing.
-      update("password", "");
     } catch (err) {
       setNotice(String(err));
     } finally {
