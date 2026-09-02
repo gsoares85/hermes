@@ -34,6 +34,19 @@ var projectRules = []deps.Rule{
 		},
 	},
 	{
+		// The core talks to the engine contract in internal/driver and never
+		// to an implementation of it. That is the whole point of the seam: a
+		// single import of internal/driver/postgres from the core would put
+		// pgx one hop away from the domain and make it untestable without
+		// Docker. The contract itself is allowed, which is why this forbids
+		// the subpackages and not the package.
+		Reason:   "the core layer must talk to the engine contract, never to an implementation",
+		Packages: module + "/internal/core",
+		Forbidden: []string{
+			module + "/internal/driver/",
+		},
+	},
+	{
 		Reason:   "the core layer must not depend on development tooling",
 		Packages: module + "/internal/core",
 		Forbidden: []string{
@@ -47,6 +60,16 @@ var projectRules = []deps.Rule{
 		Forbidden: []string{
 			"github.com/jackc/pgx",
 			"database/sql",
+		},
+	},
+	{
+		// The same rule the core has. The UI is handed an engine by the
+		// command that wires the application together; reaching for one
+		// itself would make the boundary a suggestion.
+		Reason:   "the UI layer must talk to the engine contract, never to an implementation",
+		Packages: module + "/internal/ui",
+		Forbidden: []string{
+			module + "/internal/driver/",
 		},
 	},
 }

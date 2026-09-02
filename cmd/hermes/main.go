@@ -9,10 +9,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/gsoares85/hermes/frontend"
+	"github.com/gsoares85/hermes/internal/driver/postgres"
 	"github.com/gsoares85/hermes/internal/ui"
 	"github.com/gsoares85/hermes/internal/version"
 )
@@ -35,8 +37,17 @@ func run() error {
 	app := application.New(application.Options{
 		Name:        "Hermes",
 		Description: "A native, open source database manager for PostgreSQL",
+		// Pinned rather than left to the framework default. At debug level
+		// Wails logs the arguments of every bound call, and the arguments of
+		// a connection call are a form with a password in it. The level a
+		// secret depends on is a level this application chooses.
+		LogLevel: slog.LevelInfo,
 		Services: []application.Service{
 			application.NewService(ui.NewAppInfoService()),
+			// The engine implementation is chosen here and nowhere else: the
+			// UI and the core both program against the contract, and this is
+			// the outermost place that can name a driver.
+			application.NewService(ui.NewConnectionService(postgres.New())),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(frontend.Dist()),

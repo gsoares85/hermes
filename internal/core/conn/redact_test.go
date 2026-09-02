@@ -30,6 +30,13 @@ func TestRedactHidesThePasswordOfAURL(t *testing.T) {
 			"postgres://hermes@localhost:5432/hermes?password=s3cr3t&sslmode=disable",
 			"postgres://hermes@localhost:5432/hermes?password=xxxxx&sslmode=disable",
 		},
+		// The passphrase of the client private key is a secret of the same
+		// order as the password, and a URI is a place it can arrive in.
+		{
+			"sslpassword in the query",
+			"postgres://hermes@localhost:5432/hermes?sslmode=verify-full&sslpassword=s3cr3t",
+			"postgres://hermes@localhost:5432/hermes?sslmode=verify-full&sslpassword=xxxxx",
+		},
 	}
 
 	for _, tc := range cases {
@@ -98,6 +105,75 @@ func TestRedactHidesThePasswordOfAKeywordString(t *testing.T) {
 	}
 }
 
+// A driver error embeds the connection string it was given, so the text that
+// reaches a log is a sentence with a DSN inside it, not a bare DSN.
+func TestRedactHidesAPasswordInsideAMessage(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct{ message, survives string }{
+		"driver prefix":   {"auth: failed to connect: postgres://hermes:s3cr3t@db.example.com:5432/hermes", "db.example.com"},
+		"trailing text":   {"connecting to postgres://hermes:s3cr3t@localhost/app failed after 3 tries", "failed after 3 tries"},
+		"postgresql form": {"error: postgresql://hermes:s3cr3t@localhost/app is unreachable", "is unreachable"},
+		"keyword form":    {"error: could not connect using host=localhost password=s3cr3t dbname=app", "dbname=app"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := conn.Redact(tc.message)
+			if strings.Contains(got, "s3cr3t") {
+				t.Errorf("Redact(%q) = %q, the secret survived", tc.message, got)
+			}
+			// Redaction must remove the secret and nothing else: an error
+			// stripped of the context that makes it findable is no better
+			// than one that leaks.
+			if !strings.Contains(got, tc.survives) {
+				t.Errorf("Redact(%q) = %q, want it to keep %q", tc.message, got, tc.survives)
+			}
+		})
+	}
+}
+
+// The three shapes that got through, each measured before being fixed.
+func TestRedactKeepsTheMessageAroundTheSecret(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct{ message, survives string }{
+		// url.Parse used to swallow the rest of the sentence into the path and
+		// hand it back percent-encoded.
+		"message beginning with a URI": {
+			"postgres://hermes:s3cr3t@localhost/app failed after 3 tries",
+			"failed after 3 tries",
+		},
+		// The bare alternative used to eat up to the next space, taking the
+		// most useful part of the message with it.
+		"parameter after the password": {
+			"error: postgres://localhost/app?password=s3cr3t&sslmode=require now",
+			"sslmode=require",
+		},
+		// The shape the frontend boundary produces.
+		"json object": {
+			`binding call args {"host":"localhost","password":"s3cr3t"}`,
+			`"host":"localhost"`,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := conn.Redact(tc.message)
+			if strings.Contains(got, "s3cr3t") {
+				t.Errorf("Redact(%q) = %q, the secret survived", tc.message, got)
+			}
+			if !strings.Contains(got, tc.survives) {
+				t.Errorf("Redact(%q) = %q, want it to keep %q", tc.message, got, tc.survives)
+			}
+		})
+	}
+}
+
 // Redaction must never be the reason a connection string stops being readable:
 // everything that is not the secret has to survive it.
 func TestRedactKeepsEverythingElse(t *testing.T) {
@@ -125,6 +201,8 @@ func TestRedactLeavesNoSecretBehind(t *testing.T) {
 	for _, dsn := range []string{
 		"postgres://hermes:" + secret + "@localhost:5432/hermes",
 		"postgres://hermes@localhost/hermes?password=" + secret,
+		"postgres://hermes@localhost/hermes?sslpassword=" + secret,
+		"postgres://hermes:pw@localhost/hermes?sslpassword=" + secret,
 		"host=localhost password=" + secret + " dbname=hermes",
 		"password='" + secret + "'",
 		// The tail after an escaped quote is part of the secret, and a

@@ -19,6 +19,6 @@ func main() {
 	}
 
 	fmt.Fprintln(os.Stderr, "usage: hermes-cli run <profile.toml>")
-	fmt.Fprintln(os.Stderr, "profile execution arrives with TASK-0013")
+	fmt.Fprintln(os.Stderr, "running profiles headlessly is not implemented yet")
 	os.Exit(2)
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { fetchAppInfo, unknownAppInfo, type AppInfo } from "./api/appInfo";
+import { ConnectionForm } from "./features/connection/ConnectionForm";
 
 export function App(): React.JSX.Element {
   const [info, setInfo] = useState<AppInfo>(unknownAppInfo);
@@ -32,9 +33,7 @@ export function App(): React.JSX.Element {
       </header>
 
       <main className="app__main">
-        <p>
-          The shell is up. Connections, object tree and SQL editor arrive in the tasks that follow.
-        </p>
+        <ConnectionForm />
       </main>
 
       <footer className="app__status" title={`${info.commit} · ${info.date}`}>

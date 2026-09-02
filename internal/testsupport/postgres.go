@@ -82,6 +82,20 @@ func StartPostgres(t *testing.T, version string) *Instance {
 	return &Instance{Version: version, DSN: dsn, container: container}
 }
 
+// Stop halts the server without removing the container, which is how a test
+// makes a connection drop for a reason a client cannot tell from a real outage.
+func (i *Instance) Stop(t *testing.T) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(t.Context(), execTimeout)
+	defer cancel()
+
+	timeout := 10 * time.Second
+	if err := i.container.Stop(ctx, &timeout); err != nil {
+		t.Fatalf("stopping PostgreSQL %s: %v", i.Version, err)
+	}
+}
+
 // Exec runs psql inside the container and returns its combined output. It keeps
 // the harness free of a SQL driver: the connection layer arrives in TASK-0002,
 // and until then the container itself is the client.

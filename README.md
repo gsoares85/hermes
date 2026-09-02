@@ -19,9 +19,10 @@ The bet is focus: do for **one** engine what the competition tries to do for twe
 
 ## Project status
 
-**Pre-alpha — under active development, no usable release yet.** This README grows with every
-feature shipped: anything documented below with an example works. Anything in the *Roadmap*
-section does not.
+**Pre-alpha — under active development.** You can connect to a server and see the databases you
+have access to; there is no object tree, no SQL editor and no backup yet. This README grows with
+every feature shipped: anything documented below with an example works. Anything in the
+*Roadmap* section does not.
 
 ## Principles
 
@@ -97,8 +98,84 @@ make package # package for the current platform
 
 ## Features
 
-No feature has shipped yet. This section is filled in as each one lands, always with a real
-usage example.
+### Connecting
+
+Open Hermes and fill in the connection form: host, port, user, password. **The database name is
+optional.** Leave it empty and Hermes connects to the server's maintenance database, then shows
+you every database that user is actually allowed to open — so you can look before you know what
+you are looking for.
+
+```
+Host       db.example.com
+Port       5432
+Database   (leave empty to see what is there)
+User       reporting
+Password   ••••••••
+SSL mode   require
+```
+
+Press **Test connection** to check the settings without keeping anything open, or **Connect** to
+open the connection. Once connected, the databases you can reach appear as a list; picking one
+fills the database field.
+
+Already have a connection string? Paste it and press **Fill the form**:
+
+```
+postgres://reporting@db.example.com:5432/analytics?sslmode=verify-full&sslrootcert=/etc/ssl/ca.pem
+```
+
+Every part is read into the form — host, port, database, user, SSL mode and certificate paths.
+The password is deliberately **not** copied out of the URI, even when it carries one: Hermes
+tells you a password was present and asks you to type it, rather than keeping the secret in the
+window. A URI with no database at all works too:
+
+```
+postgres://reporting@db.example.com:5432
+```
+
+### Failures that tell you what to do
+
+When a connection fails, Hermes does not show you the driver's message. It shows what happened,
+why it probably happened, and what to do next:
+
+```
+The server has no rule allowing "reporting" to connect from this address.
+
+pg_hba.conf decides who may connect from where, and it is consulted before the password is.
+No rule matched this user, this database and this client address.
+
+Add a pg_hba.conf line covering "reporting" from this address and reload the server.
+This is a change on the server, not in these settings.
+```
+
+A wrong password, a missing `pg_hba` rule, a name that does not resolve, a closed port, a
+firewall swallowing packets, a database that does not exist, a rejected certificate and a
+dropped connection each get their own explanation, because each is fixed somewhere different.
+The driver's original message is still there, one click away, for when you need it.
+
+### TLS
+
+All six libpq `sslmode` values work — `disable`, `allow`, `prefer`, `require`, `verify-ca` and
+`verify-full` — along with client certificates:
+
+```
+postgres://reporting@db.example.com/analytics?sslmode=verify-full&sslrootcert=/etc/ssl/ca.pem&sslcert=/etc/ssl/client.pem&sslkey=/etc/ssl/client.key
+```
+
+`verify-ca` checks that the server's certificate was signed by the authority you supplied;
+`verify-full` also checks that the host you typed matches the certificate. Hermes never quietly
+falls back to a weaker mode than the one you asked for.
+
+### Session parameters
+
+Anything in a pasted URI that PostgreSQL understands as a session setting is carried through:
+
+```
+postgres://reporting@db.example.com/analytics?application_name=hermes&search_path=reporting,public
+```
+
+Connection settings such as `connect_timeout` or `require_auth` are carried too, and kept apart
+from session settings — sending one as the other would quietly drop it.
 
 ## Roadmap
 
