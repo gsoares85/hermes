@@ -23,6 +23,13 @@ const (
 	sqlStateInvalidPassword      = "28P01"
 	sqlStateInvalidAuthorization = "28000"
 	sqlStateInvalidCatalog       = "3D000"
+
+	// A server on its way down says so before it closes the socket. Both
+	// codes mean the connection that existed is gone: 57P01 is a shutdown or
+	// an administrator terminating the backend, 57P02 is another backend
+	// crashing and taking the cluster down with it.
+	sqlStateAdminShutdown = "57P01"
+	sqlStateCrashShutdown = "57P02"
 )
 
 // classify sorts a driver error into one of the classes the layer above knows
@@ -50,6 +57,14 @@ func classify(err error) *driver.Failure {
 // the two are fixed in different places by different people, so the message is
 // consulted for that one code. It is the only place message text is read, and
 // only to split a code that is genuinely ambiguous.
+//
+// A dropped connection has to be recognised here as well as in the transport,
+// and which of the two sees it is a race. A server being stopped sends a FATAL
+// before closing the socket: read the message first and this is a SQLSTATE,
+// miss it and the same event arrives below as an EOF. classify answers a server
+// that spoke without consulting the transport at all, so a code missing from
+// this table is not caught further down — it is reported as unknown, which for
+// a stopped server is the one answer that helps nobody.
 func fromSQLState(pgErr *pgconn.PgError) driver.FailureClass {
 	switch pgErr.Code {
 	case sqlStateInvalidPassword:
@@ -64,6 +79,9 @@ func fromSQLState(pgErr *pgconn.PgError) driver.FailureClass {
 
 	case sqlStateInvalidCatalog:
 		return driver.FailureMissingDatabase
+
+	case sqlStateAdminShutdown, sqlStateCrashShutdown:
+		return driver.FailureDropped
 
 	default:
 		return driver.FailureUnknown
