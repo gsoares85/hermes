@@ -97,6 +97,16 @@ func startShared(t *testing.T, version string) *Instance {
 
 	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
+		// The only chance to terminate it. Nothing holds a reference yet:
+		// the instance is never returned, so StopShared has nothing to find,
+		// and a shared server cannot register a t.Cleanup the way the
+		// per-test helpers do — outliving the test that started it is the
+		// whole point of it. Without this the container runs until the reaper
+		// takes it, and the reaper is something a run can be told to skip.
+		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
+			t.Errorf("terminating the shared %s: %v", image, terminateErr)
+		}
+
 		t.Fatalf("reading the connection string of the shared %s: %v", image, err)
 	}
 
