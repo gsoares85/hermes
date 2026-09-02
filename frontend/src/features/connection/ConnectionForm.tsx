@@ -213,7 +213,17 @@ export function ConnectionForm(): React.JSX.Element {
         <button type="button" onClick={(): void => void onTest()} disabled={busy}>
           {busy ? "Working…" : "Test connection"}
         </button>
-        <button type="button" onClick={(): void => void onOpen()} disabled={busy}>
+        {/*
+          Disabled while a connection is open, because the id of the open one
+          lives in this state and connecting again would overwrite it: the
+          first pool would stay open on the other side with nothing left here
+          able to close it. Disconnect first.
+        */}
+        <button
+          type="button"
+          onClick={(): void => void onOpen()}
+          disabled={busy || status !== null}
+        >
           Connect
         </button>
         {status !== null && (
