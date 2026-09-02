@@ -10,8 +10,12 @@ COVERAGE_MINIMUM ?= 85
 # the thin interfaces of internal/driver and is exercised by the integration
 # suite, which `make cover` does not run: counting its statements while ignoring
 # its coverage would drag the number down for code that is in fact tested.
+# The conformance suite of the vault is test code that had to be an ordinary
+# package, because Go cannot share a helper written in a _test.go file with
+# another package's tests. More than half of it is the branch that reports a
+# failure, which only runs when an implementation is broken.
 # Every run prints what was ignored, and ignoring everything is refused.
-COVERAGE_IGNORE ?= github.com/gsoares85/hermes/internal/driver/postgres
+COVERAGE_IGNORE ?= github.com/gsoares85/hermes/internal/driver/postgres,github.com/gsoares85/hermes/internal/core/secret/secrettest
 INTEGRATION_TAGS ?= integration
 GOVULNCHECK_VERSION ?= v1.7.0
 

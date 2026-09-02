@@ -47,6 +47,43 @@ var projectRules = []deps.Rule{
 		},
 	},
 	{
+		// The vault contract lives in internal/core/secret, where it is
+		// consumed; every implementation of it lives in internal/vault, and
+		// so does every library that talks to a keychain. The whole tree is
+		// forbidden rather than only its subpackages — unlike internal/driver,
+		// there is no contract in there for the core to legitimately reach.
+		// internal/credential is the same shape: handing a password to a child
+		// process means files and process environments, which is infrastructure
+		// and stays outside. See ADR-0010.
+		Reason:   "the core layer must not reach an implementation of the vault",
+		Packages: module + "/internal/core",
+		Forbidden: []string{
+			module + "/internal/vault",
+			module + "/internal/credential",
+		},
+	},
+	{
+		// The rule that would have caught the mistake ADR-0010 was written to
+		// prevent. Without it, cgo and D-Bus in the domain compile and pass:
+		// the rules above name a driver and a framework, and a keychain is
+		// neither.
+		//
+		// It is stated for the core alone. The UI is covered by the rule above
+		// forbidding internal/vault, which is the only way it could reach a
+		// keychain of its own accord; naming the libraries there too would fire
+		// the day internal/ui legitimately imports Wails, which brings D-Bus
+		// with it on Linux — a failure for the wrong reason teaches people to
+		// edit the gate rather than the code.
+		Reason:   "the core layer must not talk to an operating system keychain",
+		Packages: module + "/internal/core",
+		Forbidden: []string{
+			"github.com/keybase/go-keychain",
+			"github.com/danieljoos/wincred",
+			"github.com/godbus/dbus",
+			"github.com/zalando/go-keyring",
+		},
+	},
+	{
 		Reason:   "the core layer must not depend on development tooling",
 		Packages: module + "/internal/core",
 		Forbidden: []string{
@@ -70,6 +107,17 @@ var projectRules = []deps.Rule{
 		Packages: module + "/internal/ui",
 		Forbidden: []string{
 			module + "/internal/driver/",
+		},
+	},
+	{
+		// The same rule again, for the vault. The window is handed one by the
+		// command that wires the application together, exactly as it is handed
+		// an engine.
+		Reason:   "the UI layer must be handed a vault, never reach for one",
+		Packages: module + "/internal/ui",
+		Forbidden: []string{
+			module + "/internal/vault",
+			module + "/internal/credential",
 		},
 	},
 }
@@ -155,6 +203,52 @@ func TestCheckReportsEveryViolationSorted(t *testing.T) {
 		if got[i].Package != pkg {
 			t.Errorf("violation %d is for %q, want %q (%v)", i, got[i].Package, pkg, got)
 		}
+	}
+}
+
+// The rules are data, and data can be written down without ever being wired in.
+// A rule protecting the layer from something nothing imports yet passes exactly
+// as well when it has been deleted, misspelled or never added — which is the
+// state internal/vault and internal/credential are in until the phases that
+// create them. This feeds the real project rules a graph that violates each new
+// edge, so the gate is proven to bite before there is anything for it to bite.
+func TestTheProjectRulesForbidReachingForAVault(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct{ pkg, imported string }{
+		"a keychain library in the core": {
+			module + "/internal/core/conn", "github.com/keybase/go-keychain",
+		},
+		"the credential store of Windows in the core": {
+			module + "/internal/core/conn", "github.com/danieljoos/wincred",
+		},
+		"the session bus in the core": {
+			module + "/internal/core/conn", "github.com/godbus/dbus/v5",
+		},
+		"a vault implementation in the core": {
+			module + "/internal/core/conn", module + "/internal/vault",
+		},
+		"the credential helper in the core": {
+			module + "/internal/core/dump", module + "/internal/credential",
+		},
+		"a vault implementation in the UI": {
+			module + "/internal/ui", module + "/internal/vault",
+		},
+		"the credential helper in the UI": {
+			module + "/internal/ui", module + "/internal/credential",
+		},
+	}
+
+	for name, forbidden := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			graph := map[string][]string{forbidden.pkg: {forbidden.imported}}
+			if got := deps.Check(graph, projectRules); len(got) == 0 {
+				t.Errorf("%s importing %s is allowed by the project rules",
+					forbidden.pkg, forbidden.imported)
+			}
+		})
 	}
 }
 
