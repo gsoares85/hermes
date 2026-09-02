@@ -1,10 +1,19 @@
 # Hermes
 
-[![CI](https://github.com/gsoares85/hermes/actions/workflows/ci.yml/badge.svg)](https://github.com/gsoares85/hermes/actions/workflows/ci.yml)
-[![Coverage](https://codecov.io/gh/gsoares85/hermes/branch/main/graph/badge.svg)](https://codecov.io/gh/gsoares85/hermes)
-[![Release](https://img.shields.io/github/v/release/gsoares85/hermes?include_prereleases&sort=semver)](https://github.com/gsoares85/hermes/releases)
-[![License](https://img.shields.io/github/license/gsoares85/hermes)](LICENSE)
-[![Go](https://img.shields.io/github/go-mod/go-version/gsoares85/hermes)](go.mod)
+<!--
+  Static badges on purpose. The badge services are anonymous, so while this
+  repository is private every badge that queries it renders as an error rather
+  than as a value: the Actions workflow badge answers 404, and shields.io
+  answers "repo not found". The CI and coverage badges are not replaced with
+  static ones, because a fixed "passing" would be a claim about a state nobody
+  can check. Restore the live badges in the change that makes the repository
+  public.
+-->
+
+[![Status](https://img.shields.io/badge/status-pre--alpha-orange)](#project-status)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8)](go.mod)
+[![PostgreSQL](https://img.shields.io/badge/postgresql-12%2B-336791)](#requirements)
 [![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macos%20%7C%20windows-blue)](#installation)
 
 A **native, open source desktop database manager** for PostgreSQL, written in Go.
