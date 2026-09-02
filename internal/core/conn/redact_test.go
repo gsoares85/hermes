@@ -30,6 +30,13 @@ func TestRedactHidesThePasswordOfAURL(t *testing.T) {
 			"postgres://hermes@localhost:5432/hermes?password=s3cr3t&sslmode=disable",
 			"postgres://hermes@localhost:5432/hermes?password=xxxxx&sslmode=disable",
 		},
+		// The passphrase of the client private key is a secret of the same
+		// order as the password, and a URI is a place it can arrive in.
+		{
+			"sslpassword in the query",
+			"postgres://hermes@localhost:5432/hermes?sslmode=verify-full&sslpassword=s3cr3t",
+			"postgres://hermes@localhost:5432/hermes?sslmode=verify-full&sslpassword=xxxxx",
+		},
 	}
 
 	for _, tc := range cases {
@@ -194,6 +201,8 @@ func TestRedactLeavesNoSecretBehind(t *testing.T) {
 	for _, dsn := range []string{
 		"postgres://hermes:" + secret + "@localhost:5432/hermes",
 		"postgres://hermes@localhost/hermes?password=" + secret,
+		"postgres://hermes@localhost/hermes?sslpassword=" + secret,
+		"postgres://hermes:pw@localhost/hermes?sslpassword=" + secret,
 		"host=localhost password=" + secret + " dbname=hermes",
 		"password='" + secret + "'",
 		// The tail after an escaped quote is part of the secret, and a

@@ -38,6 +38,14 @@ var passwordKeyword = regexp.MustCompile(
 // as "password":"…" rather than as password=….
 var passwordJSON = regexp.MustCompile(`(?i)("(?:ssl)?password"\s*:\s*)"(?:\\.|[^"\\])*"`)
 
+// Query keys of a connection URI that carry a secret.
+//
+// sslpassword is the passphrase of the client private key, which is as much a
+// secret as the password itself — the JSON form above already treats it as one,
+// and a URI is the other shape it arrives in. The keyword form needs no entry:
+// the pattern above matches the "password=" inside "sslpassword=" already.
+var secretQueryKeys = []string{"password", "sslpassword"}
+
 // Redact returns the connection string with its password replaced, in both the
 // URL and the keyword form.
 //
@@ -75,8 +83,14 @@ func redactURL(parsed *url.URL) string {
 	}
 
 	query := parsed.Query()
-	if query.Has("password") {
-		query.Set("password", redacted)
+	replaced := false
+	for _, key := range secretQueryKeys {
+		if query.Has(key) {
+			query.Set(key, redacted)
+			replaced = true
+		}
+	}
+	if replaced {
 		parsed.RawQuery = query.Encode()
 	}
 
