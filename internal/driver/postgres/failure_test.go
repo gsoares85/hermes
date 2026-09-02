@@ -31,7 +31,17 @@ func TestClassifyReadsTheSQLState(t *testing.T) {
 		"no pg_hba rule":      {"28000", "no pg_hba.conf entry for host \"10.0.0.1\"", driver.FailureNotAuthorized},
 		"pg_hba uppercase":    {"28000", "No pg_hba.conf entry for host", driver.FailureNotAuthorized},
 		"database is missing": {"3D000", "database \"app\" does not exist", driver.FailureMissingDatabase},
-		"anything else":       {"53300", "too many connections", driver.FailureUnknown},
+
+		// A server on its way down says so before it closes the socket, and
+		// the message arrives as an ordinary SQLSTATE. Reading it is what
+		// tells a stopped server apart from one that was never reachable —
+		// and without it the whole transport branch below is skipped, because
+		// a server that answered is answered for here.
+		"server shutting down":  {"57P01", "terminating connection due to administrator command", driver.FailureDropped},
+		"backend terminated":    {"57P01", "terminating connection due to administrator command", driver.FailureDropped},
+		"another backend crash": {"57P02", "terminating connection because of crash of another server process", driver.FailureDropped},
+
+		"anything else": {"53300", "too many connections", driver.FailureUnknown},
 	}
 
 	for name, tc := range cases {
