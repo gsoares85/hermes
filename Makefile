@@ -53,7 +53,7 @@ test-integration: ## Run the integration tests (requires Docker)
 .PHONY: cover
 cover: ## Run the unit tests and enforce the coverage floor
 	$(GO) test $(RACE) -coverprofile=$(COVERAGE_PROFILE) -coverpkg=./internal/... ./internal/...
-	$(GO) run ./scripts/checkcoverage -profile=$(COVERAGE_PROFILE) -min=$(COVERAGE_MINIMUM) -ignore=$(COVERAGE_IGNORE)
+	$(GO) run ./scripts/checkcoverage -profile=$(COVERAGE_PROFILE) -min=$(COVERAGE_MINIMUM) -ignore="$(COVERAGE_IGNORE)"
 
 .PHONY: cover-html
 cover-html: cover ## Open the coverage report
