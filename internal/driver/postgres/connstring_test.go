@@ -160,3 +160,62 @@ func TestConnStringAcceptsEveryLibpqMode(t *testing.T) {
 		}
 	}
 }
+
+// pgx turns every setting it does not recognise into a runtime parameter — a
+// GUC sent to the server in the startup message. For a client-side keyword that
+// is doubly wrong: the setting is not applied, and the server refuses the
+// connection with "unrecognized configuration parameter". Refusing here is what
+// keeps a gssencmode=require from looking honoured while doing nothing.
+func TestConnStringRejectsAKeywordPgxWouldSendToTheServer(t *testing.T) {
+	t.Parallel()
+
+	for _, keyword := range []string{
+		"gssencmode", "gsslib", "gssdelegation",
+		"load_balance_hosts", "fallback_application_name", "tcp_user_timeout",
+		"keepalives", "keepalives_idle", "keepalives_interval", "keepalives_count",
+	} {
+		target := base()
+		target.Options = map[string]string{keyword: "1"}
+
+		if _, err := connString(target); !errors.Is(err, ErrUnsupported) {
+			t.Errorf("connString with %s = %v, want ErrUnsupported", keyword, err)
+		}
+	}
+}
+
+// The rejection above must not become a reason to drop the keywords pgx does
+// handle: those still reach the string, and the parser still keeps them out of
+// the startup message.
+func TestConnStringCarriesTheKeywordsPgxHandles(t *testing.T) {
+	t.Parallel()
+
+	supported := map[string]string{
+		"connect_timeout":      "10",
+		"channel_binding":      "prefer",
+		"target_session_attrs": "any",
+		"sslsni":               "1",
+	}
+
+	target := base()
+	target.Options = supported
+
+	got, err := connString(target)
+	if err != nil {
+		t.Fatalf("connString returned error: %v", err)
+	}
+	for key, value := range supported {
+		if !strings.Contains(got, key+"='"+value+"'") {
+			t.Errorf("connString() = %q, want it to carry %s", got, key)
+		}
+	}
+
+	config, err := poolConfig(target)
+	if err != nil {
+		t.Fatalf("poolConfig returned error: %v", err)
+	}
+	for key := range supported {
+		if _, sent := config.ConnConfig.RuntimeParams[key]; sent {
+			t.Errorf("%s reached RuntimeParams, so it would be sent to the server", key)
+		}
+	}
+}

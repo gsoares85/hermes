@@ -16,6 +16,35 @@ var knownSSLModes = map[string]bool{
 	"require": true, "verify-ca": true, "verify-full": true,
 }
 
+// Connection keywords libpq defines and pgx does not implement.
+//
+// pgx keeps its own list of the keywords it understands and turns every other
+// setting in the string into a runtime parameter — a GUC sent to the server in
+// the startup message. For a client-side keyword that is wrong twice over: the
+// setting is not applied, and the server answers "unrecognized configuration
+// parameter", which is a baffling reply to a DSN libpq itself would accept.
+//
+// Refused rather than dropped, because the difference matters most exactly
+// where it is least visible: a keepalive nobody set up is an annoyance, while a
+// gssencmode that looked honoured and did nothing is a connection protected
+// less than it was asked to be.
+//
+// The three keywords not listed here — replication, options and
+// client_encoding — are genuine startup-message parameters, so a runtime
+// parameter is where they belong.
+var unsupportedKeywords = map[string]bool{
+	"gssencmode":                true,
+	"gsslib":                    true,
+	"gssdelegation":             true,
+	"load_balance_hosts":        true,
+	"fallback_application_name": true,
+	"tcp_user_timeout":          true,
+	"keepalives":                true,
+	"keepalives_idle":           true,
+	"keepalives_interval":       true,
+	"keepalives_count":          true,
+}
+
 // connString builds the keyword/value connection string handed to pgx.
 //
 // Going through a string rather than assembling a *tls.Config by hand is
@@ -58,6 +87,11 @@ func connString(target driver.Target) (string, error) {
 	// the string is the same for the same target, which is what makes it
 	// comparable in a test and in a log.
 	for _, key := range sortedKeys(target.Options) {
+		if unsupportedKeywords[key] {
+			return "", fmt.Errorf(
+				"%w: %s is a libpq setting this driver does not implement, and it would be sent to the server as a parameter instead",
+				ErrUnsupported, key)
+		}
 		parts = append(parts, key+"="+quote(target.Options[key]))
 	}
 
