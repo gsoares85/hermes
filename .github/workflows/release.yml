@@ -26,10 +26,18 @@ concurrency:
   group: release-main
   cancel-in-progress: false
 
+# Every job carries a timeout. Without one GitHub applies its own default of six
+# hours, which is not a limit so much as the absence of one: a step that stalls
+# rather than fails — an apt mirror that stops answering mid-install is the one
+# seen here — holds a runner for the rest of the working day and reports nothing
+# while it does. The numbers below are several times the observed duration of
+# each job, so they are reached by a hang and not by a slow morning.
+
 jobs:
   tag:
     name: Tag
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
       pull-requests: read

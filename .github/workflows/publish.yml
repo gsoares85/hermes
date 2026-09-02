@@ -37,10 +37,18 @@ permissions:
 env:
   NODE_VERSION: "22"
 
+# Every job carries a timeout. Without one GitHub applies its own default of six
+# hours, which is not a limit so much as the absence of one: a step that stalls
+# rather than fails — an apt mirror that stops answering mid-install is the one
+# seen here — holds a runner for the rest of the working day and reports nothing
+# while it does. The numbers below are several times the observed duration of
+# each job, so they are reached by a hang and not by a slow morning.
+
 jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -126,6 +134,7 @@ jobs:
     name: Release
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
