@@ -3,8 +3,12 @@
 package postgres_test
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gsoares85/hermes/internal/core/conn"
 	"github.com/gsoares85/hermes/internal/driver"
@@ -44,6 +48,47 @@ func openSession(t *testing.T, pool driver.Pool) driver.Session {
 	return session
 }
 
+// Distinguishes the tables of one test from another's, and of one run from the
+// next. A counter rather than a random value so that a name in a server log
+// still says which test made it.
+var tableSequence atomic.Uint64
+
+// dropTimeout bounds the cleanup drop. The test is over either way; what is not
+// acceptable is a suite that hangs on tidying up.
+const dropTimeout = 10 * time.Second
+
+// createTable makes a table under a name nobody else uses and drops it when the
+// test ends.
+//
+// The server is shared by every test in the binary and outlives all of them, so
+// a fixed name is a table that is already there the second time anything
+// creates it: a repeat run, or -count above one, would fail in the setup of a
+// test rather than in the thing it was written to check.
+func createTable(t *testing.T, session driver.Session, prefix, definition string) string {
+	t.Helper()
+
+	name := fmt.Sprintf("%s_%d", prefix, tableSequence.Add(1))
+	if err := session.Exec(t.Context(), "CREATE TABLE "+name+" "+definition); err != nil {
+		t.Fatalf("creating %s: %v", name, err)
+	}
+
+	t.Cleanup(func() {
+		// A context of its own: the one the test carries is already cancelled
+		// by the time a cleanup runs.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), dropTimeout)
+		defer cancel()
+
+		// IF EXISTS because a test that failed before committing never created
+		// it, and a cleanup that fails on that would report a second problem
+		// on top of the real one.
+		if err := session.Exec(ctx, "DROP TABLE IF EXISTS "+name); err != nil {
+			t.Errorf("dropping %s: %v", name, err)
+		}
+	})
+
+	return name
+}
+
 func countRows(t *testing.T, session driver.Session, table string) int {
 	t.Helper()
 
@@ -65,23 +110,21 @@ func TestTwoSessionsDoNotShareATransaction(t *testing.T) {
 	first := openSession(t, pool)
 	second := openSession(t, pool)
 
-	if err := first.Exec(t.Context(), "CREATE TABLE tabs (id int)"); err != nil {
-		t.Fatalf("creating the table: %v", err)
-	}
+	tabs := createTable(t, first, "tabs", "(id int)")
 
 	if err := first.Begin(t.Context()); err != nil {
 		t.Fatalf("opening a transaction: %v", err)
 	}
-	if err := first.Exec(t.Context(), "INSERT INTO tabs VALUES (1)"); err != nil {
+	if err := first.Exec(t.Context(), "INSERT INTO "+tabs+" VALUES (1)"); err != nil {
 		t.Fatalf("inserting inside the transaction: %v", err)
 	}
 
 	// The writer sees its own uncommitted row.
-	if got := countRows(t, first, "tabs"); got != 1 {
+	if got := countRows(t, first, tabs); got != 1 {
 		t.Errorf("the writing session sees %d rows, want 1", got)
 	}
 	// The other tab does not.
-	if got := countRows(t, second, "tabs"); got != 0 {
+	if got := countRows(t, second, tabs); got != 0 {
 		t.Errorf("the other session sees %d rows before the commit, want 0", got)
 	}
 
@@ -89,7 +132,7 @@ func TestTwoSessionsDoNotShareATransaction(t *testing.T) {
 		t.Fatalf("committing: %v", err)
 	}
 
-	if got := countRows(t, second, "tabs"); got != 1 {
+	if got := countRows(t, second, tabs); got != 1 {
 		t.Errorf("the other session sees %d rows after the commit, want 1", got)
 	}
 }
@@ -100,21 +143,19 @@ func TestRollbackDiscardsTheWork(t *testing.T) {
 	pool := openPool(t, testsupport.SupportedVersions[0])
 	session := openSession(t, pool)
 
-	if err := session.Exec(t.Context(), "CREATE TABLE discarded (id int)"); err != nil {
-		t.Fatalf("creating the table: %v", err)
-	}
+	discarded := createTable(t, session, "discarded", "(id int)")
 
 	if err := session.Begin(t.Context()); err != nil {
 		t.Fatalf("opening a transaction: %v", err)
 	}
-	if err := session.Exec(t.Context(), "INSERT INTO discarded VALUES (1)"); err != nil {
+	if err := session.Exec(t.Context(), "INSERT INTO "+discarded+" VALUES (1)"); err != nil {
 		t.Fatalf("inserting: %v", err)
 	}
 	if err := session.Rollback(t.Context()); err != nil {
 		t.Fatalf("rolling back: %v", err)
 	}
 
-	if got := countRows(t, session, "discarded"); got != 0 {
+	if got := countRows(t, session, discarded); got != 0 {
 		t.Errorf("after the rollback the table has %d rows, want 0", got)
 	}
 	if session.InTransaction() {
@@ -130,9 +171,7 @@ func TestCloseRollsBackAnOpenTransaction(t *testing.T) {
 	pool := openPool(t, testsupport.SupportedVersions[0])
 	setup := openSession(t, pool)
 
-	if err := setup.Exec(t.Context(), "CREATE TABLE abandoned (id int)"); err != nil {
-		t.Fatalf("creating the table: %v", err)
-	}
+	abandoned := createTable(t, setup, "abandoned", "(id int)")
 
 	abandoning, err := pool.Session(t.Context())
 	if err != nil {
@@ -141,13 +180,13 @@ func TestCloseRollsBackAnOpenTransaction(t *testing.T) {
 	if err := abandoning.Begin(t.Context()); err != nil {
 		t.Fatalf("opening a transaction: %v", err)
 	}
-	if err := abandoning.Exec(t.Context(), "INSERT INTO abandoned VALUES (1)"); err != nil {
+	if err := abandoning.Exec(t.Context(), "INSERT INTO "+abandoned+" VALUES (1)"); err != nil {
 		t.Fatalf("inserting: %v", err)
 	}
 	abandoning.Close()
 	abandoning.Close() // twice, the way a defer and an explicit close collide
 
-	if got := countRows(t, setup, "abandoned"); got != 0 {
+	if got := countRows(t, setup, abandoned); got != 0 {
 		t.Errorf("the abandoned transaction left %d rows behind, want 0", got)
 	}
 }
@@ -213,14 +252,12 @@ func TestSessionsWorkOnEverySupportedVersion(t *testing.T) {
 			if err := session.Begin(t.Context()); err != nil {
 				t.Fatalf("opening a transaction: %v", err)
 			}
-			if err := session.Exec(t.Context(), "CREATE TABLE versions (id int)"); err != nil {
-				t.Fatalf("running a statement in the transaction: %v", err)
-			}
+			versions := createTable(t, session, "versions", "(id int)")
 			if err := session.Commit(t.Context()); err != nil {
 				t.Fatalf("committing: %v", err)
 			}
 
-			if got := countRows(t, session, "versions"); got != 0 {
+			if got := countRows(t, session, versions); got != 0 {
 				t.Errorf("the committed table has %d rows, want 0", got)
 			}
 		})
