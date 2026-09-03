@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"sync"
 
+	"strings"
+
 	"github.com/gsoares85/hermes/internal/core/conn"
+	"github.com/gsoares85/hermes/internal/core/secret"
 	"github.com/gsoares85/hermes/internal/driver"
 )
 
@@ -19,6 +22,10 @@ import (
 // the view below are separate types rather than one shared struct with a rule
 // about when to blank a member.
 type ConnectionForm struct {
+	// ID is empty for a connection being described for the first time and set
+	// for one being edited. It decides whether Save adds a connection or
+	// replaces one, and it is what the password is filed under in the keychain.
+	ID   string `json:"id"`
 	Name string `json:"name"`
 	// Params are session parameters; Options are libpq connection settings.
 	// Both are carried so that a pasted URI does not quietly lose them
@@ -60,6 +67,44 @@ type ConnectionView struct {
 	HasPassword bool `json:"hasPassword"`
 }
 
+// SavedView is a saved connection as the window lists it.
+//
+// It is a type of its own rather than ConnectionView with an identifier added,
+// because the two answer different questions. ConnectionView reports what a
+// pasted URI contained, HasPassword included. This reports what is in the file,
+// and the file cannot say whether a password is in the keychain: finding out
+// would mean reading the keychain once per row, which on macOS and on Linux is
+// an authorisation dialog per connection for someone who wanted to see a list.
+type SavedView struct {
+	ID      string            `json:"id"`
+	Name    string            `json:"name"`
+	Params  map[string]string `json:"params"`
+	Options map[string]string `json:"options"`
+
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Database string `json:"database"`
+	User     string `json:"user"`
+
+	SSLMode  string `json:"sslMode"`
+	RootCert string `json:"rootCert"`
+	Cert     string `json:"cert"`
+	Key      string `json:"key"`
+
+	Archived bool `json:"archived"`
+}
+
+// VaultView says where passwords are being kept, and warns when the honest
+// answer is "until Hermes quits".
+//
+// The warning is prose because it is shown to a person and has to name what to
+// install. It is empty exactly when the keychain of the system is in use, which
+// is what the window decides whether to draw a banner from.
+type VaultView struct {
+	Backend string `json:"backend"`
+	Warning string `json:"warning"`
+}
+
 // DiagnosisView is a failure explained, ready to render.
 type DiagnosisView struct {
 	Failed   bool   `json:"failed"`
@@ -77,20 +122,243 @@ type StatusView struct {
 	Diagnosis DiagnosisView `json:"diagnosis"`
 }
 
+// ConnectionStore is where saved connections live between runs.
+//
+// The interface is declared here because this is where it is consumed. What
+// satisfies it knows about directories, permissions and atomic renames, and
+// none of that belongs in a boundary whose job is to answer a window.
+type ConnectionStore interface {
+	Load() ([]conn.Config, error)
+	Save(connections []conn.Config) error
+}
+
+// Dependencies are what the command that wires the application together hands
+// to this boundary.
+//
+// It is a struct rather than four parameters because three of them are
+// interfaces, and a positional list of interfaces is a call site nobody can
+// read six months later.
+type Dependencies struct {
+	// Opener is the engine. Naming a concrete one is the job of the command,
+	// not of the window.
+	Opener driver.Opener
+	// Store is where the connections themselves are kept.
+	Store ConnectionStore
+	// Vault is where their passwords are kept, which is somewhere else.
+	Vault secret.Vault
+	// VaultStatus is what to tell the person about that place, settled once at
+	// startup because asking again would be another round trip for an answer
+	// that does not change while the application runs.
+	VaultStatus VaultView
+}
+
 // ConnectionService is the boundary for everything to do with connecting.
 //
 // The frontend never assembles a connection string and never sees a password
 // come back: it sends a form, and receives a diagnosis or a state.
 type ConnectionService struct {
-	opener driver.Opener
+	opener      driver.Opener
+	store       ConnectionStore
+	vault       secret.Vault
+	vaultStatus VaultView
 
 	mu   sync.Mutex
 	open map[string]*conn.Connection
+
+	// saved serialises the read-modify-write of the connections file. Two
+	// saves at once would otherwise each write the list they read, and the
+	// second would delete the connection the first had just added.
+	saved sync.Mutex
 }
 
 // NewConnectionService creates the service bound to the frontend.
-func NewConnectionService(opener driver.Opener) *ConnectionService {
-	return &ConnectionService{opener: opener, open: make(map[string]*conn.Connection)}
+func NewConnectionService(deps Dependencies) *ConnectionService {
+	return &ConnectionService{
+		opener:      deps.Opener,
+		store:       deps.Store,
+		vault:       deps.Vault,
+		vaultStatus: deps.VaultStatus,
+		open:        make(map[string]*conn.Connection),
+	}
+}
+
+// VaultStatus says where passwords are being kept.
+//
+// The window asks so that it can say so, and warn when the answer is that they
+// are not being kept at all. A vault that silently forgets is exactly the
+// failure this boundary exists to make visible.
+func (s *ConnectionService) VaultStatus() VaultView { return s.vaultStatus }
+
+// Save keeps a connection: the connection in the file, its password in the
+// keychain, and never one of them in the other.
+//
+// A form with no identifier is a new connection and is given one. A form that
+// carries one replaces the connection it names, which is what editing is.
+func (s *ConnectionService) Save(ctx context.Context, form ConnectionForm) (SavedView, error) {
+	config := configOf(form)
+	if strings.TrimSpace(config.ID) == "" {
+		config.ID = conn.NewID()
+	}
+	if err := config.Validate(); err != nil {
+		return SavedView{}, redactErr(err)
+	}
+
+	s.saved.Lock()
+	defer s.saved.Unlock()
+
+	saved, err := s.store.Load()
+	if err != nil {
+		return SavedView{}, redactErr(err)
+	}
+
+	// The store is handed a connection with the password taken out of it. The
+	// file format has no field for one and would drop it anyway, but a boundary
+	// that relies on the far side to do the dropping is a boundary that leaks
+	// the day someone writes a second implementation of it.
+	stored := config
+	stored.Password = ""
+
+	if err := s.store.Save(replacing(saved, stored)); err != nil {
+		return SavedView{}, redactErr(err)
+	}
+
+	// After the file and not before it. Either order can fail halfway, and this
+	// one fails into a connection whose password has to be typed again — which
+	// the person can see and fix — rather than into a password in the keychain
+	// belonging to a connection that does not exist, which nothing can reach.
+	if err := s.keep(ctx, config); err != nil {
+		return SavedView{}, err
+	}
+
+	return savedView(config), nil
+}
+
+// List returns the saved connections, and touches no keychain doing it.
+func (s *ConnectionService) List() ([]SavedView, error) {
+	s.saved.Lock()
+	defer s.saved.Unlock()
+
+	saved, err := s.store.Load()
+	if err != nil {
+		return nil, redactErr(err)
+	}
+
+	views := make([]SavedView, 0, len(saved))
+	for _, config := range saved {
+		views = append(views, savedView(config))
+	}
+
+	return views, nil
+}
+
+// Delete removes a connection and the password that belonged to it.
+//
+// Both, because a secret left behind is an item in the keychain of the person
+// that nothing will ever look for again: invisible litter that outlives the
+// application.
+func (s *ConnectionService) Delete(ctx context.Context, id string) error {
+	s.saved.Lock()
+	defer s.saved.Unlock()
+
+	saved, err := s.store.Load()
+	if err != nil {
+		return redactErr(err)
+	}
+
+	remaining, found := without(saved, id)
+	if !found {
+		return fmt.Errorf("no connection %q is saved", id)
+	}
+
+	if err := s.store.Save(remaining); err != nil {
+		return redactErr(err)
+	}
+
+	// A connection saved without a password has no secret to remove, and that
+	// is a normal outcome rather than a failure.
+	if err := s.vault.Delete(ctx, secret.ConnectionRef(id)); err != nil &&
+		!errors.Is(err, secret.ErrNotFound) {
+		return fmt.Errorf("the connection was removed, but its password is still in the keychain: %w",
+			redactErr(err))
+	}
+
+	return nil
+}
+
+// keep puts the password in the vault, and does nothing when the form carried
+// none.
+//
+// An empty password field is someone editing the host of a connection they
+// saved last week, not someone asking for its password to be forgotten. Wiping
+// the secret there would lose it to an edit that never mentioned it; forgetting
+// a password is what deleting the connection does.
+func (s *ConnectionService) keep(ctx context.Context, config conn.Config) error {
+	if config.Password == "" {
+		return nil
+	}
+
+	if err := s.vault.Set(ctx, secret.ConnectionRef(config.ID), config.Password); err != nil {
+		return fmt.Errorf("the connection was saved, but its password was not: %w", redactErr(err))
+	}
+
+	return nil
+}
+
+// credentials fills in the password a saved connection is opened with.
+//
+// This is the only place a stored secret is read, and it is read at the moment
+// it is used rather than when the list is drawn. That is the difference between
+// opening Hermes and opening Hermes behind one authorisation dialog per saved
+// connection, on the two systems where reading an item can raise one.
+//
+// A saved connection with no secret is not an error: plenty of servers
+// authenticate by certificate, by peer, or by a .pgpass the person already has.
+func (s *ConnectionService) credentials(ctx context.Context, config conn.Config) (conn.Config, error) {
+	if config.Password != "" || strings.TrimSpace(config.ID) == "" {
+		return config, nil
+	}
+
+	stored, err := s.vault.Get(ctx, secret.ConnectionRef(config.ID))
+	if errors.Is(err, secret.ErrNotFound) {
+		return config, nil
+	}
+	if err != nil {
+		return config, fmt.Errorf("reading the password of this connection from the keychain: %w",
+			redactErr(err))
+	}
+	config.Password = stored
+
+	return config, nil
+}
+
+// replacing puts the connection in the list, in place of the one it shares an
+// identifier with, or at the end when there is none.
+func replacing(saved []conn.Config, config conn.Config) []conn.Config {
+	for index, existing := range saved {
+		if existing.ID == config.ID {
+			saved[index] = config
+
+			return saved
+		}
+	}
+
+	return append(saved, config)
+}
+
+func without(saved []conn.Config, id string) ([]conn.Config, bool) {
+	remaining := make([]conn.Config, 0, len(saved))
+	found := false
+
+	for _, existing := range saved {
+		if existing.ID == id {
+			found = true
+
+			continue
+		}
+		remaining = append(remaining, existing)
+	}
+
+	return remaining, found
 }
 
 // Parse fills the form from a pasted connection URI.
@@ -115,7 +383,10 @@ func (s *ConnectionService) Parse(uri string) (ConnectionView, error) {
 // the expected outcome of a test, and the whole point of this task is that the
 // window shows something a person can act on instead of a driver message.
 func (s *ConnectionService) Test(ctx context.Context, form ConnectionForm) DiagnosisView {
-	config := configOf(form)
+	config, err := s.credentials(ctx, configOf(form))
+	if err != nil {
+		return diagnosisView(conn.Diagnose(err, config))
+	}
 
 	connection, err := conn.Open(ctx, s.opener, config)
 	if err != nil {
@@ -129,7 +400,10 @@ func (s *ConnectionService) Test(ctx context.Context, form ConnectionForm) Diagn
 // Open connects and keeps the connection, returning the identifier the window
 // uses to refer to it.
 func (s *ConnectionService) Open(ctx context.Context, form ConnectionForm) (StatusView, error) {
-	config := configOf(form)
+	config, err := s.credentials(ctx, configOf(form))
+	if err != nil {
+		return StatusView{}, err
+	}
 
 	connection, err := conn.Open(ctx, s.opener, config)
 	if err != nil {
@@ -273,6 +547,7 @@ func configOf(form ConnectionForm) conn.Config {
 	}
 
 	return conn.Config{
+		ID:       form.ID,
 		Name:     form.Name,
 		Host:     form.Host,
 		Port:     port,
@@ -304,6 +579,24 @@ func viewOf(config conn.Config) ConnectionView {
 		Params:      config.Params,
 		Options:     config.Options,
 		HasPassword: config.Password != "",
+	}
+}
+
+func savedView(config conn.Config) SavedView {
+	return SavedView{
+		ID:       config.ID,
+		Name:     config.Name,
+		Host:     config.Host,
+		Port:     config.Port,
+		Database: config.Database,
+		User:     config.User,
+		SSLMode:  string(config.TLS.Mode),
+		RootCert: config.TLS.RootCert,
+		Cert:     config.TLS.Cert,
+		Key:      config.TLS.Key,
+		Params:   config.Params,
+		Options:  config.Options,
+		Archived: config.Archived,
 	}
 }
 

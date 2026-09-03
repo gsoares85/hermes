@@ -6,6 +6,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -15,7 +16,9 @@ import (
 
 	"github.com/gsoares85/hermes/frontend"
 	"github.com/gsoares85/hermes/internal/driver/postgres"
+	"github.com/gsoares85/hermes/internal/filestore"
 	"github.com/gsoares85/hermes/internal/ui"
+	"github.com/gsoares85/hermes/internal/vault"
 	"github.com/gsoares85/hermes/internal/version"
 )
 
@@ -34,6 +37,22 @@ func main() {
 }
 
 func run() error {
+	// Where passwords are kept is decided once, here, and the window is told
+	// the answer rather than allowed to go looking: the dependency gate forbids
+	// internal/ui from reaching for a keychain for the same reason it forbids
+	// it from reaching for a driver.
+	//
+	// Open never fails. A machine with no keyring gets a vault that lives in
+	// this process and a warning the window puts in front of the person, which
+	// is the honest outcome — refusing to start over a convenience is not.
+	opened, status := vault.Open(context.Background())
+	defer func() { _ = opened.Close() }()
+
+	connections, err := filestore.ConnectionsPath()
+	if err != nil {
+		return err
+	}
+
 	app := application.New(application.Options{
 		Name:        "Hermes",
 		Description: "A native, open source database manager for PostgreSQL",
@@ -44,10 +63,15 @@ func run() error {
 		LogLevel: slog.LevelInfo,
 		Services: []application.Service{
 			application.NewService(ui.NewAppInfoService()),
-			// The engine implementation is chosen here and nowhere else: the
-			// UI and the core both program against the contract, and this is
-			// the outermost place that can name a driver.
-			application.NewService(ui.NewConnectionService(postgres.New())),
+			// Every implementation is chosen here and nowhere else: the UI and
+			// the core both program against the contracts, and this is the
+			// outermost place that can name a driver, a keychain or a file.
+			application.NewService(ui.NewConnectionService(ui.Dependencies{
+				Opener:      postgres.New(),
+				Store:       filestore.NewConnections(connections),
+				Vault:       opened,
+				VaultStatus: ui.VaultView{Backend: status.Backend, Warning: status.Warning},
+			})),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(frontend.Dist()),

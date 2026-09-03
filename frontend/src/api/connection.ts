@@ -3,10 +3,12 @@ import type {
   ConnectionForm,
   ConnectionView,
   DiagnosisView,
+  SavedView,
   StatusView,
+  VaultView,
 } from "../../bindings/github.com/gsoares85/hermes/internal/ui/models";
 
-export type { ConnectionForm, ConnectionView, DiagnosisView, StatusView };
+export type { ConnectionForm, ConnectionView, DiagnosisView, SavedView, StatusView, VaultView };
 
 /**
  * An empty form.
@@ -15,6 +17,10 @@ export type { ConnectionForm, ConnectionView, DiagnosisView, StatusView };
  * value that will be used instead of leaving the reader to know it.
  */
 export const emptyForm: ConnectionForm = {
+  // Empty until the connection has been saved once. It is what tells Save to
+  // replace a connection rather than add another one, and what the password is
+  // filed under in the keychain.
+  id: "",
   name: "",
   // Session settings go to the server; connection settings configure the
   // client. Kept apart because sending one as the other loses it — and for
@@ -86,6 +92,70 @@ export async function databases(id: string): Promise<string[]> {
  */
 export async function sslModes(): Promise<string[]> {
   return (await ConnectionService.SSLModes()) ?? [];
+}
+
+/**
+ * Saves the connection and its password.
+ *
+ * The two go to different places — the connection to a file, the password to
+ * the keychain of the system — and the Go side is what knows that. Nothing
+ * comes back carrying the password: the returned view has no field for one.
+ */
+export async function saveConnection(form: ConnectionForm): Promise<SavedView> {
+  return await ConnectionService.Save(form);
+}
+
+/**
+ * The connections that have been saved.
+ *
+ * It deliberately says nothing about which of them have a stored password.
+ * Answering that would mean reading the keychain once per row, which on macOS
+ * and on Linux can raise an authorisation dialog per connection for someone who
+ * only wanted to see a list.
+ */
+export async function savedConnections(): Promise<SavedView[]> {
+  return (await ConnectionService.List()) ?? [];
+}
+
+/** Removes a connection and the password that belonged to it. */
+export async function deleteConnection(id: string): Promise<void> {
+  await ConnectionService.Delete(id);
+}
+
+/**
+ * Where passwords are being kept.
+ *
+ * The warning is empty when the keychain of the system is in use. When it is
+ * not, it says so in words the person can act on — which is the difference
+ * between a fallback and an application that silently forgets.
+ */
+export async function vaultStatus(): Promise<VaultView> {
+  return await ConnectionService.VaultStatus();
+}
+
+/**
+ * Fills the form from a saved connection.
+ *
+ * The password is left empty, and that is not an omission: the Go side reads it
+ * from the keychain when the connection is opened, so it never has to travel
+ * out here to come straight back.
+ */
+export function formFromSaved(saved: SavedView): ConnectionForm {
+  return {
+    id: saved.id,
+    name: saved.name,
+    params: saved.params,
+    options: saved.options,
+    host: saved.host,
+    port: saved.port,
+    database: saved.database,
+    user: saved.user,
+    sslMode: saved.sslMode,
+    rootCert: saved.rootCert,
+    cert: saved.cert,
+    key: saved.key,
+    password: "",
+  };
 }
 
 /** Applies a parsed URI to a form, keeping whatever the URI did not carry. */

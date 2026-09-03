@@ -48,6 +48,24 @@ export function Databases(id: string): $CancellablePromise<string[] | null> {
 }
 
 /**
+ * Delete removes a connection and the password that belonged to it.
+ * 
+ * Both, because a secret left behind is an item in the keychain of the person
+ * that nothing will ever look for again: invisible litter that outlives the
+ * application.
+ */
+export function Delete(id: string): $CancellablePromise<void> {
+    return $Call.ByID(1974899595, id);
+}
+
+/**
+ * List returns the saved connections, and touches no keychain doing it.
+ */
+export function List(): $CancellablePromise<$models.SavedView[] | null> {
+    return $Call.ByID(2303624856);
+}
+
+/**
  * Open connects and keeps the connection, returning the identifier the window
  * uses to refer to it.
  */
@@ -77,6 +95,17 @@ export function SSLModes(): $CancellablePromise<string[] | null> {
 }
 
 /**
+ * Save keeps a connection: the connection in the file, its password in the
+ * keychain, and never one of them in the other.
+ * 
+ * A form with no identifier is a new connection and is given one. A form that
+ * carries one replaces the connection it names, which is what editing is.
+ */
+export function Save(form: $models.ConnectionForm): $CancellablePromise<$models.SavedView> {
+    return $Call.ByID(4137694157, form);
+}
+
+/**
  * Status returns the last known state without contacting the server, which is
  * what the window calls as it redraws.
  */
@@ -93,4 +122,15 @@ export function Status(id: string): $CancellablePromise<$models.StatusView> {
  */
 export function Test(form: $models.ConnectionForm): $CancellablePromise<$models.DiagnosisView> {
     return $Call.ByID(2285711796, form);
+}
+
+/**
+ * VaultStatus says where passwords are being kept.
+ * 
+ * The window asks so that it can say so, and warn when the answer is that they
+ * are not being kept at all. A vault that silently forgets is exactly the
+ * failure this boundary exists to make visible.
+ */
+export function VaultStatus(): $CancellablePromise<$models.VaultView> {
+    return $Call.ByID(2574975934);
 }

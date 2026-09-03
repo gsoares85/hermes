@@ -60,6 +60,7 @@ var projectRules = []deps.Rule{
 		Forbidden: []string{
 			module + "/internal/vault",
 			module + "/internal/credential",
+			module + "/internal/filestore",
 		},
 	},
 	{
@@ -118,6 +119,7 @@ var projectRules = []deps.Rule{
 		Forbidden: []string{
 			module + "/internal/vault",
 			module + "/internal/credential",
+			module + "/internal/filestore",
 		},
 	},
 }
@@ -236,6 +238,12 @@ func TestTheProjectRulesForbidReachingForAVault(t *testing.T) {
 		},
 		"the credential helper in the UI": {
 			module + "/internal/ui", module + "/internal/credential",
+		},
+		"the file store in the core": {
+			module + "/internal/core/profile", module + "/internal/filestore",
+		},
+		"the file store in the UI": {
+			module + "/internal/ui", module + "/internal/filestore",
 		},
 	}
 

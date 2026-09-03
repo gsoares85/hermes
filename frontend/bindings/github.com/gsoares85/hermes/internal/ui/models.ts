@@ -10,6 +10,12 @@
  * about when to blank a member.
  */
 export interface ConnectionForm {
+    /**
+     * ID is empty for a connection being described for the first time and set
+     * for one being edited. It decides whether Save adds a connection or
+     * replaces one, and it is what the password is filed under in the keychain.
+     */
+    "id": string;
     "name": string;
 
     /**
@@ -67,10 +73,49 @@ export interface DiagnosisView {
 }
 
 /**
+ * SavedView is a saved connection as the window lists it.
+ * 
+ * It is a type of its own rather than ConnectionView with an identifier added,
+ * because the two answer different questions. ConnectionView reports what a
+ * pasted URI contained, HasPassword included. This reports what is in the file,
+ * and the file cannot say whether a password is in the keychain: finding out
+ * would mean reading the keychain once per row, which on macOS and on Linux is
+ * an authorisation dialog per connection for someone who wanted to see a list.
+ */
+export interface SavedView {
+    "id": string;
+    "name": string;
+    "params": { [_ in string]?: string } | null;
+    "options": { [_ in string]?: string } | null;
+    "host": string;
+    "port": number;
+    "database": string;
+    "user": string;
+    "sslMode": string;
+    "rootCert": string;
+    "cert": string;
+    "key": string;
+    "archived": boolean;
+}
+
+/**
  * StatusView is the state of an open connection.
  */
 export interface StatusView {
     "id": string;
     "state": string;
     "diagnosis": DiagnosisView;
+}
+
+/**
+ * VaultView says where passwords are being kept, and warns when the honest
+ * answer is "until Hermes quits".
+ * 
+ * The warning is prose because it is shown to a person and has to name what to
+ * install. It is empty exactly when the keychain of the system is in use, which
+ * is what the window decides whether to draw a banner from.
+ */
+export interface VaultView {
+    "backend": string;
+    "warning": string;
 }

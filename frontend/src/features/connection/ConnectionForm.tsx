@@ -4,14 +4,21 @@ import {
   applyParsed,
   closeConnection,
   databases as listDatabases,
+  deleteConnection,
   emptyForm,
+  formFromSaved,
   openConnection,
   parseURI,
+  saveConnection,
+  savedConnections,
   sslModes,
   testConnection,
+  vaultStatus,
   type ConnectionForm as Form,
   type DiagnosisView,
+  type SavedView,
   type StatusView,
+  type VaultView,
 } from "../../api/connection";
 
 /**
@@ -31,6 +38,8 @@ export function ConnectionForm(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [available, setAvailable] = useState<string[]>([]);
+  const [saved, setSaved] = useState<SavedView[]>([]);
+  const [vault, setVault] = useState<VaultView | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -46,10 +55,36 @@ export function ConnectionForm(): React.JSX.Element {
         // text input rather than the window failing to draw.
       });
 
+    // Asked once, at startup, and never again: the answer cannot change while
+    // the application runs, and asking on every redraw would be a round trip
+    // to a keychain for something already known.
+    vaultStatus()
+      .then((status): void => {
+        if (active) {
+          setVault(status);
+        }
+      })
+      .catch((): void => {
+        // Outside the desktop shell there is no vault to report on, and a
+        // missing banner is better than a window that does not draw.
+      });
+
+    void refreshSaved();
+
     return (): void => {
       active = false;
     };
   }, []);
+
+  async function refreshSaved(): Promise<void> {
+    try {
+      setSaved(await savedConnections());
+    } catch (err) {
+      // A file someone broke by hand is reported rather than swallowed: an
+      // empty list would look exactly like never having saved anything.
+      setNotice(String(err));
+    }
+  }
 
   function update<K extends keyof Form>(field: K, value: Form[K]): void {
     setForm((current): Form => ({ ...current, [field]: value }));
@@ -103,6 +138,47 @@ export function ConnectionForm(): React.JSX.Element {
     }
   }
 
+  async function onSave(): Promise<void> {
+    setBusy(true);
+    try {
+      const stored = await saveConnection(form);
+      // The identifier comes back on a connection that had none, and keeping it
+      // is what makes the next save an edit instead of a second copy.
+      update("id", stored.id);
+      // The password is in the keychain now. Leaving it in the state of a page
+      // that is redrawn and inspected buys nothing.
+      update("password", "");
+      setNotice(`Saved “${stored.name === "" ? stored.host : stored.name}”.`);
+    } catch (err) {
+      setNotice(String(err));
+    } finally {
+      await refreshSaved();
+      setBusy(false);
+    }
+  }
+
+  async function onForget(id: string): Promise<void> {
+    setBusy(true);
+    try {
+      await deleteConnection(id);
+      if (form.id === id) {
+        setForm(emptyForm);
+      }
+      setNotice("The connection and its password were removed.");
+    } catch (err) {
+      setNotice(String(err));
+    } finally {
+      await refreshSaved();
+      setBusy(false);
+    }
+  }
+
+  function onLoad(connection: SavedView): void {
+    setForm(formFromSaved(connection));
+    setDiagnosis(null);
+    setNotice("Loaded. The password comes from the keychain when you connect.");
+  }
+
   async function onClose(): Promise<void> {
     if (status === null) {
       return;
@@ -119,6 +195,18 @@ export function ConnectionForm(): React.JSX.Element {
   return (
     <section className="connection">
       <h2>Connect</h2>
+
+      {vault !== null && <VaultBanner vault={vault} />}
+
+      {saved.length > 0 && (
+        <SavedConnections
+          connections={saved}
+          current={form.id}
+          busy={busy}
+          onLoad={onLoad}
+          onForget={(id): void => void onForget(id)}
+        />
+      )}
 
       <div className="connection__paste">
         <label htmlFor="uri">Paste a connection URI</label>
@@ -231,6 +319,9 @@ export function ConnectionForm(): React.JSX.Element {
             Disconnect
           </button>
         )}
+        <button type="button" onClick={(): void => void onSave()} disabled={busy}>
+          {form.id === "" ? "Save connection" : "Save changes"}
+        </button>
       </div>
 
       {status !== null && <StateIndicator status={status} />}
@@ -245,6 +336,79 @@ export function ConnectionForm(): React.JSX.Element {
       )}
       {diagnosis !== null && <DiagnosisPanel diagnosis={diagnosis} />}
     </section>
+  );
+}
+
+/**
+ * Where passwords are being kept, and a warning when the answer is "nowhere
+ * that outlives this window".
+ *
+ * Drawn only when there is something to say. A machine with a working keyring
+ * gets no banner, because a banner that is always there is a banner nobody
+ * reads on the day it matters.
+ */
+function VaultBanner({ vault }: { vault: VaultView }): React.JSX.Element | null {
+  if (vault.warning === "") {
+    return null;
+  }
+
+  return (
+    <p className="connection__vault" role="status">
+      {vault.warning}
+    </p>
+  );
+}
+
+/**
+ * The connections that have been saved.
+ *
+ * Loading one fills the form and leaves the password field empty: the Go side
+ * reads it from the keychain at the moment it connects, so it never travels out
+ * here. Forgetting one takes its password with it.
+ */
+function SavedConnections(props: {
+  connections: SavedView[];
+  current: string;
+  busy: boolean;
+  onLoad: (connection: SavedView) => void;
+  onForget: (id: string) => void;
+}): React.JSX.Element {
+  return (
+    <div className="connection__saved">
+      <p>Saved connections</p>
+      <ul>
+        {props.connections.map((connection): React.JSX.Element => (
+          <li key={connection.id}>
+            <button
+              type="button"
+              className={connection.id === props.current ? "is-selected" : ""}
+              onClick={(): void => {
+                props.onLoad(connection);
+              }}
+            >
+              <span className="connection__saved-name">
+                {connection.name === "" ? connection.host : connection.name}
+              </span>
+              <span className="connection__saved-target">
+                {connection.user}@{connection.host}:{connection.port}
+                {connection.database === "" ? "" : `/${connection.database}`}
+              </span>
+            </button>
+            <button
+              type="button"
+              className="connection__forget"
+              disabled={props.busy}
+              aria-label={`Forget ${connection.name === "" ? connection.host : connection.name}`}
+              onClick={(): void => {
+                props.onForget(connection.id);
+              }}
+            >
+              Forget
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

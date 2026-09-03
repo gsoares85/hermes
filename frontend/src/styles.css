@@ -204,3 +204,55 @@ body {
   border-color: var(--text);
   font-weight: 600;
 }
+
+/* Drawn only when there is no keychain, so it has to read as a warning at a
+   glance without being an error: nothing has failed, the passwords simply will
+   not outlive the window. */
+.connection__vault {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid #e8a33d;
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+
+.connection__saved ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0.35rem 0 1rem;
+  padding: 0;
+}
+
+.connection__saved li {
+  display: flex;
+  align-items: stretch;
+  gap: 0.35rem;
+}
+
+/* The row grows and the Forget button does not, so a long host name pushes
+   against the edge of the panel rather than against the button. */
+.connection__saved li > button:first-child {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  text-align: left;
+}
+
+.connection__saved button.is-selected {
+  border-color: var(--text);
+}
+
+.connection__saved-name {
+  font-weight: 600;
+}
+
+.connection__saved-target {
+  color: var(--text-muted);
+  font-size: 0.85em;
+}
