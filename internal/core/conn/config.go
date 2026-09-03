@@ -10,6 +10,30 @@ import (
 // ErrInvalidConfig is returned by Validate for a connection that cannot be used.
 var ErrInvalidConfig = errors.New("invalid connection")
 
+// InvalidField is what Validate returns, and it names the field the rule is
+// about as well as stating the rule.
+//
+// The name exists so that a caller reading a connection out of a file can point
+// at the line the field is on. Matching the message with a string would be the
+// alternative, and it would break the first time one of these sentences is
+// reworded — the sort of coupling that survives review and fails in front of
+// someone trying to fix their own file.
+type InvalidField struct {
+	// Field is the name of the offending field, spelled the way the
+	// connections file spells it: host, port, user, sslmode.
+	Field string
+	// Problem states what is wrong, without ever quoting a secret.
+	Problem string
+}
+
+func (e InvalidField) Error() string {
+	return fmt.Sprintf("%s: %s", ErrInvalidConfig, e.Problem)
+}
+
+// Unwrap keeps errors.Is(err, ErrInvalidConfig) true for every caller that was
+// written before the field had a name.
+func (e InvalidField) Unwrap() error { return ErrInvalidConfig }
+
 // DefaultPort is the port PostgreSQL listens on unless told otherwise.
 const DefaultPort = 5432
 
@@ -73,6 +97,13 @@ func (c Config) EffectiveDatabase() string {
 // the process: String and LogValue redact it, so neither a %v in an error nor a
 // logger that was handed the whole struct can print it.
 type Config struct {
+	// ID identifies this connection for as long as it exists, and is what the
+	// password in the keychain is filed under. It is empty for a connection
+	// that was never saved — one built from a URI to open something once — and
+	// Validate does not require it, because a connection with no name and no
+	// file behind it still connects.
+	ID string
+
 	// Name is what the user calls this connection. It has no effect on the
 	// connection itself.
 	Name string
@@ -135,11 +166,11 @@ func copyOf(original map[string]string) map[string]string {
 func (c Config) Validate() error {
 	switch {
 	case strings.TrimSpace(c.Host) == "":
-		return fmt.Errorf("%w: no host", ErrInvalidConfig)
+		return InvalidField{Field: "host", Problem: "no host"}
 	case c.Port < 1 || c.Port > 65535:
-		return fmt.Errorf("%w: port %d is outside 1-65535", ErrInvalidConfig, c.Port)
+		return InvalidField{Field: "port", Problem: fmt.Sprintf("port %d is outside 1-65535", c.Port)}
 	case strings.TrimSpace(c.User) == "":
-		return fmt.Errorf("%w: no user", ErrInvalidConfig)
+		return InvalidField{Field: "user", Problem: "no user"}
 	}
 
 	if err := c.TLS.Mode.validate(); err != nil {
@@ -162,7 +193,10 @@ func (m SSLMode) validate() error {
 		}
 	}
 
-	return fmt.Errorf("%w: sslmode %q is not one of %v", ErrInvalidConfig, m, SSLModes())
+	return InvalidField{
+		Field:   "sslmode",
+		Problem: fmt.Sprintf("sslmode %q is not one of %v", m, SSLModes()),
+	}
 }
 
 // String renders the connection without its password.
@@ -182,6 +216,7 @@ func (c Config) String() string {
 // rather than by everyone remembering to redact at each call site.
 func (c Config) LogValue() slog.Value {
 	return slog.GroupValue(
+		slog.String("id", c.ID),
 		slog.String("name", c.Name),
 		slog.String("host", c.Host),
 		slog.Int("port", c.Port),
