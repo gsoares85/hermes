@@ -106,6 +106,23 @@ func (r Ref) String() string {
 	return r.Service + "/" + r.Account
 }
 
+// Usable is the guard every vault method begins with, and the reason it lives
+// beside the contract rather than inside one implementation: the in-memory
+// vault and each keychain have to refuse the same calls, or the double the core
+// is tested against would be more forgiving than the store a user has.
+//
+// A call that was given up on does nothing, and a reference that addresses
+// nothing is refused before it can reach a store. The context is checked even
+// where the store is a map, because on macOS and on Linux it is not: reading an
+// item there can open a dialog and wait for a person.
+func Usable(ctx context.Context, ref Ref) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("giving up on %v: %w", ref, err)
+	}
+
+	return ref.Validate()
+}
+
 // Vault stores secrets where the operating system keeps them.
 //
 // Every method takes a context because reading a keychain is not a map lookup:

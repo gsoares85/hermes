@@ -94,6 +94,12 @@ jobs:
       - name: Lint Go with the integration tag
         run: golangci-lint run --build-tags=integration
 
+      # The suite behind the keychain tag only builds when the tag is set, so
+      # without this the one code path that talks to a real keychain would be
+      # the one nothing checks.
+      - name: Lint Go with the keychain tag
+        run: golangci-lint run --build-tags=keychain
+
       # Lifecycle scripts of every transitive dependency would otherwise run
       # with the credentials of the runner. Linting needs no native binary.
       - name: Install frontend dependencies
@@ -163,7 +169,11 @@ jobs:
       # the pgx adapter sits behind the thin interfaces of internal/driver and
       # is exercised by the integration job, which this one does not run.
       # Counting its statements while ignoring its coverage would drag the
-      # number down for code that is in fact tested. The conformance suite of
+      # number down for code that is in fact tested. internal/vault is out for
+      # the same reason and by the same argument: only one of its three
+      # implementations compiles on any given machine, and all three are
+      # exercised by the keychain job, which runs on three runners and feeds
+      # no profile. The conformance suite of
       # the vault is left out for a different reason: it is test code that had
       # to be an ordinary package, because Go cannot share a helper written in a
       # _test.go file with another package's tests, and more than half of it is
@@ -171,7 +181,7 @@ jobs:
       # profile with everything ignored is refused.
       - name: Enforce the coverage floor
         run: |
-          go run ./scripts/checkcoverage -profile=coverage.out -min=85             -ignore=github.com/gsoares85/hermes/internal/driver/postgres,github.com/gsoares85/hermes/internal/core/secret/secrettest
+          go run ./scripts/checkcoverage -profile=coverage.out -min=85             -ignore=github.com/gsoares85/hermes/internal/driver/postgres,github.com/gsoares85/hermes/internal/vault,github.com/gsoares85/hermes/internal/core/secret/secrettest
 
       # A gate nobody has seen fail is a gate nobody knows works. This feeds it
       # a profile that is deliberately below the floor and fails the job if the
@@ -236,6 +246,59 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+  # The one job that talks to a real keychain. Everything else in the pipeline
+  # runs against the in-memory vault, which is exactly the double the
+  # implementations here have to be proven not to be more forgiving than.
+  #
+  # It fails rather than skips when a runner has no keyring: a skip would turn
+  # the job into one that passes by doing nothing, and the difference would only
+  # surface on the machine of someone trying to save a password.
+  keychain:
+    name: Keychain (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A GitHub runner has no desktop session, so it has neither a session bus
+      # nor a keyring on it. Both are installed and started here, which is the
+      # only way the Linux test is the real thing rather than a check that the
+      # fallback works.
+      - name: Install a keyring and a session bus
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gnome-keyring dbus-x11 libglib2.0-bin
+
+      # The empty password creates and unlocks the login keyring: a keyring that
+      # is locked answers every read with a dialog nobody is there to accept.
+      # gdbus waits for the daemon to claim the name, so the test does not race
+      # the daemon it just started.
+      - name: Run the contract against the keyring of the session
+        if: runner.os == 'Linux'
+        run: |
+          dbus-run-session -- bash -c '
+            echo -n "" | gnome-keyring-daemon --unlock --components=secrets
+            gdbus wait --session --timeout 10 org.freedesktop.secrets
+            go test -tags=keychain -count=1 -timeout=5m ./internal/vault/...
+          '
+
+      # macOS and Windows keep the store of the logged-in user running already:
+      # the login keychain and the Credential Manager are part of the session.
+      - name: Run the contract against the keychain of the system
+        if: runner.os != 'Linux'
+        run: go test -tags=keychain -count=1 -timeout=5m ./internal/vault/...
 
   integration:
     name: Integration tests

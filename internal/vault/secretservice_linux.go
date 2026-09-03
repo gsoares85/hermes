@@ -1,0 +1,312 @@
+//go:build linux
+
+package vault
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/godbus/dbus/v5"
+
+	"github.com/gsoares85/hermes/internal/core/secret"
+)
+
+const (
+	systemBackend = "the Secret Service of this desktop session"
+	systemAdvice  = "Install and start a keyring — gnome-keyring or kwalletmanager — and start Hermes again."
+)
+
+// Names from the Secret Service specification, which is the interface every
+// keyring on Linux implements. Hermes speaks it over the session bus rather
+// than through the keyring of one particular desktop, so GNOME and KDE are the
+// same code path.
+const (
+	busName     = "org.freedesktop.secrets"
+	servicePath = dbus.ObjectPath("/org/freedesktop/secrets")
+	// The collection the desktop unlocks at login. Writing to the alias rather
+	// than to a named collection is what keeps this working on a session whose
+	// default keyring is not called "login".
+	collectionPath = dbus.ObjectPath("/org/freedesktop/secrets/aliases/default")
+
+	serviceInterface    = "org.freedesktop.Secret.Service"
+	collectionInterface = "org.freedesktop.Secret.Collection"
+	itemInterface       = "org.freedesktop.Secret.Item"
+	promptInterface     = "org.freedesktop.Secret.Prompt"
+
+	labelProperty      = "org.freedesktop.Secret.Item.Label"
+	attributesProperty = "org.freedesktop.Secret.Item.Attributes"
+
+	// noPrompt is the path the specification uses to say that an operation
+	// needed no interaction. It is not an object.
+	noPrompt = dbus.ObjectPath("/")
+)
+
+// secretService stores secrets in the keyring of the desktop session.
+//
+// The connection to the session bus is opened once, when the vault is opened,
+// and held for the life of the application: every call is a round trip, and
+// dialling the bus on each one would put a second round trip in front of every
+// password.
+type secretService struct {
+	conn *dbus.Conn
+	// session is the transport the keyring hands out for carrying values. The
+	// plain algorithm is chosen deliberately: the alternative encrypts the
+	// value over a socket that is already restricted to this user, and buys
+	// nothing the socket permissions do not already give.
+	session dbus.ObjectPath
+}
+
+// payload mirrors the Secret structure of the specification, which is how a
+// value travels to and from the keyring.
+type payload struct {
+	Session     dbus.ObjectPath
+	Parameters  []byte
+	Value       []byte
+	ContentType string
+}
+
+func openSystem(ctx context.Context) (Vault, error) {
+	conn, err := dbus.SessionBusPrivate()
+	if err != nil {
+		return nil, fmt.Errorf("%w: no session bus: %w", secret.ErrUnavailable, err)
+	}
+
+	vault, err := start(ctx, conn)
+	if err != nil {
+		_ = conn.Close()
+
+		return nil, err
+	}
+
+	return vault, nil
+}
+
+// start finishes the handshake and asks the keyring for a session. It is the
+// availability probe as much as the setup: a bus with nobody answering on
+// org.freedesktop.secrets fails here, and that is a machine with no keyring.
+func start(ctx context.Context, conn *dbus.Conn) (Vault, error) {
+	if err := conn.Auth(nil); err != nil {
+		return nil, fmt.Errorf("%w: authenticating to the session bus: %w", secret.ErrUnavailable, err)
+	}
+	if err := conn.Hello(); err != nil {
+		return nil, fmt.Errorf("%w: greeting the session bus: %w", secret.ErrUnavailable, err)
+	}
+
+	var (
+		output  dbus.Variant
+		session dbus.ObjectPath
+	)
+	call := conn.Object(busName, servicePath).
+		CallWithContext(ctx, serviceInterface+".OpenSession", 0, "plain", dbus.MakeVariant(""))
+	if err := call.Store(&output, &session); err != nil {
+		return nil, fmt.Errorf("%w: opening a session with %s: %w", secret.ErrUnavailable, busName, err)
+	}
+
+	return &secretService{conn: conn, session: session}, nil
+}
+
+func (s *secretService) Get(ctx context.Context, ref secret.Ref) (string, error) {
+	if err := secret.Usable(ctx, ref); err != nil {
+		return "", err
+	}
+
+	item, err := s.find(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+
+	var value payload
+	call := s.object(item).CallWithContext(ctx, itemInterface+".GetSecret", 0, s.session)
+	if err := call.Store(&value); err != nil {
+		return "", fmt.Errorf("reading %v from %s: %w", ref, systemBackend, err)
+	}
+
+	return string(value.Value), nil
+}
+
+func (s *secretService) Set(ctx context.Context, ref secret.Ref, value string) error {
+	if err := secret.Usable(ctx, ref); err != nil {
+		return err
+	}
+	if value == "" {
+		return fmt.Errorf("%w: %v", secret.ErrEmptySecret, ref)
+	}
+
+	if err := s.unlock(ctx, collectionPath); err != nil {
+		return err
+	}
+
+	properties := map[string]dbus.Variant{
+		labelProperty:      dbus.MakeVariant(ref.String()),
+		attributesProperty: dbus.MakeVariant(attributes(ref)),
+	}
+	stored := payload{
+		Session:     s.session,
+		Parameters:  []byte{},
+		Value:       []byte(value),
+		ContentType: "text/plain; charset=utf8",
+	}
+
+	var item, prompt dbus.ObjectPath
+	// The last argument replaces an item carrying the same attributes instead
+	// of filing a second one beside it. Without it, editing a password would
+	// leave two entries and the next read would be a coin toss.
+	call := s.object(collectionPath).
+		CallWithContext(ctx, collectionInterface+".CreateItem", 0, properties, stored, true)
+	if err := call.Store(&item, &prompt); err != nil {
+		return fmt.Errorf("storing %v in %s: %w", ref, systemBackend, err)
+	}
+	if item != noPrompt {
+		return nil
+	}
+
+	return s.answer(ctx, prompt)
+}
+
+func (s *secretService) Delete(ctx context.Context, ref secret.Ref) error {
+	if err := secret.Usable(ctx, ref); err != nil {
+		return err
+	}
+
+	item, err := s.find(ctx, ref)
+	if err != nil {
+		return err
+	}
+
+	var prompt dbus.ObjectPath
+	if err := s.object(item).CallWithContext(ctx, itemInterface+".Delete", 0).Store(&prompt); err != nil {
+		return fmt.Errorf("deleting %v from %s: %w", ref, systemBackend, err)
+	}
+
+	return s.answer(ctx, prompt)
+}
+
+// Close hangs up on the session bus.
+func (s *secretService) Close() error {
+	if err := s.conn.Close(); err != nil {
+		return fmt.Errorf("closing the connection to the session bus: %w", err)
+	}
+
+	return nil
+}
+
+// find locates the item a reference addresses, unlocking it when the keyring
+// has it locked.
+func (s *secretService) find(ctx context.Context, ref secret.Ref) (dbus.ObjectPath, error) {
+	var unlocked, locked []dbus.ObjectPath
+	call := s.service().CallWithContext(ctx, serviceInterface+".SearchItems", 0, attributes(ref))
+	if err := call.Store(&unlocked, &locked); err != nil {
+		return "", fmt.Errorf("searching %s for %v: %w", systemBackend, ref, err)
+	}
+
+	if len(unlocked) > 0 {
+		return unlocked[0], nil
+	}
+	if len(locked) == 0 {
+		return "", fmt.Errorf("%w: %v", secret.ErrNotFound, ref)
+	}
+
+	if err := s.unlock(ctx, locked[0]); err != nil {
+		return "", err
+	}
+
+	return locked[0], nil
+}
+
+func (s *secretService) unlock(ctx context.Context, path dbus.ObjectPath) error {
+	var (
+		unlocked []dbus.ObjectPath
+		prompt   dbus.ObjectPath
+	)
+	call := s.service().CallWithContext(ctx, serviceInterface+".Unlock", 0, []dbus.ObjectPath{path})
+	if err := call.Store(&unlocked, &prompt); err != nil {
+		return fmt.Errorf("unlocking %s: %w", path, err)
+	}
+	if len(unlocked) > 0 {
+		return nil
+	}
+
+	return s.answer(ctx, prompt)
+}
+
+// answer drives the dialog the keyring puts in front of an operation and waits
+// for the person to deal with it.
+//
+// The wait is bounded by the context and by nothing else, which is why every
+// method of this vault takes one: a locked keyring asks for a password, and a
+// call that could not be given up on would be a window frozen behind a dialog
+// the person may never have seen.
+func (s *secretService) answer(ctx context.Context, prompt dbus.ObjectPath) error {
+	if prompt == noPrompt {
+		return nil
+	}
+
+	match := []dbus.MatchOption{
+		dbus.WithMatchObjectPath(prompt),
+		dbus.WithMatchInterface(promptInterface),
+		dbus.WithMatchMember("Completed"),
+	}
+	if err := s.conn.AddMatchSignalContext(ctx, match...); err != nil {
+		return fmt.Errorf("listening for the answer to %s: %w", prompt, err)
+	}
+	defer func() { _ = s.conn.RemoveMatchSignal(match...) }()
+
+	completed := make(chan *dbus.Signal, 4)
+	s.conn.Signal(completed)
+	defer s.conn.RemoveSignal(completed)
+
+	// The empty window identifier lets the keyring place the dialog itself.
+	// Hermes has no handle to give it that means the same thing on X11 and on
+	// Wayland, and a wrong one puts the dialog behind the window it belongs to.
+	if err := s.object(prompt).CallWithContext(ctx, promptInterface+".Prompt", 0, "").Err; err != nil {
+		return fmt.Errorf("asking %s for authorisation: %w", prompt, err)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Leaving the dialog on screen after giving up would ask the person
+			// for a password nothing is waiting for any more.
+			_ = s.object(prompt).Call(promptInterface+".Dismiss", 0).Err
+
+			return fmt.Errorf("giving up on the authorisation dialog: %w", ctx.Err())
+		case signal := <-completed:
+			if signal == nil || signal.Path != prompt || signal.Name != promptInterface+".Completed" {
+				continue
+			}
+
+			return completion(signal)
+		}
+	}
+}
+
+func completion(signal *dbus.Signal) error {
+	if len(signal.Body) == 0 {
+		return fmt.Errorf("%w: the authorisation dialog answered nothing", secret.ErrUnavailable)
+	}
+
+	dismissed, ok := signal.Body[0].(bool)
+	if !ok {
+		return fmt.Errorf("%w: the authorisation dialog answered %T, want a boolean",
+			secret.ErrUnavailable, signal.Body[0])
+	}
+	if dismissed {
+		return fmt.Errorf("%w: the authorisation dialog was dismissed", secret.ErrUnavailable)
+	}
+
+	return nil
+}
+
+// attributes is what an item is found by. The keyring indexes them, so they are
+// the reference split into fields — never the secret, which the specification
+// would happily let us put here and which every keyring exposes to anything
+// allowed to search.
+func attributes(ref secret.Ref) map[string]string {
+	return map[string]string{"service": ref.Service, "account": ref.Account}
+}
+
+func (s *secretService) service() dbus.BusObject { return s.object(servicePath) }
+
+func (s *secretService) object(path dbus.ObjectPath) dbus.BusObject {
+	return s.conn.Object(busName, path)
+}

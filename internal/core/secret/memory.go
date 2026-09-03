@@ -31,7 +31,7 @@ func NewMemory() *Memory {
 
 // Get returns the secret stored under the reference.
 func (m *Memory) Get(ctx context.Context, ref Ref) (string, error) {
-	if err := usable(ctx, ref); err != nil {
+	if err := Usable(ctx, ref); err != nil {
 		return "", err
 	}
 
@@ -48,7 +48,7 @@ func (m *Memory) Get(ctx context.Context, ref Ref) (string, error) {
 
 // Set stores the secret, replacing whatever the reference held.
 func (m *Memory) Set(ctx context.Context, ref Ref, value string) error {
-	if err := usable(ctx, ref); err != nil {
+	if err := Usable(ctx, ref); err != nil {
 		return err
 	}
 	if value == "" {
@@ -65,7 +65,7 @@ func (m *Memory) Set(ctx context.Context, ref Ref, value string) error {
 
 // Delete removes the secret, answering ErrNotFound when there was none.
 func (m *Memory) Delete(ctx context.Context, ref Ref) error {
-	if err := usable(ctx, ref); err != nil {
+	if err := Usable(ctx, ref); err != nil {
 		return err
 	}
 
@@ -78,19 +78,4 @@ func (m *Memory) Delete(ctx context.Context, ref Ref) error {
 	delete(m.values, ref)
 
 	return nil
-}
-
-// usable is the guard every method shares: a call that was given up on does
-// nothing, and a reference that addresses nothing is refused before it can
-// reach the store.
-//
-// The context is checked even though a map cannot block. The implementations
-// backed by a keychain can, and a double that is easier to satisfy than the real
-// thing would let the core pass tests it has no right to pass.
-func usable(ctx context.Context, ref Ref) error {
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("giving up on %v: %w", ref, err)
-	}
-
-	return ref.Validate()
 }
