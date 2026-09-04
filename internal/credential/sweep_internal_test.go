@@ -30,8 +30,10 @@ func TestAnInterruptRemovesTheFilesOfThisProcess(t *testing.T) {
 	signals := make(chan os.Signal, 1)
 	finished := make(chan struct{})
 
+	interrupted := make(chan os.Signal, 1)
+
 	go func() {
-		store.releaseOnSignal(t.Context(), signals, make(chan struct{}))
+		interrupted <- store.releaseOnSignal(t.Context(), signals, make(chan struct{}))
 		close(finished)
 	}()
 
@@ -40,6 +42,12 @@ func TestAnInterruptRemovesTheFilesOfThisProcess(t *testing.T) {
 
 	if entries, _ := os.ReadDir(directory); len(entries) != 0 {
 		t.Errorf("%d files survived the interrupt", len(entries))
+	}
+	// Answering the signal is what tells the caller to hand it back to the
+	// process. Answering nil here would leave the program unkillable, which is
+	// the defect this assertion exists to catch.
+	if got := <-interrupted; got != os.Interrupt {
+		t.Errorf("releaseOnSignal answered %v, want the signal it consumed", got)
 	}
 }
 
@@ -59,7 +67,9 @@ func TestTheEndOfTheContextRemovesNothing(t *testing.T) {
 	finished := make(chan struct{})
 
 	go func() {
-		store.releaseOnSignal(ctx, make(chan os.Signal), make(chan struct{}))
+		if got := store.releaseOnSignal(ctx, make(chan os.Signal), make(chan struct{})); got != nil {
+			t.Errorf("releaseOnSignal answered %v, want nil: no signal arrived", got)
+		}
 		close(finished)
 	}()
 
@@ -87,7 +97,9 @@ func TestStoppingTheWatchEndsIt(t *testing.T) {
 	finished := make(chan struct{})
 
 	go func() {
-		store.releaseOnSignal(t.Context(), make(chan os.Signal), stopping)
+		if got := store.releaseOnSignal(t.Context(), make(chan os.Signal), stopping); got != nil {
+			t.Errorf("releaseOnSignal answered %v, want nil: no signal arrived", got)
+		}
 		close(finished)
 	}()
 

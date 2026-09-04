@@ -99,15 +99,31 @@ func (s *Store) ReleaseAll() (int, error) {
 }
 
 // ReleaseOnInterrupt removes the password files of this process when the person
-// interrupts it or the system asks it to stop. The returned function stops
-// watching, and does not remove anything: unregistering is not shutting down,
-// and a caller that has finished waiting must not take a live file with it.
+// interrupts it or the system asks it to stop, and then lets the interruption
+// do what it was going to do.
+//
+// The second half of that sentence is the whole difficulty. signal.Notify
+// disarms the default disposition for the entire process, so a handler that
+// cleans up and returns leaves the program unkillable: the first Ctrl-C runs
+// the cleanup and every one after it lands in a channel nobody is reading. The
+// handler therefore restores the default and hands the signal back, so the exit
+// status and the story told to whoever is waiting are the ones they would have
+// been if nothing had been listening.
+//
+// The returned function stops watching and removes nothing: unregistering is
+// not shutting down, and a caller that has finished waiting must not take a
+// live file with it.
 func (s *Store) ReleaseOnInterrupt(ctx context.Context) (stop func()) {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 
 	stopping := make(chan struct{})
-	go s.releaseOnSignal(ctx, signals, stopping)
+
+	go func() {
+		if interrupted := s.releaseOnSignal(ctx, signals, stopping); interrupted != nil {
+			reraise(interrupted)
+		}
+	}()
 
 	var once sync.Once
 
@@ -119,15 +135,33 @@ func (s *Store) ReleaseOnInterrupt(ctx context.Context) (stop func()) {
 	}
 }
 
-func (s *Store) releaseOnSignal(ctx context.Context, signals <-chan os.Signal, stopping <-chan struct{}) {
+// releaseOnSignal waits, and answers the signal that arrived — nil when the
+// watch ended for any other reason.
+//
+// Answering rather than acting is what lets a test drive it: reraise ends the
+// process, and a unit test that called it would take the test binary with it.
+// The end-to-end guarantee is asserted by a child process instead.
+// The channel is bidirectional because signal.Stop needs to be handed the same
+// channel signal.Notify was given, and only this function knows the moment to
+// call it.
+func (s *Store) releaseOnSignal(ctx context.Context, signals chan os.Signal, stopping <-chan struct{}) os.Signal {
 	select {
-	case <-signals:
+	case interrupted := <-signals:
+		// Restored before the cleanup rather than after it: someone pressing
+		// Ctrl-C a second time because the first appeared to do nothing must
+		// get the process killed, not swallowed by a handler that is busy.
+		signal.Stop(signals)
+
 		if _, err := s.ReleaseAll(); err != nil {
 			slog.Warn("removing the password files of this process", "error", err)
 		}
+
+		return interrupted
 	case <-ctx.Done():
 	case <-stopping:
 	}
+
+	return nil
 }
 
 // remove deletes every password file whose owning process the predicate claims.

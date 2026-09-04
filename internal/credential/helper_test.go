@@ -2,6 +2,7 @@ package credential_test
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +26,9 @@ const (
 	reportCredential = "report"
 	// writePassfile writes a password file, then waits to be killed.
 	writePassfile = "passfile"
+	// waitForInterrupt installs the real signal handler, then waits to be
+	// interrupted rather than killed.
+	waitForInterrupt = "interrupt"
 )
 
 // credentialSeenByChild is what the child reports about its own environment.
@@ -46,6 +50,8 @@ func TestHelperProcess(t *testing.T) {
 		report()
 	case writePassfile:
 		writeAndWait()
+	case waitForInterrupt:
+		watchAndWait()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown helper mode %q\n", mode)
 		os.Exit(2)
@@ -60,10 +66,7 @@ func report() {
 		Passfile: os.Getenv("PGPASSFILE"),
 	}
 
-	if err := json.NewEncoder(os.Stdout).Encode(seen); err != nil {
-		os.Exit(3)
-	}
-
+	announce(seen)
 	waitForParent()
 }
 
@@ -71,7 +74,29 @@ func report() {
 // kills this process outright, which is the point: nothing deferred here will
 // ever run, and only the sweep can clean up after it.
 func writeAndWait() {
-	handoff, err := credential.NewStore(os.Getenv(helperDirectory)).InFile(credential.Target{
+	announce(writeHelperPassfile())
+	waitForParent()
+}
+
+// watchAndWait installs the handler a binary installs, and then does nothing at
+// all. Whether this process ever exits is up to that handler, which is the
+// property under test.
+func watchAndWait() {
+	store := helperStore()
+
+	stop := store.ReleaseOnInterrupt(context.Background())
+	defer stop()
+
+	announce("watching, " + writeHelperPassfile())
+	waitForParent()
+}
+
+func helperStore() *credential.Store {
+	return credential.NewStore(os.Getenv(helperDirectory))
+}
+
+func writeHelperPassfile() string {
+	handoff, err := helperStore().InFile(credential.Target{
 		Host:     "db.example.com",
 		Port:     5432,
 		Database: "app",
@@ -83,11 +108,14 @@ func writeAndWait() {
 		os.Exit(3)
 	}
 
-	if err := json.NewEncoder(os.Stdout).Encode(handoff.String()); err != nil {
+	return handoff.String()
+}
+
+// announce writes the one line the parent reads before it acts on this process.
+func announce(value any) {
+	if err := json.NewEncoder(os.Stdout).Encode(value); err != nil {
 		os.Exit(3)
 	}
-
-	waitForParent()
 }
 
 // waitForParent blocks until the parent closes the pipe, or kills this process.
