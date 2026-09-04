@@ -141,14 +141,20 @@ func (f file) configs(source []byte) ([]conn.Config, error) {
 			return nil, locate(source, index, err)
 		}
 
-		if first, repeated := seen[entry.ID]; repeated {
+		// Compared trimmed, because entry.validate judges the identifier
+		// trimmed: without this " a" and "a" pass as two connections and then
+		// collide over one keychain item, which is the failure this check
+		// exists to prevent, arrived at the long way round.
+		id := strings.TrimSpace(entry.ID)
+
+		if first, repeated := seen[id]; repeated {
 			return nil, locate(source, index, conn.InvalidField{
 				Field: "id",
 				Problem: fmt.Sprintf("id %q is already used by connection %d, and two connections cannot share one password",
 					entry.ID, first+1),
 			})
 		}
-		seen[entry.ID] = index
+		seen[id] = index
 
 		configs = append(configs, entry.config())
 	}

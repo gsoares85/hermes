@@ -449,3 +449,55 @@ func TestAFileThatCannotBeReadIsReported(t *testing.T) {
 type failingReader struct{ err error }
 
 func (r failingReader) Read([]byte) (int, error) { return 0, r.err }
+
+// The identifier is what the password is filed under, so two connections
+// sharing one is two connections sharing a password: renaming one, or deleting
+// it, silently takes the other's credential with it.
+//
+// Reading refuses that already. Writing has to refuse it too, or the build can
+// produce a file it cannot itself read back.
+func TestWriteConnectionsRefusesTwoConnectionsWithOneIdentifier(t *testing.T) {
+	t.Parallel()
+
+	var written strings.Builder
+
+	err := profile.WriteConnections(&written, []conn.Config{
+		{ID: "9d0f6e5c-1b2a-4c3d-8e4f-5a6b7c8d9e0f", Host: "first.example.com", Port: 5432, User: "u"},
+		{ID: "9d0f6e5c-1b2a-4c3d-8e4f-5a6b7c8d9e0f", Host: "second.example.com", Port: 5432, User: "u"},
+	})
+	if err == nil {
+		t.Fatal("WriteConnections wrote a file it could not read back")
+	}
+	if !strings.Contains(err.Error(), "9d0f6e5c") {
+		t.Errorf("WriteConnections = %v, want it to name the identifier that repeats", err)
+	}
+	if written.Len() != 0 {
+		t.Errorf("WriteConnections wrote %q before refusing", written.String())
+	}
+}
+
+// Whitespace around an identifier is not a second identifier. The validation
+// trims before it judges, so the duplicate check has to trim before it compares
+// — otherwise " a" and "a" pass as distinct and then collide in the keychain,
+// which is the failure the check exists to prevent, arrived at the long way.
+func TestReadConnectionsSeesThroughWhitespaceInAnIdentifier(t *testing.T) {
+	t.Parallel()
+
+	_, err := profile.ReadConnections(strings.NewReader(`version = 1
+
+[[connection]]
+id   = "9d0f6e5c-1b2a-4c3d-8e4f-5a6b7c8d9e0f"
+host = "first.example.com"
+port = 5432
+user = "u"
+
+[[connection]]
+id   = " 9d0f6e5c-1b2a-4c3d-8e4f-5a6b7c8d9e0f "
+host = "second.example.com"
+port = 5432
+user = "u"
+`))
+	if err == nil {
+		t.Fatal("ReadConnections accepted two connections whose identifiers differ only in whitespace")
+	}
+}

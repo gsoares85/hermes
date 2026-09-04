@@ -51,11 +51,26 @@ func ReadConnections(r io.Reader) ([]conn.Config, error) {
 func WriteConnections(w io.Writer, connections []conn.Config) error {
 	written := file{Version: Version, Connections: make([]entry, 0, len(connections))}
 
+	// The identifier is what the password is filed under, so a missing one is a
+	// password nothing can ever find again and a repeated one is two
+	// connections quietly sharing a credential. ReadConnections refuses both;
+	// refusing them here too is what stops this build writing a file it cannot
+	// itself read back.
+	seen := make(map[string]int, len(connections))
+
 	for index, config := range connections {
-		if strings.TrimSpace(config.ID) == "" {
+		id := strings.TrimSpace(config.ID)
+		if id == "" {
 			return fmt.Errorf("%w: connection %d (%s) has no id, so its password could never be found again",
 				ErrInvalidFile, index+1, config.Name)
 		}
+
+		if first, repeated := seen[id]; repeated {
+			return fmt.Errorf("%w: connections %d and %d share the id %q, and two connections cannot share one password",
+				ErrInvalidFile, first+1, index+1, id)
+		}
+		seen[id] = index
+
 		written.Connections = append(written.Connections, entryOf(config))
 	}
 
