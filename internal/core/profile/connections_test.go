@@ -501,3 +501,41 @@ user = "u"
 		t.Fatal("ReadConnections accepted two connections whose identifiers differ only in whitespace")
 	}
 }
+
+// The file is a value: reading one and editing what comes back must not reach
+// into whatever produced it, and writing one must not leave the caller's
+// connection sharing a map with the entry that was written. Config.Clone exists
+// for exactly this, and the round trip through TOML has to honour it.
+func TestTheFileSharesNoMapWithTheConnectionsItCarries(t *testing.T) {
+	t.Parallel()
+
+	original := conn.Config{
+		ID: "9d0f6e5c-1b2a-4c3d-8e4f-5a6b7c8d9e0f", Host: "db.example.com", Port: 5432, User: "u",
+		Params:  map[string]string{"application_name": "hermes"},
+		Options: map[string]string{"connect_timeout": "10"},
+	}
+
+	var written strings.Builder
+	if err := profile.WriteConnections(&written, []conn.Config{original}); err != nil {
+		t.Fatalf("WriteConnections = %v", err)
+	}
+
+	read, err := profile.ReadConnections(strings.NewReader(written.String()))
+	if err != nil {
+		t.Fatalf("ReadConnections = %v", err)
+	}
+	if len(read) != 1 {
+		t.Fatalf("ReadConnections returned %d connections, want 1", len(read))
+	}
+
+	// Editing what came back must not reach the connection that was written.
+	read[0].Params["application_name"] = "something else"
+	read[0].Options["connect_timeout"] = "0"
+
+	if original.Params["application_name"] != "hermes" {
+		t.Errorf("editing what was read changed the connection that was written: %v", original.Params)
+	}
+	if original.Options["connect_timeout"] != "10" {
+		t.Errorf("editing what was read changed the connection that was written: %v", original.Options)
+	}
+}
