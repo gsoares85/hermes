@@ -5,11 +5,18 @@ package vault
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 
 	"github.com/gsoares85/hermes/internal/core/secret"
 )
+
+// How long the tidying-up after a cancelled dialog is allowed to take.
+//
+// Short, because the agent it talks to is the same one already suspected of
+// being stuck. See dismiss.
+const dismissTimeout = 2 * time.Second
 
 const (
 	systemBackend = "the Secret Service of this desktop session"
@@ -265,9 +272,7 @@ func (s *secretService) answer(ctx context.Context, prompt dbus.ObjectPath) erro
 	for {
 		select {
 		case <-ctx.Done():
-			// Leaving the dialog on screen after giving up would ask the person
-			// for a password nothing is waiting for any more.
-			_ = s.object(prompt).Call(promptInterface+".Dismiss", 0).Err
+			s.dismiss(prompt)
 
 			return fmt.Errorf("giving up on the authorisation dialog: %w", ctx.Err())
 		case signal := <-completed:
@@ -278,6 +283,23 @@ func (s *secretService) answer(ctx context.Context, prompt dbus.ObjectPath) erro
 			return completion(signal)
 		}
 	}
+}
+
+// dismiss takes the dialog off the screen after Hermes has given up on it:
+// leaving it there asks the person for a password nothing is waiting for any
+// more.
+//
+// It gets a deadline of its own rather than inheriting the one that just
+// expired — a cancelled context would refuse the call outright — and it is a
+// short one, because the agent that has to answer is the same one already
+// suspected of being stuck. A dialog left on screen is untidy; a goroutine
+// wedged inside the code that exists to guarantee cancellation is the bug this
+// whole path was written to prevent.
+func (s *secretService) dismiss(prompt dbus.ObjectPath) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), dismissTimeout)
+	defer cancel()
+
+	_ = s.object(prompt).CallWithContext(ctx, promptInterface+".Dismiss", 0).Err
 }
 
 func completion(signal *dbus.Signal) error {
