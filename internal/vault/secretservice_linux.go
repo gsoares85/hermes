@@ -275,7 +275,18 @@ func (s *secretService) answer(ctx context.Context, prompt dbus.ObjectPath) erro
 			s.dismiss(prompt)
 
 			return fmt.Errorf("giving up on the authorisation dialog: %w", ctx.Err())
-		case signal := <-completed:
+		case signal, listening := <-completed:
+			// Closing the bus connection closes this channel, and a closed
+			// channel answers immediately and for ever. Reading the second
+			// value is what tells the two apart: without it, quitting Hermes
+			// with a dialog still open turned this loop into a spin consuming
+			// a core until the context — which has no deadline of its own —
+			// happened to be cancelled.
+			if !listening {
+				return fmt.Errorf("%w: the session bus closed while %s was on screen",
+					secret.ErrUnavailable, prompt)
+			}
+
 			if signal == nil || signal.Path != prompt || signal.Name != promptInterface+".Completed" {
 				continue
 			}
