@@ -200,7 +200,7 @@ func (s *ConnectionService) Save(ctx context.Context, form ConnectionForm) (Save
 		config.ID = conn.NewID()
 	}
 	if err := config.Validate(); err != nil {
-		return SavedView{}, redactErr(err)
+		return SavedView{}, secret.Error(err)
 	}
 
 	s.saved.Lock()
@@ -208,7 +208,7 @@ func (s *ConnectionService) Save(ctx context.Context, form ConnectionForm) (Save
 
 	saved, err := s.store.Load()
 	if err != nil {
-		return SavedView{}, redactErr(err)
+		return SavedView{}, secret.Error(err)
 	}
 
 	// The store is handed a connection with the password taken out of it. The
@@ -219,7 +219,7 @@ func (s *ConnectionService) Save(ctx context.Context, form ConnectionForm) (Save
 	stored.Password = ""
 
 	if err := s.store.Save(replacing(saved, stored)); err != nil {
-		return SavedView{}, redactErr(err)
+		return SavedView{}, secret.Error(err)
 	}
 
 	// After the file and not before it. Either order can fail halfway, and this
@@ -240,7 +240,7 @@ func (s *ConnectionService) List() ([]SavedView, error) {
 
 	saved, err := s.store.Load()
 	if err != nil {
-		return nil, redactErr(err)
+		return nil, secret.Error(err)
 	}
 
 	views := make([]SavedView, 0, len(saved))
@@ -262,7 +262,7 @@ func (s *ConnectionService) Delete(ctx context.Context, id string) error {
 
 	saved, err := s.store.Load()
 	if err != nil {
-		return redactErr(err)
+		return secret.Error(err)
 	}
 
 	remaining, found := without(saved, id)
@@ -271,7 +271,7 @@ func (s *ConnectionService) Delete(ctx context.Context, id string) error {
 	}
 
 	if err := s.store.Save(remaining); err != nil {
-		return redactErr(err)
+		return secret.Error(err)
 	}
 
 	// A connection saved without a password has no secret to remove, and that
@@ -279,7 +279,7 @@ func (s *ConnectionService) Delete(ctx context.Context, id string) error {
 	if err := s.vault.Delete(ctx, secret.ConnectionRef(id)); err != nil &&
 		!errors.Is(err, secret.ErrNotFound) {
 		return fmt.Errorf("the connection was removed, but its password is still in the keychain: %w",
-			redactErr(err))
+			secret.Error(err))
 	}
 
 	return nil
@@ -298,7 +298,7 @@ func (s *ConnectionService) keep(ctx context.Context, config conn.Config) error 
 	}
 
 	if err := s.vault.Set(ctx, secret.ConnectionRef(config.ID), config.Password); err != nil {
-		return fmt.Errorf("the connection was saved, but its password was not: %w", redactErr(err))
+		return fmt.Errorf("the connection was saved, but its password was not: %w", secret.Error(err))
 	}
 
 	return nil
@@ -324,7 +324,7 @@ func (s *ConnectionService) credentials(ctx context.Context, config conn.Config)
 	}
 	if err != nil {
 		return config, fmt.Errorf("reading the password of this connection from the keychain: %w",
-			redactErr(err))
+			secret.Error(err))
 	}
 	config.Password = stored
 
@@ -407,7 +407,7 @@ func (s *ConnectionService) Open(ctx context.Context, form ConnectionForm) (Stat
 
 	connection, err := conn.Open(ctx, s.opener, config)
 	if err != nil {
-		return StatusView{}, redactErr(err)
+		return StatusView{}, secret.Error(err)
 	}
 
 	status := connection.Check(ctx)
@@ -473,7 +473,7 @@ func (s *ConnectionService) Databases(ctx context.Context, id string) ([]string,
 
 	databases, err := connection.Databases(ctx)
 
-	return databases, redactErr(err)
+	return databases, secret.Error(err)
 }
 
 // SSLModes lists the modes the form offers, so that the list lives in one place
@@ -513,19 +513,6 @@ func newID() (string, error) {
 	}
 
 	return hex.EncodeToString(raw), nil
-}
-
-// redactErr is the last thing every error crosses on its way to the window.
-//
-// Nothing that reaches here carries a password today, but the pool builder
-// deliberately quotes the whole connection string into one of its errors, and
-// the boundary is the wrong place to be relying on that staying true.
-func redactErr(err error) error {
-	if err == nil {
-		return nil
-	}
-
-	return errors.New(conn.Redact(err.Error()))
 }
 
 func (s *ConnectionService) lookup(id string) (*conn.Connection, error) {

@@ -1,6 +1,7 @@
-package conn
+package secret
 
 import (
+	"errors"
 	"net/url"
 	"regexp"
 	"strings"
@@ -52,7 +53,12 @@ var secretQueryKeys = []string{"password", "sslpassword"}
 // A connection string reaches a log, an error message and a progress report,
 // and every one of those is read by someone who should not learn the password.
 // Redacting is therefore not a courtesy: it is the only form in which a DSN is
-// allowed to leave this package.
+// allowed to leave the process.
+//
+// It lives beside the vault contract rather than beside the connection model
+// because the callers are spread across the core: a diagnosis, a job report and
+// an error crossing the window boundary all need it, and none of them has any
+// other reason to know what a connection is.
 func Redact(text string) string {
 	trimmed := strings.TrimSpace(text)
 
@@ -95,4 +101,21 @@ func redactURL(parsed *url.URL) string {
 	}
 
 	return parsed.String()
+}
+
+// Error is the last thing an error crosses on its way out of the process — to
+// the window, to a report, to a terminal.
+//
+// It answers a plain error carrying the redacted text and nothing else. The
+// chain is dropped on purpose: an error that can still be unwrapped answers the
+// original message when anyone asks it to, and a redaction anyone can undo is
+// not one. Callers that need to tell one failure from another match their
+// sentinel before crossing the boundary, which is the side of it where the
+// distinction still means something.
+func Error(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	return errors.New(Redact(err.Error()))
 }

@@ -36,8 +36,14 @@ export function App(): React.JSX.Element {
         <ConnectionForm />
       </main>
 
+      {/*
+        The build that is running, named. A bare version string is ambiguous the
+        moment anything else in the window has one, and the commit and the date
+        stay in the tooltip: enough to identify a build exactly, without a
+        status bar that reads like a changelog.
+      */}
       <footer className="app__status" title={`${info.commit} · ${info.date}`}>
-        <span>{info.version}</span>
+        <span>Hermes {info.version}</span>
         <span>{info.platform}</span>
       </footer>
     </div>

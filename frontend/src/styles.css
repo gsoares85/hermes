@@ -57,8 +57,17 @@ body {
   color: var(--text-muted);
 }
 
+/*
+ * min-height is what pins the footer. A flex item is sized by its content
+ * before it is sized by the container, so a screen taller than the window used
+ * to push the status bar past the bottom edge and take the version with it —
+ * the one line that says which build is running is the one nobody can go and
+ * look up. The overflow puts the scrollbar on this block instead of the page.
+ */
 .app__main {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: 1.5rem;
 }
 

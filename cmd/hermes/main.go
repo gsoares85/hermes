@@ -15,6 +15,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/gsoares85/hermes/frontend"
+	"github.com/gsoares85/hermes/internal/core/secret"
 	"github.com/gsoares85/hermes/internal/driver/postgres"
 	"github.com/gsoares85/hermes/internal/filestore"
 	"github.com/gsoares85/hermes/internal/ui"
@@ -36,7 +37,26 @@ func main() {
 	}
 }
 
+// Level of the Wails system logger. Pinned rather than left to the framework
+// default: at debug level Wails logs the arguments of every bound call, and the
+// arguments of a connection call are a form with a password in it. The
+// redaction below would catch it, but a secret that is never written is better
+// than one that is written and then edited.
+const logLevel = slog.LevelInfo
+
 func run() error {
+	// Every logger in this process, ours and the framework's, writes through
+	// the redaction. Calling Redact at each log statement would be a
+	// discipline, and a discipline is what fails the first time someone is in
+	// a hurry; this makes logging a connection string with its password an
+	// accident that cannot happen through this path.
+	//
+	// The handler underneath is the one the framework would have chosen for
+	// this build, so a release binary keeps discarding its system log and a
+	// development one keeps printing it — only redacted.
+	logger := slog.New(secret.NewHandler(application.DefaultLogger(logLevel).Handler()))
+	slog.SetDefault(logger)
+
 	// Where passwords are kept is decided once, here, and the window is told
 	// the answer rather than allowed to go looking: the dependency gate forbids
 	// internal/ui from reaching for a keychain for the same reason it forbids
@@ -56,11 +76,8 @@ func run() error {
 	app := application.New(application.Options{
 		Name:        "Hermes",
 		Description: "A native, open source database manager for PostgreSQL",
-		// Pinned rather than left to the framework default. At debug level
-		// Wails logs the arguments of every bound call, and the arguments of
-		// a connection call are a form with a password in it. The level a
-		// secret depends on is a level this application chooses.
-		LogLevel: slog.LevelInfo,
+		Logger:      logger,
+		LogLevel:    logLevel,
 		Services: []application.Service{
 			application.NewService(ui.NewAppInfoService()),
 			// Every implementation is chosen here and nowhere else: the UI and

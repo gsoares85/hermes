@@ -1,10 +1,12 @@
-package conn_test
+package secret_test
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/gsoares85/hermes/internal/core/conn"
+	"github.com/gsoares85/hermes/internal/core/secret"
 )
 
 func TestRedactHidesThePasswordOfAURL(t *testing.T) {
@@ -43,7 +45,7 @@ func TestRedactHidesThePasswordOfAURL(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := conn.Redact(tc.in); got != tc.want {
+			if got := secret.Redact(tc.in); got != tc.want {
 				t.Errorf("Redact(...) = %q, want %q", got, tc.want)
 			}
 		})
@@ -98,7 +100,7 @@ func TestRedactHidesThePasswordOfAKeywordString(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := conn.Redact(tc.in); got != tc.want {
+			if got := secret.Redact(tc.in); got != tc.want {
 				t.Errorf("Redact(...) = %q, want %q", got, tc.want)
 			}
 		})
@@ -121,7 +123,7 @@ func TestRedactHidesAPasswordInsideAMessage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			got := conn.Redact(tc.message)
+			got := secret.Redact(tc.message)
 			if strings.Contains(got, "s3cr3t") {
 				t.Errorf("Redact(%q) = %q, the secret survived", tc.message, got)
 			}
@@ -163,7 +165,7 @@ func TestRedactKeepsTheMessageAroundTheSecret(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			got := conn.Redact(tc.message)
+			got := secret.Redact(tc.message)
 			if strings.Contains(got, "s3cr3t") {
 				t.Errorf("Redact(%q) = %q, the secret survived", tc.message, got)
 			}
@@ -185,7 +187,7 @@ func TestRedactKeepsEverythingElse(t *testing.T) {
 		"",
 		"not a connection string at all",
 	} {
-		if got := conn.Redact(dsn); got != dsn {
+		if got := secret.Redact(dsn); got != dsn {
 			t.Errorf("Redact(%q) = %q, want it unchanged: there is no secret in it", dsn, got)
 		}
 	}
@@ -196,23 +198,74 @@ func TestRedactKeepsEverythingElse(t *testing.T) {
 func TestRedactLeavesNoSecretBehind(t *testing.T) {
 	t.Parallel()
 
-	const secret = "s3cr3t"
+	const leaked = "s3cr3t"
 
 	for _, dsn := range []string{
-		"postgres://hermes:" + secret + "@localhost:5432/hermes",
-		"postgres://hermes@localhost/hermes?password=" + secret,
-		"postgres://hermes@localhost/hermes?sslpassword=" + secret,
-		"postgres://hermes:pw@localhost/hermes?sslpassword=" + secret,
-		"host=localhost password=" + secret + " dbname=hermes",
-		"password='" + secret + "'",
+		"postgres://hermes:" + leaked + "@localhost:5432/hermes",
+		"postgres://hermes@localhost/hermes?password=" + leaked,
+		"postgres://hermes@localhost/hermes?sslpassword=" + leaked,
+		"postgres://hermes:pw@localhost/hermes?sslpassword=" + leaked,
+		"host=localhost password=" + leaked + " dbname=hermes",
+		"password='" + leaked + "'",
 		// The tail after an escaped quote is part of the secret, and a
 		// pattern that stops there leaves it in the output.
-		`password='abc\'` + secret + `'`,
-		`password="abc\"` + secret + `"`,
-		`password=abc\ ` + secret + ` dbname=hermes`,
+		`password='abc\'` + leaked + `'`,
+		`password="abc\"` + leaked + `"`,
+		`password=abc\ ` + leaked + ` dbname=hermes`,
 	} {
-		if got := conn.Redact(dsn); strings.Contains(got, secret) {
+		if got := secret.Redact(dsn); strings.Contains(got, leaked) {
 			t.Errorf("Redact(%q) = %q, the secret survived", dsn, got)
 		}
+	}
+}
+
+// Error is what an error crosses on its way out of the process, so what it
+// answers has to be the redacted text and nothing else.
+func TestErrorRedactsTheMessage(t *testing.T) {
+	t.Parallel()
+
+	original := fmt.Errorf("dialing %s: %w",
+		"postgres://hermes:s3cr3t@db.example.com:5432/app", errors.New("connection refused"))
+
+	got := secret.Error(original)
+	if got == nil {
+		t.Fatal("Error(err) = nil, want an error")
+	}
+	if strings.Contains(got.Error(), "s3cr3t") {
+		t.Errorf("Error(%v) = %v, the secret survived", original, got)
+	}
+	for _, kept := range []string{"db.example.com", "connection refused"} {
+		if !strings.Contains(got.Error(), kept) {
+			t.Errorf("Error(%v) = %v, want it to keep %q", original, got, kept)
+		}
+	}
+}
+
+// Nothing is what an absent failure redacts to. Callers hand their error
+// straight to this on the way out, and a non-nil answer for a nil error would
+// turn every success into a failure.
+func TestErrorOnNilIsNil(t *testing.T) {
+	t.Parallel()
+
+	if got := secret.Error(nil); got != nil {
+		t.Errorf("Error(nil) = %v, want nil", got)
+	}
+}
+
+// A redaction that can be unwrapped is a redaction anyone can undo: the wrapped
+// error still answers the full text. The chain is dropped on purpose, and the
+// callers match their sentinels before crossing the boundary, not after.
+func TestErrorKeepsNoPathBackToTheSecret(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("postgres://hermes:s3cr3t@localhost/app is unreachable")
+
+	redacted := secret.Error(fmt.Errorf("opening the connection: %w", sentinel))
+
+	if errors.Unwrap(redacted) != nil {
+		t.Errorf("Error(...) can be unwrapped to %v", errors.Unwrap(redacted))
+	}
+	if errors.Is(redacted, sentinel) {
+		t.Error("Error(...) still matches the error it redacted, so the original is reachable")
 	}
 }
