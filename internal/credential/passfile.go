@@ -2,6 +2,7 @@ package credential
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -94,38 +95,57 @@ func (s *Store) InFile(targets ...Target) (Handoff, error) {
 		return Handoff{}, nil
 	}
 
-	path, err := s.write(records)
+	path, claim, err := s.write(records)
 	if err != nil {
 		return Handoff{}, err
 	}
 
-	return Handoff{env: []string{passfileVariable + "=" + path}, path: path}, nil
+	return Handoff{env: []string{passfileVariable + "=" + path}, path: path, claim: claim}, nil
 }
 
-func (s *Store) write(records string) (string, error) {
+// write creates the password file and answers the claim on it, which is what
+// tells every sweep on this machine that an operation is using it and what the
+// operating system takes back when this process ends however it ends.
+func (s *Store) write(records string) (string, io.Closer, error) {
 	if err := os.MkdirAll(s.dir, dirMode); err != nil {
-		return "", fmt.Errorf("creating %s: %w", s.dir, err)
+		return "", nil, fmt.Errorf("creating %s: %w", s.dir, err)
 	}
 
-	// The name carries the process that wrote it, which is what lets the sweep
-	// tell a file still in use from one a dead process left behind. See sweep.go.
+	// The name carries the process that wrote it. It is a label, not evidence:
+	// ReleaseAll uses it to find this run's own files, and the sweep asks the
+	// operating system instead of believing it. See sweep.go.
 	file, err := os.CreateTemp(s.dir, filePrefix+strconv.Itoa(os.Getpid())+"-*")
 	if err != nil {
-		return "", fmt.Errorf("creating a password file in %s: %w", s.dir, err)
+		return "", nil, fmt.Errorf("creating a password file in %s: %w", s.dir, err)
+	}
+	defer func() { _ = file.Close() }()
+
+	// Claimed before a single byte is written. Between the file appearing in
+	// the directory and the claim being taken there is a moment in which a
+	// sweep running at that instant would collect it, and taking the claim here
+	// keeps that moment down to a couple of system calls over an empty file.
+	// The most it can cost is this operation failing to authenticate; it cannot
+	// leave a secret behind, because there is no secret in the file yet.
+	claim, err := hold(file)
+	if err != nil {
+		_ = os.Remove(file.Name())
+
+		return "", nil, err
 	}
 
 	if err := fill(file, records); err != nil {
+		_ = claim.Close()
 		_ = os.Remove(file.Name())
 
-		return "", err
+		return "", nil, err
 	}
 
-	return file.Name(), nil
+	return file.Name(), claim, nil
 }
 
+// fill writes the records and flushes them. A child process reads this file
+// through a handle of its own, and what it reads has to be all of it.
 func fill(file *os.File, records string) error {
-	defer func() { _ = file.Close() }()
-
 	// CreateTemp already creates the file private to this user on Unix. This is
 	// what says so out loud, and what sets it where the default is wider.
 	if err := file.Chmod(fileMode); err != nil {
@@ -136,11 +156,8 @@ func fill(file *os.File, records string) error {
 		return fmt.Errorf("writing %s: %w", file.Name(), err)
 	}
 
-	// Closed here and not only by the defer: a write that fails on close has
-	// still failed, and a caller told it succeeded would hand a child a file
-	// that is missing the record it needs.
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("finishing %s: %w", file.Name(), err)
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("flushing %s: %w", file.Name(), err)
 	}
 
 	return nil

@@ -116,31 +116,31 @@ func TestStoppingTheWatchEndsIt(t *testing.T) {
 func TestOwnerOfReadsOnlyTheNamesThisPackageWrites(t *testing.T) {
 	t.Parallel()
 
-	for name, want := range map[string]int{
-		"pgpass-4242-Xy9":      4242,
-		"pgpass-1-":            1,
-		"pgpass-":              0,
-		"pgpass-abc-x":         0,
-		"pgpass--1-x":          0,
-		"pgpass-0-x":           0,
-		"connections.toml":     0,
-		"almost-pgpass-1-x":    0,
-		"pgpass4242-x":         0,
-		"pgpass-99999999999x":  0,
-		"pgpass-99999999999-x": 0,
+	for name, want := range map[string]string{
+		"pgpass-4242-Xy9":      "4242",
+		"pgpass-1-":            "1",
+		"pgpass-":              "",
+		"pgpass-abc-x":         "",
+		"pgpass--1-x":          "",
+		"pgpass-0-x":           "",
+		"connections.toml":     "",
+		"almost-pgpass-1-x":    "",
+		"pgpass4242-x":         "",
+		"pgpass-99999999999x":  "",
+		"pgpass-99999999999-x": "",
 		// strconv.Atoi accepts both of these and neither is a name this
 		// package writes. The claim in the name of this test is "only the
 		// names this package writes", so it has to hold for the near misses
 		// as well as for the obvious ones.
-		"pgpass-+4242-x":  0,
-		"pgpass-004242-x": 0,
+		"pgpass-+4242-x":  "",
+		"pgpass-004242-x": "",
 	} {
 		got, ours := ownerOf(name)
-		if want == 0 && ours {
-			t.Errorf("ownerOf(%q) claimed the file for process %d", name, got)
+		if want == "" && ours {
+			t.Errorf("ownerOf(%q) claimed the file for process %s", name, got)
 		}
-		if want != 0 && got != want {
-			t.Errorf("ownerOf(%q) = %d, %t, want %d", name, got, ours, want)
+		if want != "" && got != want {
+			t.Errorf("ownerOf(%q) = %q, %t, want %q", name, got, ours, want)
 		}
 	}
 }

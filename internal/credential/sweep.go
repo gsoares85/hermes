@@ -18,10 +18,13 @@ import (
 // The name every password file this package writes begins with, followed by the
 // process that wrote it and a random tail: pgpass-4242-Xy9.
 //
-// The process is in the name because it is the only thing that distinguishes a
-// file still in use from one somebody's crash left behind, and a second Hermes
-// starting up must not delete the file the first one is in the middle of a dump
-// with.
+// The process in the name is a label, not evidence. ReleaseAll uses it to find
+// the files of this run; the sweep does not, because a process identifier is
+// reused — routinely on Linux, where pid_max defaults to 32768 — and a file
+// whose number had come round again would look alive for ever, keeping a
+// password on disk for ever. What a file still in use has is a claim on it,
+// which the operating system ends when the process holding it ends, however it
+// ends. See hold_unix.go and hold_windows.go.
 const filePrefix = "pgpass-"
 
 // Removing the temporary password file is promised in three layers, because one
@@ -79,23 +82,33 @@ func (s *Store) sweepQuietly() {
 	}
 }
 
-// Sweep removes the password files left behind by processes that are gone.
+// Sweep removes the password files nothing holds any more.
 //
 // It is run at startup, in the background, and it answers how many files it
-// removed so that a caller can say so. A file belonging to a process that is
-// still running is left alone: that is a second Hermes, or this one, in the
-// middle of an operation that needs it.
+// removed so that a caller can say so. A file somebody still has a claim on is
+// left alone — that is a second Hermes, or this one, in the middle of an
+// operation that needs it — and the claim is asked about rather than inferred
+// from the name.
+//
+// There is a moment between a file being created and being claimed in which a
+// sweep running at that instant would take it. It is microseconds wide, both
+// ends of it are inside InFile, and the cost if it were ever lost is one
+// operation failing to authenticate rather than a secret left behind. Naming it
+// here because a window nobody wrote down is a window nobody remembers.
 func (s *Store) Sweep() (int, error) {
-	return s.remove(func(pid int) bool { return pid != os.Getpid() && !alive(pid) })
+	return s.remove(func(string) bool { return true }, orphaned)
 }
 
-// ReleaseAll removes the password files this process wrote.
+// ReleaseAll removes the password files this process wrote, claimed or not.
 //
-// The whole directory rather than a remembered list, because the point of this
-// is the paths nobody remembered: a handoff whose Release never ran is exactly
-// the file that is still there.
+// This is the one place the process in the name is used, and it is used for
+// what it can answer: which files are ours. The whole directory rather than a
+// remembered list, because the point of this is the paths nobody remembered —
+// a handoff whose Release never ran is exactly the file that is still there.
 func (s *Store) ReleaseAll() (int, error) {
-	return s.remove(func(pid int) bool { return pid == os.Getpid() })
+	ours := strconv.Itoa(os.Getpid())
+
+	return s.remove(func(pid string) bool { return pid == ours }, nil)
 }
 
 // ReleaseOnInterrupt removes the password files of this process when the person
@@ -164,14 +177,14 @@ func (s *Store) releaseOnSignal(ctx context.Context, signals chan os.Signal, sto
 	return nil
 }
 
-// remove deletes every password file whose owning process the predicate claims.
-//
 // A directory that is not there is nothing to sweep rather than a fault: on a
 // first run nobody has written a password file yet. A file that has gone
 // between the listing and the removal is the outcome asked for — another
 // process got there first — and the rest of the sweep carries on either way,
 // because one unremovable file must not leave the others behind.
-func (s *Store) remove(owned func(pid int) bool) (int, error) {
+// remove deletes every password file the name predicate claims and, when one is
+// given, the claim predicate agrees is no longer held.
+func (s *Store) remove(named func(pid string) bool, unclaimed func(path string) bool) (int, error) {
 	entries, err := os.ReadDir(s.dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
@@ -186,11 +199,15 @@ func (s *Store) remove(owned func(pid int) bool) (int, error) {
 
 	for _, entry := range entries {
 		pid, ours := ownerOf(entry.Name())
-		if entry.IsDir() || !ours || !owned(pid) {
+		if entry.IsDir() || !ours || !named(pid) {
 			continue
 		}
 
 		path := filepath.Join(s.dir, entry.Name())
+		if unclaimed != nil && !unclaimed(path) {
+			continue
+		}
+
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			failures = append(failures, fmt.Errorf("removing %s: %w", path, err))
 
@@ -205,15 +222,19 @@ func (s *Store) remove(owned func(pid int) bool) (int, error) {
 // ownerOf reads the process out of a file name, and reports whether the name is
 // one this package wrote at all. Anything else in the directory belongs to
 // somebody else and is never touched.
-func ownerOf(name string) (int, bool) {
+//
+// The identifier comes back as text because that is all it is used for now —
+// telling this run's files from another run's. Nothing asks the operating
+// system about it any more.
+func ownerOf(name string) (string, bool) {
 	tail, found := strings.CutPrefix(name, filePrefix)
 	if !found {
-		return 0, false
+		return "", false
 	}
 
 	digits, _, found := strings.Cut(tail, "-")
 	if !found {
-		return 0, false
+		return "", false
 	}
 
 	// Written the way this package writes it, or it is not this package's file.
@@ -222,19 +243,17 @@ func ownerOf(name string) (int, bool) {
 	// something else in the directory happens to parse is a sweep deleting
 	// files it was never asked about.
 	if !decimal(digits) {
-		return 0, false
+		return "", false
 	}
 
 	// The upper bound is what every system this runs on agrees a process
-	// identifier fits in. A name claiming a larger one claims no process, and
-	// letting it through would have the sweep asking the operating system about
-	// a number it has to truncate to answer.
+	// identifier fits in. A name claiming a larger one was not written here.
 	pid, err := strconv.Atoi(digits)
 	if err != nil || pid <= 0 || pid > math.MaxInt32 {
-		return 0, false
+		return "", false
 	}
 
-	return pid, true
+	return digits, true
 }
 
 // decimal reports whether the text is how strconv.Itoa would have written a

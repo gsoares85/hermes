@@ -23,6 +23,7 @@ package credential
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -58,6 +59,11 @@ var (
 type Handoff struct {
 	env  []string
 	path string
+	// claim is the open file, and the open file is what says it is still in
+	// use. The operating system ends the claim when this process does, however
+	// this process ends, which is what the sweep asks about instead of trusting
+	// a process identifier in a name.
+	claim io.Closer
 }
 
 // InEnvironment prepares the password as an environment variable of the child.
@@ -92,9 +98,16 @@ func (h Handoff) Apply(command *exec.Cmd) {
 	command.Env = append(withoutCredentials(command.Environ()), h.env...)
 }
 
-// Release removes whatever the handoff wrote. A file that has already gone —
-// released twice, or swept by another process — is the outcome asked for.
+// Release gives up the claim and removes whatever the handoff wrote. A file
+// that has already gone — released twice, or swept by another process — is the
+// outcome asked for.
 func (h Handoff) Release() error {
+	// Given up first. On Windows the claim is an open handle, and a file with
+	// one still open is a file the sweep is right to leave alone.
+	if h.claim != nil {
+		_ = h.claim.Close()
+	}
+
 	if h.path == "" {
 		return nil
 	}

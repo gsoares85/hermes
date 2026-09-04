@@ -90,12 +90,15 @@ func assertChildCanAuthenticate(t *testing.T, seen credentialSeenByChild) {
 		t.Fatalf("the child was given neither a password nor a password file: %+v", seen)
 	}
 
-	content, err := os.ReadFile(seen.Passfile)
-	if err != nil {
-		t.Fatalf("reading the password file the child was pointed at: %v", err)
+	// Read by the child, not by this process. The parent holds the file open
+	// for as long as the operation lasts so that no sweep collects it, and a
+	// claim that shut a child out would be a dump that cannot authenticate —
+	// which is exactly the mistake the sharing flags on Windows exist to avoid.
+	if seen.PassfileError != "" {
+		t.Fatalf("the child could not read the password file it was pointed at: %s", seen.PassfileError)
 	}
-	if !strings.Contains(string(content), password) {
-		t.Errorf("the password file the child was pointed at holds %q, want the password in it", content)
+	if !strings.Contains(seen.PassfileContent, password) {
+		t.Errorf("the child read %q from the password file, want the password in it", seen.PassfileContent)
 	}
 }
 
@@ -335,4 +338,35 @@ func deadProcess(t *testing.T) int {
 	_ = child.command.Wait()
 
 	return pid
+}
+
+// The hole the process identifier left. A file names the process that wrote it,
+// and the sweep used to believe that name: if the number had been reused — which
+// on Linux is routine, with pid_max defaulting to 32768 — the file looked alive
+// for ever and the password in it stayed on disk for ever, which is the one
+// outcome this package exists to prevent.
+//
+// This is such a file. It carries the identifier of a process that is certainly
+// running, because it is this one, and nothing holds it: no operation has it
+// open, so whatever wrote it is gone whatever the name says.
+func TestTheSweepRemovesAFileWhoseProcessIdentifierCameRoundAgain(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	reused := filepath.Join(directory, "pgpass-"+strconv.Itoa(os.Getpid())+"-came-round-again")
+
+	if err := os.WriteFile(reused, []byte("db:5432:app:reader:s3cr3t\n"), 0o600); err != nil {
+		t.Fatalf("writing %s: %v", reused, err)
+	}
+
+	removed, err := credential.NewStore(directory).Sweep()
+	if err != nil {
+		t.Fatalf("Sweep() = %v", err)
+	}
+	if removed != 1 {
+		t.Errorf("Sweep() removed %d files, want the orphan whose identifier was reused", removed)
+	}
+	if left := filesIn(t, directory); len(left) != 0 {
+		t.Errorf("the sweep left %v behind, believing a name instead of asking", left)
+	}
 }

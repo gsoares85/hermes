@@ -35,6 +35,12 @@ const (
 type credentialSeenByChild struct {
 	Password string `json:"password"`
 	Passfile string `json:"passfile"`
+	// What the child could actually read out of the password file, which is
+	// the question that matters: the parent holds that file open for as long
+	// as the operation lasts, and a claim that locked a child out would be a
+	// dump that cannot authenticate.
+	PassfileContent string `json:"passfileContent"`
+	PassfileError   string `json:"passfileError"`
 }
 
 // TestHelperProcess is not a test. It is the body of the child process the
@@ -64,6 +70,14 @@ func report() {
 	seen := credentialSeenByChild{
 		Password: os.Getenv("PGPASSWORD"),
 		Passfile: os.Getenv("PGPASSFILE"),
+	}
+
+	if seen.Passfile != "" {
+		content, err := os.ReadFile(seen.Passfile)
+		seen.PassfileContent = string(content)
+		if err != nil {
+			seen.PassfileError = err.Error()
+		}
 	}
 
 	announce(seen)
