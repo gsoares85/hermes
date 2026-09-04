@@ -269,3 +269,69 @@ func TestErrorKeepsNoPathBackToTheSecret(t *testing.T) {
 		t.Error("Error(...) still matches the error it redacted, so the original is reachable")
 	}
 }
+
+// The shape Go itself prints a value in, which is the shape the slog handler
+// produces when it renders an attribute it does not otherwise recognise. The
+// net used to have a hole in the one format it generates: a struct with a
+// password field, logged whole, came out with the password in it.
+func TestRedactHidesThePasswordInARenderedValue(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct{ in, survives string }{
+		"a struct":            {"{Host:db.example.com Password:s3cr3t}", "db.example.com"},
+		"a struct with types": {`form{Host:"db.example.com", Password:"s3cr3t"}`, "db.example.com"},
+		"a map":               {"map[host:db.example.com password:s3cr3t]", "db.example.com"},
+		"a slice of them":     {"[{Host:db.example.com Password:s3cr3t}]", "db.example.com"},
+		"the key passphrase":  {"{Mode:verify-full SSLPassword:s3cr3t}", "verify-full"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := secret.Redact(tc.in)
+			if strings.Contains(got, "s3cr3t") {
+				t.Errorf("Redact(%q) = %q, the secret survived", tc.in, got)
+			}
+			if !strings.Contains(got, tc.survives) {
+				t.Errorf("Redact(%q) = %q, want it to keep %q", tc.in, got, tc.survives)
+			}
+		})
+	}
+}
+
+// A rendered value ends at a delimiter, and swallowing that delimiter would
+// corrupt the message around the secret — the closing brace is part of the
+// sentence, not part of the password.
+func TestRedactKeepsTheShapeOfARenderedValue(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"{Host:h Password:s3cr3t}":     "{Host:h Password:xxxxx}",
+		"map[password:s3cr3t]":         "map[password:xxxxx]",
+		"{Password:s3cr3t, Port:5432}": "{Password:xxxxx, Port:5432}",
+	}
+
+	for in, want := range cases {
+		if got := secret.Redact(in); got != want {
+			t.Errorf("Redact(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The word in a sentence is not a secret, and a redaction that mangles prose is
+// one people route around. A colon followed by a space is how English writes;
+// a colon followed immediately by a value is how Go prints.
+func TestRedactLeavesTheWordPasswordInProseAlone(t *testing.T) {
+	t.Parallel()
+
+	for _, prose := range []string{
+		"Wrong password: check the spelling and try again.",
+		"password: required",
+		"The password is not stored in this file.",
+	} {
+		if got := secret.Redact(prose); got != prose {
+			t.Errorf("Redact(%q) = %q, want it unchanged: there is no secret in it", prose, got)
+		}
+	}
+}

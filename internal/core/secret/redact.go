@@ -34,6 +34,31 @@ var embeddedURI = regexp.MustCompile(`(?i)(postgres(?:ql)?://[^\s:@/]+):[^\s@]*@
 var passwordKeyword = regexp.MustCompile(
 	`(?i)(password\s*=\s*)('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|(?:\\.|[^\s&;])+)`)
 
+// Passwords in the way Go itself prints a value: {Host:h Password:s3cr3t},
+// map[password:s3cr3t], and the %#v form with the value quoted.
+//
+// This is not a connection string notation at all — it is what fmt produces,
+// and therefore what the slog handler produces when it renders an attribute it
+// does not otherwise recognise. Without these two the net had a hole in the one
+// format it generates itself: a struct with a password field, logged whole,
+// came out with the password in it.
+//
+// The separator tells the two apart, and it is what keeps prose intact. A colon
+// followed immediately by the value is how Go prints; a colon followed by a
+// space is how English writes, so "Wrong password: check the spelling" is left
+// alone. A quoted value is unambiguous either way and allows the space.
+var (
+	passwordQuotedField = regexp.MustCompile(
+		`(?i)((?:ssl)?password\s*:\s*)('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")`)
+
+	// The value stops at the delimiters that end a rendered field rather than
+	// at a space alone: a password is the last thing before the closing brace
+	// as often as not, and swallowing the brace would corrupt the message
+	// around the secret rather than only removing the secret.
+	passwordRenderedField = regexp.MustCompile(
+		`(?i)((?:ssl)?password:)([^\s,}\])"';]+)`)
+)
+
 // Passwords in a JSON object, which is the shape the frontend boundary uses:
 // the window serialises its form, so a message quoting one carries the secret
 // as "password":"…" rather than as password=….
@@ -77,8 +102,13 @@ func Redact(text string) string {
 
 	redactedText := embeddedURI.ReplaceAllString(text, "${1}:"+redacted+"@")
 	redactedText = passwordJSON.ReplaceAllString(redactedText, `${1}"`+redacted+`"`)
+	redactedText = passwordKeyword.ReplaceAllString(redactedText, "${1}"+redacted)
 
-	return passwordKeyword.ReplaceAllString(redactedText, "${1}"+redacted)
+	// Quoted before bare: the quoted pattern consumes the quotes, which the
+	// bare one would otherwise stop at, leaving the secret between them.
+	redactedText = passwordQuotedField.ReplaceAllString(redactedText, "${1}"+redacted)
+
+	return passwordRenderedField.ReplaceAllString(redactedText, "${1}"+redacted)
 }
 
 func redactURL(parsed *url.URL) string {

@@ -77,6 +77,21 @@ func TestHandlerRedactsAttributes(t *testing.T) {
 		"a value that is neither": func(logger *slog.Logger) {
 			logger.Info("opening", slog.Any("tried", []string{dsn}))
 		},
+		// The shape the handler itself produces. redactAny renders an
+		// unrecognised value with %+v, so a struct carrying a password used to
+		// go in as a value and come out as text with the password in it — the
+		// net leaking through the one format it generates.
+		"a struct logged whole": func(logger *slog.Logger) {
+			logger.Info("saving", slog.Any("form", struct {
+				Host     string
+				Password string
+			}{Host: "db.example.com", Password: password}))
+		},
+		"a map logged whole": func(logger *slog.Logger) {
+			logger.Info("saving", slog.Any("form", map[string]string{
+				"host": "db.example.com", "password": password,
+			}))
+		},
 		"a keyword connection string": func(logger *slog.Logger) {
 			logger.Info("opening", slog.String("dsn", "host=localhost password="+password))
 		},
