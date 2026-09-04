@@ -300,6 +300,34 @@ jobs:
         if: runner.os != 'Linux'
         run: go test -tags=keychain -count=1 -timeout=5m ./internal/vault/...
 
+  # The other job that can only tell the truth on the machine it runs on. How a
+  # command line is read, and what a file permission even means, are different on
+  # each of the three systems, so the tests that assert them are written three
+  # times and every one of them has to run somewhere.
+  #
+  # Linux is in the matrix although the unit job already covers it: the point of
+  # this job is that the same suite passes on all three, and a matrix with a hole
+  # in it is a matrix nobody notices has one.
+  credentials:
+    name: Credential handoff (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Hand a credential to a real child process
+        run: go test -race -count=1 -timeout=5m ./internal/credential/...
+
   integration:
     name: Integration tests
     runs-on: ubuntu-latest

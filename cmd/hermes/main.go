@@ -16,6 +16,7 @@ import (
 
 	"github.com/gsoares85/hermes/frontend"
 	"github.com/gsoares85/hermes/internal/core/secret"
+	"github.com/gsoares85/hermes/internal/credential"
 	"github.com/gsoares85/hermes/internal/driver/postgres"
 	"github.com/gsoares85/hermes/internal/filestore"
 	"github.com/gsoares85/hermes/internal/ui"
@@ -67,6 +68,20 @@ func run() error {
 	// is the honest outcome — refusing to start over a convenience is not.
 	opened, status := vault.Open(context.Background())
 	defer func() { _ = opened.Close() }()
+
+	// The two layers of the promise that a temporary password file is removed
+	// that belong to the program rather than to one operation: what an earlier
+	// run left behind is swept, and what this run writes goes when the person
+	// interrupts it. The third layer is the deferred release at each call site,
+	// and none of the three has arrived at a subprocess yet — this is installed
+	// before the first one does, not after.
+	passwords, err := credential.DefaultDir()
+	if err != nil {
+		return err
+	}
+
+	releaseCredentials := credential.NewStore(passwords).Guard(context.Background())
+	defer releaseCredentials()
 
 	connections, err := filestore.ConnectionsPath()
 	if err != nil {
