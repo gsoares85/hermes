@@ -128,6 +128,12 @@ func TestOwnerOfReadsOnlyTheNamesThisPackageWrites(t *testing.T) {
 		"pgpass4242-x":         0,
 		"pgpass-99999999999x":  0,
 		"pgpass-99999999999-x": 0,
+		// strconv.Atoi accepts both of these and neither is a name this
+		// package writes. The claim in the name of this test is "only the
+		// names this package writes", so it has to hold for the near misses
+		// as well as for the obvious ones.
+		"pgpass-+4242-x":  0,
+		"pgpass-004242-x": 0,
 	} {
 		got, ours := ownerOf(name)
 		if want == 0 && ours {

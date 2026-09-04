@@ -216,6 +216,15 @@ func ownerOf(name string) (int, bool) {
 		return 0, false
 	}
 
+	// Written the way this package writes it, or it is not this package's file.
+	// strconv.Atoi is more forgiving than the names we produce — it reads
+	// "+4242" and "004242" as 4242 — and a sweep that removes a file because
+	// something else in the directory happens to parse is a sweep deleting
+	// files it was never asked about.
+	if !decimal(digits) {
+		return 0, false
+	}
+
 	// The upper bound is what every system this runs on agrees a process
 	// identifier fits in. A name claiming a larger one claims no process, and
 	// letting it through would have the sweep asking the operating system about
@@ -226,4 +235,21 @@ func ownerOf(name string) (int, bool) {
 	}
 
 	return pid, true
+}
+
+// decimal reports whether the text is how strconv.Itoa would have written a
+// positive number: digits only, and no leading zero to make two names for one
+// process.
+func decimal(text string) bool {
+	if text == "" || (len(text) > 1 && text[0] == '0') {
+		return false
+	}
+
+	for _, digit := range text {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+
+	return true
 }
