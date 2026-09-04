@@ -63,10 +63,16 @@ func run() error {
 	// internal/ui from reaching for a keychain for the same reason it forbids
 	// it from reaching for a driver.
 	//
-	// Open never fails. A machine with no keyring gets a vault that lives in
+	// In the background, because asking costs more than the window has: a
+	// Secret Service that has to be activated on the session bus, or a login
+	// keychain that wants unlocking, can take longer to answer than the 1,5s
+	// the whole cold start is allowed. The window is drawn first and asks
+	// afterwards; nothing on screen needs the answer before then.
+	//
+	// Opening never fails. A machine with no keyring gets a vault that lives in
 	// this process and a warning the window puts in front of the person, which
 	// is the honest outcome — refusing to start over a convenience is not.
-	opened, status := vault.Open(context.Background())
+	opened := vault.OpenInBackground(context.Background())
 	defer func() { _ = opened.Close() }()
 
 	// The two layers of the promise that a temporary password file is removed
@@ -102,7 +108,7 @@ func run() error {
 				Opener:      postgres.New(),
 				Store:       filestore.NewConnections(connections),
 				Vault:       opened,
-				VaultStatus: ui.VaultView{Backend: status.Backend, Warning: status.Warning},
+				VaultStatus: vaultStatus(opened),
 			})),
 		},
 		Assets: application.AssetOptions{
@@ -131,4 +137,20 @@ func run() error {
 	}
 
 	return nil
+}
+
+// vaultStatus translates what the vault reports into what the window renders.
+//
+// The translation lives here and not in either package because neither should
+// know the other: internal/vault answers in its own terms, internal/ui asks in
+// its own, and wiring the two together is the job of the command.
+func vaultStatus(opened *vault.Deferred) func(context.Context) (ui.VaultView, error) {
+	return func(ctx context.Context) (ui.VaultView, error) {
+		status, err := opened.Status(ctx)
+		if err != nil {
+			return ui.VaultView{}, err
+		}
+
+		return ui.VaultView{Backend: status.Backend, Warning: status.Warning}, nil
+	}
 }

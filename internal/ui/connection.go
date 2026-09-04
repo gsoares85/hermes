@@ -146,10 +146,14 @@ type Dependencies struct {
 	Store ConnectionStore
 	// Vault is where their passwords are kept, which is somewhere else.
 	Vault secret.Vault
-	// VaultStatus is what to tell the person about that place, settled once at
-	// startup because asking again would be another round trip for an answer
-	// that does not change while the application runs.
-	VaultStatus VaultView
+	// VaultStatus answers what to tell the person about that place.
+	//
+	// A function rather than a value because the answer does not exist yet
+	// when the window is built: opening the store of the operating system can
+	// outlast the whole startup budget, so the command starts it and the
+	// window asks once it is on screen. A nil one reports nothing, which is
+	// what a caller with no vault to describe means.
+	VaultStatus func(ctx context.Context) (VaultView, error)
 }
 
 // ConnectionService is the boundary for everything to do with connecting.
@@ -160,7 +164,7 @@ type ConnectionService struct {
 	opener      driver.Opener
 	store       ConnectionStore
 	vault       secret.Vault
-	vaultStatus VaultView
+	vaultStatus func(ctx context.Context) (VaultView, error)
 
 	mu   sync.Mutex
 	open map[string]*conn.Connection
@@ -187,7 +191,23 @@ func NewConnectionService(deps Dependencies) *ConnectionService {
 // The window asks so that it can say so, and warn when the answer is that they
 // are not being kept at all. A vault that silently forgets is exactly the
 // failure this boundary exists to make visible.
-func (s *ConnectionService) VaultStatus() VaultView { return s.vaultStatus }
+//
+// It takes a context and can fail because the answer may still be on its way:
+// the store of the operating system is opened in the background so that the
+// window does not wait for it, and this is the call that waits instead — after
+// the window is already drawn, where waiting costs nobody anything.
+func (s *ConnectionService) VaultStatus(ctx context.Context) (VaultView, error) {
+	if s.vaultStatus == nil {
+		return VaultView{}, nil
+	}
+
+	view, err := s.vaultStatus(ctx)
+	if err != nil {
+		return VaultView{}, secret.Error(err)
+	}
+
+	return view, nil
+}
 
 // Save keeps a connection: the connection in the file, its password in the
 // keychain, and never one of them in the other.

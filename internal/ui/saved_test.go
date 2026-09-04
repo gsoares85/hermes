@@ -23,7 +23,7 @@ func saved(t *testing.T) (*ui.ConnectionService, *memoryStore, *secret.Memory) {
 		Opener:      stubOpener{},
 		Store:       store,
 		Vault:       vault,
-		VaultStatus: ui.VaultView{Backend: "keychain"},
+		VaultStatus: reporting(ui.VaultView{Backend: "keychain"}),
 	}), store, vault
 }
 
@@ -281,13 +281,16 @@ func TestTheVaultStatusCarriesTheWarning(t *testing.T) {
 		Opener: stubOpener{},
 		Store:  &memoryStore{},
 		Vault:  secret.NewMemory(),
-		VaultStatus: ui.VaultView{
+		VaultStatus: reporting(ui.VaultView{
 			Backend: "in-memory",
 			Warning: "Hermes could not reach the Secret Service of this desktop session.",
-		},
+		}),
 	})
 
-	status := service.VaultStatus()
+	status, err := service.VaultStatus(t.Context())
+	if err != nil {
+		t.Fatalf("VaultStatus() = %v", err)
+	}
 	if status.Backend != "in-memory" {
 		t.Errorf("the backend is %q, want the one the application was given", status.Backend)
 	}
@@ -427,3 +430,72 @@ type refusingVault struct{ err error }
 func (r refusingVault) Get(context.Context, secret.Ref) (string, error) { return "", r.err }
 func (r refusingVault) Set(context.Context, secret.Ref, string) error   { return r.err }
 func (r refusingVault) Delete(context.Context, secret.Ref) error        { return r.err }
+
+// reporting is a vault that has already finished opening, which is what every
+// test but the one about waiting wants.
+func reporting(view ui.VaultView) func(context.Context) (ui.VaultView, error) {
+	return func(context.Context) (ui.VaultView, error) { return view, nil }
+}
+
+// The property the startup budget rests on: the window is usable before the
+// store of the operating system has answered.
+//
+// Opening a keychain can outlast the whole cold start, so the command starts it
+// and hands over a status nobody has yet. Everything that does not need a
+// secret has to work anyway — if listing saved connections waited on the vault,
+// moving the wait out of the startup would only have moved where it is spent.
+func TestTheWindowWorksBeforeTheVaultHasOpened(t *testing.T) {
+	t.Parallel()
+
+	stillOpening := make(chan struct{})
+	defer close(stillOpening)
+
+	service := ui.NewConnectionService(ui.Dependencies{
+		Opener: stubOpener{},
+		Store:  &memoryStore{saved: []conn.Config{{ID: "an-id", Host: "h", Port: 5432, User: "u"}}},
+		Vault:  secret.NewMemory(),
+		VaultStatus: func(context.Context) (ui.VaultView, error) {
+			<-stillOpening
+
+			return ui.VaultView{}, nil
+		},
+	})
+
+	listed, err := service.List()
+	if err != nil {
+		t.Fatalf("List() = %v", err)
+	}
+	if len(listed) != 1 {
+		t.Errorf("List() returned %d connections, want the one that is saved", len(listed))
+	}
+}
+
+// And when the window does ask, a wait it gave up on comes back as a failure
+// rather than as a window that never finishes drawing.
+func TestTheVaultStatusGivesUpWithTheWindow(t *testing.T) {
+	t.Parallel()
+
+	stillOpening := make(chan struct{})
+	defer close(stillOpening)
+
+	service := ui.NewConnectionService(ui.Dependencies{
+		Opener: stubOpener{},
+		Store:  &memoryStore{},
+		Vault:  secret.NewMemory(),
+		VaultStatus: func(ctx context.Context) (ui.VaultView, error) {
+			select {
+			case <-stillOpening:
+				return ui.VaultView{}, nil
+			case <-ctx.Done():
+				return ui.VaultView{}, ctx.Err()
+			}
+		},
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := service.VaultStatus(ctx); err == nil {
+		t.Error("VaultStatus() on a cancelled context = nil, want the failure it gave up with")
+	}
+}

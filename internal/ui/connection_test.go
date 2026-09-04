@@ -319,7 +319,7 @@ func service(opener driver.Opener) *ui.ConnectionService {
 		Opener:      opener,
 		Store:       &memoryStore{},
 		Vault:       secret.NewMemory(),
-		VaultStatus: ui.VaultView{Backend: "keychain"},
+		VaultStatus: reporting(ui.VaultView{Backend: "keychain"}),
 	})
 }
 

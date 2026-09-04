@@ -130,6 +130,11 @@ export function Test(form: $models.ConnectionForm): $CancellablePromise<$models.
  * The window asks so that it can say so, and warn when the answer is that they
  * are not being kept at all. A vault that silently forgets is exactly the
  * failure this boundary exists to make visible.
+ * 
+ * It takes a context and can fail because the answer may still be on its way:
+ * the store of the operating system is opened in the background so that the
+ * window does not wait for it, and this is the call that waits instead — after
+ * the window is already drawn, where waiting costs nobody anything.
  */
 export function VaultStatus(): $CancellablePromise<$models.VaultView> {
     return $Call.ByID(2574975934);
