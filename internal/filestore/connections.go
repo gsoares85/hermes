@@ -76,10 +76,14 @@ func (c *Connections) Load() ([]conn.Config, error) {
 
 // Save writes the whole list, replacing whatever was there.
 //
-// The bytes go to a temporary file beside the real one and are renamed over it,
-// which is what makes the replacement atomic: a crash, a full disk or a power
-// cut leaves the previous list intact instead of a file truncated halfway
-// through the connection someone needs on Monday.
+// The bytes go to a temporary file beside the real one, are flushed to the
+// disk, and are then renamed over it. Both halves are needed and they answer
+// different questions. The rename is what makes the replacement atomic for
+// anything else reading the file: nobody ever sees it half written. The flush
+// is what makes it survive the machine losing power, because a rename orders
+// the directory entry and says nothing about whether the bytes it now points at
+// ever left the page cache — without it the file that replaces a good list can
+// be a file of zeros.
 func (c *Connections) Save(connections []conn.Config) error {
 	directory := filepath.Dir(c.path)
 	if err := os.MkdirAll(directory, dirMode); err != nil {
@@ -116,6 +120,12 @@ func write(file *os.File, connections []conn.Config) error {
 
 	if err := profile.WriteConnections(file, connections); err != nil {
 		return err
+	}
+
+	// Before the close and therefore before the rename: this is the line that
+	// turns "the previous list survives a power cut" from a hope into a fact.
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("flushing %s to the disk: %w", file.Name(), err)
 	}
 
 	// Closed here rather than only by the defer, because a write that fails on
