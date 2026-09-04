@@ -261,6 +261,14 @@ func (s *ConnectionService) Save(ctx context.Context, form ConnectionForm) (Save
 		return SavedView{}, secret.Error(err)
 	}
 
+	// Checked here, before anything is written. The keychain refuses a
+	// reference it cannot address, and finding that out after the file has
+	// been saved leaves a connection on disk that can never hold a password —
+	// a failure the person sees once, on the save, and never again.
+	if err := secret.ConnectionRef(config.ID).Validate(); err != nil {
+		return SavedView{}, secret.Error(err)
+	}
+
 	if err := s.record(config); err != nil {
 		return SavedView{}, err
 	}

@@ -652,3 +652,31 @@ func TestAConnectionIsSavedEvenWhenTheKeychainDoesNot(t *testing.T) {
 		t.Errorf("the saved connections are %+v, want the one that was saved", listed)
 	}
 }
+
+// The identifier decides where the password is filed, so one the keychain
+// cannot address is a connection that can never keep a password. The reference
+// refuses a control character; refusing it here is what stops the file being
+// written first and the failure arriving second, leaving a saved connection
+// that silently cannot hold a credential.
+func TestSaveRefusesAnIdentifierTheKeychainCannotAddress(t *testing.T) {
+	t.Parallel()
+
+	store := &memoryStore{}
+	service := ui.NewConnectionService(ui.Dependencies{
+		Opener: stubOpener{}, Store: store, Vault: secret.NewMemory(),
+	})
+
+	if _, err := service.Save(t.Context(), ui.ConnectionForm{
+		ID: "an\x00id", Name: "broken", Host: "h", Port: 5432, User: "u", Password: "s3cr3t",
+	}); err == nil {
+		t.Fatal("Save() accepted an identifier the keychain cannot address")
+	}
+
+	listed, err := service.List()
+	if err != nil {
+		t.Fatalf("List() = %v", err)
+	}
+	if len(listed) != 0 {
+		t.Errorf("the connection was written anyway: %+v", listed)
+	}
+}
