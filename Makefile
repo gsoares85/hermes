@@ -6,16 +6,23 @@ GOLANGCI_LINT ?= golangci-lint
 COVERAGE_PROFILE ?= coverage.out
 COVERAGE_MINIMUM ?= 85
 
-# Left out of the coverage count, not out of testing. The pgx adapter is behind
-# the thin interfaces of internal/driver and is exercised by the integration
-# suite, which `make cover` does not run: counting its statements while ignoring
-# its coverage would drag the number down for code that is in fact tested.
-# The conformance suite of the vault is test code that had to be an ordinary
-# package, because Go cannot share a helper written in a _test.go file with
-# another package's tests. More than half of it is the branch that reports a
-# failure, which only runs when an implementation is broken.
+# Left out of the coverage count, not out of testing. This list is the one the
+# CI job uses, and the two have to stay identical: they diverged once, and the
+# result was `make cover` failing on Linux while CI passed, which teaches people
+# to distrust the local command rather than the code.
+#
+# The pgx adapter is behind the thin interfaces of internal/driver and is
+# exercised by the integration suite, which `make cover` does not run: counting
+# its statements while ignoring its coverage would drag the number down for code
+# that is in fact tested. internal/vault is out for the same reason and by the
+# same argument: only one of its three implementations compiles on any given
+# machine, and all three are exercised by the keychain job, which runs on three
+# runners and feeds no profile. The conformance suite of the vault is test code
+# that had to be an ordinary package, because Go cannot share a helper written
+# in a _test.go file with another package's tests, and more than half of it is
+# the branch that reports a failure.
 # Every run prints what was ignored, and ignoring everything is refused.
-COVERAGE_IGNORE ?= github.com/gsoares85/hermes/internal/driver/postgres,github.com/gsoares85/hermes/internal/core/secret/secrettest
+COVERAGE_IGNORE ?= github.com/gsoares85/hermes/internal/driver/postgres,github.com/gsoares85/hermes/internal/vault,github.com/gsoares85/hermes/internal/core/secret/secrettest
 INTEGRATION_TAGS ?= integration
 GOVULNCHECK_VERSION ?= v1.7.0
 

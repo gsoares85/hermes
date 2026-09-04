@@ -160,28 +160,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Run unit tests
-        run: go test -race -coverprofile=coverage.out -coverpkg=./internal/... ./internal/...
-
-      # Below the floor the build fails, and a profile that measured nothing
-      # fails too, so the gate can never pass vacuously.
-      # internal/driver/postgres is left out of the count, not out of testing:
-      # the pgx adapter sits behind the thin interfaces of internal/driver and
-      # is exercised by the integration job, which this one does not run.
-      # Counting its statements while ignoring its coverage would drag the
-      # number down for code that is in fact tested. internal/vault is out for
-      # the same reason and by the same argument: only one of its three
-      # implementations compiles on any given machine, and all three are
-      # exercised by the keychain job, which runs on three runners and feeds
-      # no profile. The conformance suite of
-      # the vault is left out for a different reason: it is test code that had
-      # to be an ordinary package, because Go cannot share a helper written in a
-      # _test.go file with another package's tests, and more than half of it is
-      # the branch that reports a failure. The run prints what it ignored, and a
-      # profile with everything ignored is refused.
-      - name: Enforce the coverage floor
-        run: |
-          go run ./scripts/checkcoverage -profile=coverage.out -min=85             -ignore=github.com/gsoares85/hermes/internal/driver/postgres,github.com/gsoares85/hermes/internal/vault,github.com/gsoares85/hermes/internal/core/secret/secrettest
+      # Through make, not by repeating the command: the exclusion list lives in
+      # one place. It was written out twice once, the two copies drifted apart,
+      # and the result was `make cover` failing on Linux while this job passed —
+      # which teaches people to distrust the local command rather than the code.
+      - name: Run unit tests and enforce the coverage floor
+        run: make cover
 
       # A gate nobody has seen fail is a gate nobody knows works. This feeds it
       # a profile that is deliberately below the floor and fails the job if the
