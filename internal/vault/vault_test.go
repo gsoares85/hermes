@@ -139,11 +139,13 @@ func newStub(delay time.Duration) *stub {
 	return &stub{vault: secret.NewMemory(), delay: delay, closed: make(chan struct{})}
 }
 
-func (s *stub) open(ctx context.Context) (Vault, error) {
-	select {
-	case <-time.After(s.delay):
-	case <-ctx.Done():
-	}
+// The context is deliberately ignored. This stub exists to be the store that
+// answers too late, and one that gave up the moment the deadline passed would
+// answer at that same instant — leaving the select in open with both cases
+// ready and the choice to the runtime, which is a test that fails once in a
+// while for a reason nobody can reproduce.
+func (s *stub) open(context.Context) (Vault, error) {
+	time.Sleep(s.delay)
 
 	return s, nil
 }

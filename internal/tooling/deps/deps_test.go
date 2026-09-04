@@ -2,6 +2,7 @@ package deps_test
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -278,17 +279,44 @@ func TestTheProjectRespectsTheDependencyRule(t *testing.T) {
 	}
 }
 
+// The platforms the product is built for. The graph is read once per platform
+// because build tags make it a different graph on each: internal/vault has one
+// implementation per operating system, and each of them imports a different
+// keychain library. A gate that only ever looked at the runner it happened to
+// run on would enforce the rule about go-keychain on macOS alone — which is to
+// say, never, since the pipeline reads this on Linux.
+var platforms = []string{"linux", "darwin", "windows"}
+
 // buildGraph asks the toolchain for the full dependency list of every package
-// in the module, which is the same graph the compiler sees.
+// in the module, on every platform it is built for, which is the same graph
+// each of those compilers sees.
 func buildGraph(t *testing.T) map[string][]string {
+	t.Helper()
+
+	graph := make(map[string][]string)
+	for _, platform := range platforms {
+		for pkg, deps := range platformGraph(t, platform) {
+			// Unioned rather than kept apart: a rule is broken if it is broken
+			// anywhere, and the violation names the package either way.
+			graph[pkg] = append(graph[pkg], deps...)
+		}
+	}
+
+	return graph
+}
+
+func platformGraph(t *testing.T, platform string) map[string][]string {
 	t.Helper()
 
 	command := exec.CommandContext(t.Context(), "go", "list", "-deps", "-json", "./...")
 	command.Dir = "../../.."
+	// CGO off because this only ever parses: a darwin graph read on a Linux
+	// runner must not need a C toolchain that can target darwin.
+	command.Env = append(os.Environ(), "GOOS="+platform, "CGO_ENABLED=0")
 
 	output, err := command.Output()
 	if err != nil {
-		t.Fatalf("listing the packages of the module: %v", err)
+		t.Fatalf("listing the packages of the module for %s: %v", platform, err)
 	}
 
 	type listed struct {
@@ -309,4 +337,34 @@ func buildGraph(t *testing.T) map[string][]string {
 	}
 
 	return graph
+}
+
+// A gate that reads one platform enforces the rules of one platform. The three
+// keychain libraries are each behind a build tag, so a graph read on a single
+// operating system contains exactly one of them — and the rule forbidding the
+// other two would pass by never being tested.
+//
+// This asserts the reading itself: the union has to contain all three, or the
+// gate above is quietly checking a third of what it claims to.
+func TestTheGraphIsReadForEveryPlatformTheProductIsBuiltFor(t *testing.T) {
+	t.Parallel()
+
+	graph := buildGraph(t)
+
+	imports := make(map[string]bool)
+	for _, deps := range graph {
+		for _, imported := range deps {
+			imports[imported] = true
+		}
+	}
+
+	for _, keychain := range []string{
+		"github.com/keybase/go-keychain",
+		"github.com/danieljoos/wincred",
+		"github.com/godbus/dbus/v5",
+	} {
+		if !imports[keychain] {
+			t.Errorf("%s is in no graph, so the rule forbidding it in the core is never exercised", keychain)
+		}
+	}
 }
