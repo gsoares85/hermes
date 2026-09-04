@@ -83,6 +83,17 @@ body {
 }
 
 /*
+ * The armed state of Forget. Removing a connection takes its password out of
+ * the keychain and nothing can put it back, so the button says what the second
+ * press will do and looks like it means it.
+ */
+.connection__forget.is-confirming {
+  border-color: #b3261e;
+  color: #b3261e;
+  font-weight: 600;
+}
+
+/*
  * The connection screen. The diagnosis is laid out as three separate blocks
  * because it is three separate things — what happened, why, and what to do —
  * and running them together is how a message stops being actionable.

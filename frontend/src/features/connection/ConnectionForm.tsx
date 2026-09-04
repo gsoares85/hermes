@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   applyParsed,
@@ -40,6 +40,23 @@ export function ConnectionForm(): React.JSX.Element {
   const [available, setAvailable] = useState<string[]>([]);
   const [saved, setSaved] = useState<SavedView[]>([]);
   const [vault, setVault] = useState<VaultView | null>(null);
+  // The connection whose Forget button has been pressed once. Removing a
+  // connection takes its password out of the keychain and there is nothing to
+  // undo it with, so it asks twice.
+  const [forgetting, setForgetting] = useState<string | null>(null);
+
+  // refreshSaved is called from the effect below and from every handler, so it
+  // cannot use the effect's own flag. Without this it can set state after the
+  // component has gone, which React 19 tolerates and the next one may not.
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+
+    return (): void => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -78,11 +95,16 @@ export function ConnectionForm(): React.JSX.Element {
 
   async function refreshSaved(): Promise<void> {
     try {
-      setSaved(await savedConnections());
+      const connections = await savedConnections();
+      if (mounted.current) {
+        setSaved(connections);
+      }
     } catch (err) {
       // A file someone broke by hand is reported rather than swallowed: an
       // empty list would look exactly like never having saved anything.
-      setNotice(String(err));
+      if (mounted.current) {
+        setNotice(String(err));
+      }
     }
   }
 
@@ -157,7 +179,22 @@ export function ConnectionForm(): React.JSX.Element {
     }
   }
 
+  // The first press arms, the second removes. A confirmation rather than an
+  // undo because there is nothing to undo with: the password is gone from the
+  // keychain, and Hermes never had a copy of it to put back.
+  function onForgetRequest(id: string): void {
+    if (forgetting !== id) {
+      setForgetting(id);
+      setNotice("Press Forget again to remove this connection and its password.");
+
+      return;
+    }
+
+    void onForget(id);
+  }
+
   async function onForget(id: string): Promise<void> {
+    setForgetting(null);
     setBusy(true);
     try {
       await deleteConnection(id);
@@ -174,6 +211,7 @@ export function ConnectionForm(): React.JSX.Element {
   }
 
   function onLoad(connection: SavedView): void {
+    setForgetting(null);
     setForm(formFromSaved(connection));
     setDiagnosis(null);
     setNotice("Loaded. The password comes from the keychain when you connect.");
@@ -204,7 +242,8 @@ export function ConnectionForm(): React.JSX.Element {
           current={form.id}
           busy={busy}
           onLoad={onLoad}
-          onForget={(id): void => void onForget(id)}
+          forgetting={forgetting}
+          onForget={onForgetRequest}
         />
       )}
 
@@ -370,6 +409,7 @@ function SavedConnections(props: {
   connections: SavedView[];
   current: string;
   busy: boolean;
+  forgetting: string | null;
   onLoad: (connection: SavedView) => void;
   onForget: (id: string) => void;
 }): React.JSX.Element {
@@ -396,14 +436,22 @@ function SavedConnections(props: {
             </button>
             <button
               type="button"
-              className="connection__forget"
+              className={
+                props.forgetting === connection.id
+                  ? "connection__forget is-confirming"
+                  : "connection__forget"
+              }
               disabled={props.busy}
-              aria-label={`Forget ${connection.name === "" ? connection.host : connection.name}`}
+              aria-label={
+                props.forgetting === connection.id
+                  ? `Confirm removing ${connection.name === "" ? connection.host : connection.name}`
+                  : `Forget ${connection.name === "" ? connection.host : connection.name}`
+              }
               onClick={(): void => {
                 props.onForget(connection.id);
               }}
             >
-              Forget
+              {props.forgetting === connection.id ? "Confirm" : "Forget"}
             </button>
           </li>
         ))}
