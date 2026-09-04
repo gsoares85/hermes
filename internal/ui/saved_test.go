@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gsoares85/hermes/internal/core/conn"
 	"github.com/gsoares85/hermes/internal/core/secret"
@@ -497,5 +499,156 @@ func TestTheVaultStatusGivesUpWithTheWindow(t *testing.T) {
 
 	if _, err := service.VaultStatus(ctx); err == nil {
 		t.Error("VaultStatus() on a cancelled context = nil, want the failure it gave up with")
+	}
+}
+
+// blockingVault enters the keychain and stays there, which is what a locked
+// login keychain or an unanswered authorisation dialog looks like from here.
+type blockingVault struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingVault) block(ctx context.Context) error {
+	b.once.Do(func() { close(b.entered) })
+
+	select {
+	case <-b.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (b *blockingVault) Get(ctx context.Context, _ secret.Ref) (string, error) {
+	return "", b.block(ctx)
+}
+func (b *blockingVault) Set(ctx context.Context, _ secret.Ref, _ string) error { return b.block(ctx) }
+func (b *blockingVault) Delete(ctx context.Context, _ secret.Ref) error        { return b.block(ctx) }
+
+func newBlockingVault() *blockingVault {
+	return &blockingVault{entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+// The regression this locking exists to prevent: a save waiting on an
+// authorisation dialog used to hold the lock every other call needs, so the
+// list the window draws after saving queued behind a dialog nobody had answered
+// yet. Reading the saved connections touches no keychain and must not wait for
+// one either.
+func TestASaveWaitingOnTheKeychainDoesNotHoldUpTheWindow(t *testing.T) {
+	t.Parallel()
+
+	blocked := newBlockingVault()
+	defer close(blocked.release)
+
+	service := ui.NewConnectionService(ui.Dependencies{
+		Opener: stubOpener{},
+		Store:  &memoryStore{},
+		Vault:  blocked,
+	})
+
+	saving := make(chan error, 1)
+
+	go func() {
+		_, err := service.Save(t.Context(), ui.ConnectionForm{
+			Name: "held up", Host: "h", Port: 5432, User: "u", Password: "s3cr3t",
+		})
+		saving <- err
+	}()
+
+	// Only once the save is actually inside the keychain is the question
+	// meaningful; before that it might simply not have got there yet.
+	<-blocked.entered
+
+	listed := make(chan error, 1)
+
+	go func() {
+		_, err := service.List()
+		listed <- err
+	}()
+
+	select {
+	case err := <-listed:
+		if err != nil {
+			t.Errorf("List() = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("List() waited for a save that is stuck in the keychain")
+	}
+}
+
+// And the save itself has to come back. The context Wails hands a bound method
+// has no deadline, so a keyring that never answers would otherwise be a button
+// that never returns.
+func TestASaveGivesUpOnAKeychainThatNeverAnswers(t *testing.T) {
+	t.Parallel()
+
+	blocked := newBlockingVault()
+	defer close(blocked.release)
+
+	service := ui.NewConnectionService(ui.Dependencies{
+		Opener: stubOpener{},
+		Store:  &memoryStore{},
+		Vault:  blocked,
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	saving := make(chan error, 1)
+
+	go func() {
+		_, err := service.Save(ctx, ui.ConnectionForm{
+			Name: "given up", Host: "h", Port: 5432, User: "u", Password: "s3cr3t",
+		})
+		saving <- err
+	}()
+
+	<-blocked.entered
+	cancel()
+
+	select {
+	case err := <-saving:
+		if err == nil {
+			t.Error("Save() = nil after the keychain call was given up on")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Save() never came back from a keychain that never answered")
+	}
+}
+
+// The connection is in the file either way. A password that could not be stored
+// is something the person can see and retype; a save that rolled the file back
+// because the keychain hung would lose work nobody asked to lose.
+func TestAConnectionIsSavedEvenWhenTheKeychainDoesNot(t *testing.T) {
+	t.Parallel()
+
+	blocked := newBlockingVault()
+	defer close(blocked.release)
+
+	store := &memoryStore{}
+	service := ui.NewConnectionService(ui.Dependencies{
+		Opener: stubOpener{}, Store: store, Vault: blocked,
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	go func() {
+		<-blocked.entered
+		cancel()
+	}()
+
+	if _, err := service.Save(ctx, ui.ConnectionForm{
+		Name: "kept", Host: "h", Port: 5432, User: "u", Password: "s3cr3t",
+	}); err == nil {
+		t.Fatal("Save() = nil although the keychain never answered")
+	}
+
+	listed, err := service.List()
+	if err != nil {
+		t.Fatalf("List() = %v", err)
+	}
+	if len(listed) != 1 || listed[0].Name != "kept" {
+		t.Errorf("the saved connections are %+v, want the one that was saved", listed)
 	}
 }

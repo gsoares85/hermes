@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"strings"
 
@@ -14,6 +15,16 @@ import (
 	"github.com/gsoares85/hermes/internal/core/secret"
 	"github.com/gsoares85/hermes/internal/driver"
 )
+
+// vaultTimeout bounds every call this boundary makes to the keychain.
+//
+// The context Wails hands a bound method carries no deadline of its own, and
+// the window offers no way to cancel one, so without this a keyring that never
+// answers is a button that never comes back. It is generous rather than tight
+// on purpose: on macOS and on Linux the call can be a dialog waiting for a
+// person to type their keychain password, and cutting that off after a couple
+// of seconds would fail the one case the dialog exists for.
+const vaultTimeout = 30 * time.Second
 
 // ConnectionForm is what the window sends when someone describes a connection.
 //
@@ -223,23 +234,8 @@ func (s *ConnectionService) Save(ctx context.Context, form ConnectionForm) (Save
 		return SavedView{}, secret.Error(err)
 	}
 
-	s.saved.Lock()
-	defer s.saved.Unlock()
-
-	saved, err := s.store.Load()
-	if err != nil {
-		return SavedView{}, secret.Error(err)
-	}
-
-	// The store is handed a connection with the password taken out of it. The
-	// file format has no field for one and would drop it anyway, but a boundary
-	// that relies on the far side to do the dropping is a boundary that leaks
-	// the day someone writes a second implementation of it.
-	stored := config
-	stored.Password = ""
-
-	if err := s.store.Save(replacing(saved, stored)); err != nil {
-		return SavedView{}, secret.Error(err)
+	if err := s.record(config); err != nil {
+		return SavedView{}, err
 	}
 
 	// After the file and not before it. Either order can fail halfway, and this
@@ -251,6 +247,36 @@ func (s *ConnectionService) Save(ctx context.Context, form ConnectionForm) (Save
 	}
 
 	return savedView(config), nil
+}
+
+// record puts the connection in the file, holding the lock for exactly as long
+// as that takes and no longer.
+//
+// The keychain is deliberately outside it. A call to the keychain can open a
+// dialog and wait for a person, and holding this lock across one would put
+// every other call to this service behind that dialog — List above all, which
+// the window makes after every save and again at startup.
+func (s *ConnectionService) record(config conn.Config) error {
+	s.saved.Lock()
+	defer s.saved.Unlock()
+
+	saved, err := s.store.Load()
+	if err != nil {
+		return secret.Error(err)
+	}
+
+	// The store is handed a connection with the password taken out of it. The
+	// file format has no field for one and would drop it anyway, but a boundary
+	// that relies on the far side to do the dropping is a boundary that leaks
+	// the day someone writes a second implementation of it.
+	stored := config
+	stored.Password = ""
+
+	if err := s.store.Save(replacing(saved, stored)); err != nil {
+		return secret.Error(err)
+	}
+
+	return nil
 }
 
 // List returns the saved connections, and touches no keychain doing it.
@@ -277,6 +303,27 @@ func (s *ConnectionService) List() ([]SavedView, error) {
 // that nothing will ever look for again: invisible litter that outlives the
 // application.
 func (s *ConnectionService) Delete(ctx context.Context, id string) error {
+	if err := s.forget(id); err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, vaultTimeout)
+	defer cancel()
+
+	// A connection saved without a password has no secret to remove, and that
+	// is a normal outcome rather than a failure.
+	if err := s.vault.Delete(ctx, secret.ConnectionRef(id)); err != nil &&
+		!errors.Is(err, secret.ErrNotFound) {
+		return fmt.Errorf("the connection was removed, but its password is still in the keychain: %w",
+			secret.Error(err))
+	}
+
+	return nil
+}
+
+// forget takes the connection out of the file, under the same lock and with the
+// same boundary as record: the keychain is dealt with by the caller, afterwards.
+func (s *ConnectionService) forget(id string) error {
 	s.saved.Lock()
 	defer s.saved.Unlock()
 
@@ -294,14 +341,6 @@ func (s *ConnectionService) Delete(ctx context.Context, id string) error {
 		return secret.Error(err)
 	}
 
-	// A connection saved without a password has no secret to remove, and that
-	// is a normal outcome rather than a failure.
-	if err := s.vault.Delete(ctx, secret.ConnectionRef(id)); err != nil &&
-		!errors.Is(err, secret.ErrNotFound) {
-		return fmt.Errorf("the connection was removed, but its password is still in the keychain: %w",
-			secret.Error(err))
-	}
-
 	return nil
 }
 
@@ -316,6 +355,9 @@ func (s *ConnectionService) keep(ctx context.Context, config conn.Config) error 
 	if config.Password == "" {
 		return nil
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, vaultTimeout)
+	defer cancel()
 
 	if err := s.vault.Set(ctx, secret.ConnectionRef(config.ID), config.Password); err != nil {
 		return fmt.Errorf("the connection was saved, but its password was not: %w", secret.Error(err))
@@ -337,6 +379,9 @@ func (s *ConnectionService) credentials(ctx context.Context, config conn.Config)
 	if config.Password != "" || strings.TrimSpace(config.ID) == "" {
 		return config, nil
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, vaultTimeout)
+	defer cancel()
 
 	stored, err := s.vault.Get(ctx, secret.ConnectionRef(config.ID))
 	if errors.Is(err, secret.ErrNotFound) {
