@@ -219,8 +219,10 @@ build:
 - print it in a log, an error message or a report;
 - pass it on the command line of a program it starts, where every other process on the machine
   could read it. The route `pg_dump` and `pg_restore` will take is already built and tested: the
-  environment, or a temporary password file created `0600` and removed afterwards — including
-  after a crash or a kill, which the next start-up cleans up.
+  environment, or a temporary password file created `0600` and removed afterwards. A file left
+  behind by a crash, a kill or a power cut is removed by the next start-up, which asks the
+  operating system whether anything still holds the file rather than trusting what its name
+  says — so a Hermes running a backup keeps its file, and one that died does not.
 
 Anything that could carry a connection string is redacted on the way out, so a message you paste
 into a bug report reads:
