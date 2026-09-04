@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -54,6 +55,32 @@ type ConnectionForm struct {
 	RootCert string `json:"rootCert"`
 	Cert     string `json:"cert"`
 	Key      string `json:"key"`
+}
+
+// String describes the connection without describing the credential.
+//
+// It exists so that %v cannot print one. ConnectionForm is the only type that
+// crosses this boundary carrying a password, so it is the only one that has to
+// refuse to render it — and the redaction downstream is a net, not a proof.
+func (f ConnectionForm) String() string {
+	return fmt.Sprintf("%s@%s:%d/%s", f.User, f.Host, f.Port, f.Database)
+}
+
+// LogValue is the same promise for structured logging, where a value is
+// rendered field by field rather than as a whole.
+func (f ConnectionForm) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("id", f.ID),
+		slog.String("name", f.Name),
+		slog.String("host", f.Host),
+		slog.Int("port", f.Port),
+		slog.String("database", f.Database),
+		slog.String("user", f.User),
+		slog.String("sslmode", f.SSLMode),
+		// Whether there is one, never what it is: the difference between a
+		// form that will authenticate and one that will not is worth logging.
+		slog.Bool("hasPassword", f.Password != ""),
+	)
 }
 
 // ConnectionView is a connection as the window draws it. There is deliberately

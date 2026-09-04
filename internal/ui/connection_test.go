@@ -1,9 +1,11 @@
 package ui_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -345,4 +347,37 @@ func (m *memoryStore) Save(connections []conn.Config) error {
 	m.saved = append([]conn.Config(nil), connections...)
 
 	return nil
+}
+
+// The one type crossing this boundary that carries a password is the one that
+// must not print itself. %v reaches a log the moment anyone logs the call the
+// form arrived on, and the redaction is a net, not a proof.
+func TestTheFormNeverPrintsThePassword(t *testing.T) {
+	t.Parallel()
+
+	form := ui.ConnectionForm{
+		Name: "production", Host: "db.example.com", Port: 5432,
+		Database: "app", User: "reporting", Password: "s3cr3t",
+	}
+
+	var logged bytes.Buffer
+	slog.New(slog.NewTextHandler(&logged, nil)).Info("saving", "form", form)
+
+	printed := map[string]string{
+		"String": form.String(),
+		"%v":     fmt.Sprintf("%v", form),
+		"%+v":    fmt.Sprintf("%+v", form),
+		"slog":   logged.String(),
+	}
+
+	for how, text := range printed {
+		if strings.Contains(text, "s3cr3t") {
+			t.Errorf("the form printed by %s is %q, the secret survived", how, text)
+		}
+		// Useless is not the same as safe: what is left has to still identify
+		// the connection someone is reading the log about.
+		if !strings.Contains(text, "db.example.com") {
+			t.Errorf("the form printed by %s is %q, want it to still name the host", how, text)
+		}
+	}
 }

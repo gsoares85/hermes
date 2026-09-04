@@ -136,3 +136,26 @@ func TestReleaseOfAHandoffWithNoFileIsNotAFailure(t *testing.T) {
 		t.Errorf("Release() = %v, want nil", err)
 	}
 }
+
+// The other type in this package that holds a password. Handoff has printed
+// itself safely since it was written; the target it is built from did not, and
+// a target is what a caller assembles and is most likely to log while working
+// out why a dump failed.
+func TestTheTargetNeverPrintsThePassword(t *testing.T) {
+	t.Parallel()
+
+	printed := map[string]string{
+		"String": target().String(),
+		"%v":     fmt.Sprintf("%v", target()),
+		"%+v":    fmt.Sprintf("%+v", target()),
+	}
+
+	for how, text := range printed {
+		if strings.Contains(text, password) {
+			t.Errorf("the target printed by %s is %q, the secret survived", how, text)
+		}
+		if !strings.Contains(text, "db.example.com") {
+			t.Errorf("the target printed by %s is %q, want it to still name the host", how, text)
+		}
+	}
+}

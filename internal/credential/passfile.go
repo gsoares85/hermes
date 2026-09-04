@@ -2,6 +2,7 @@ package credential
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -29,6 +30,23 @@ type Target struct {
 	Database string
 	User     string
 	Password string
+}
+
+// String describes the target without describing the credential, so that a
+// caller working out why a dump failed can log what it was talking to.
+func (t Target) String() string {
+	return fmt.Sprintf("%s@%s:%d/%s", t.User, t.Host, t.Port, t.Database)
+}
+
+// LogValue is the same promise for structured logging.
+func (t Target) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("host", t.Host),
+		slog.Int("port", t.Port),
+		slog.String("database", t.Database),
+		slog.String("user", t.User),
+		slog.Bool("hasPassword", t.Password != ""),
+	)
 }
 
 // Store is the directory temporary password files are written to.
