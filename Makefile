@@ -74,11 +74,11 @@ check-commits: ## Fail if a commit or the branch credits an AI assistant
 
 .PHONY: check-readme
 check-readme: ## Fail if the README points at files that are not published
-# The pattern used to spell out the shapes a reference could take, and so missed
-# docs/README.md, whose second segment is uppercase, and any mention in prose.
-# The directory is not published at all, so naming it is the problem, in any form.
-	@! grep -nE 'docs/|CLAUDE\.md|\.claude/' README.md || \
-		(echo "README must not reference files that are not in the repository" && exit 1)
+# A Go program rather than a grep, like the other two gates. A recipe runs on
+# whatever shell the platform hands make, and the one Windows hands it does not
+# understand `! cmd || (...)`: this target used to fail there with `"!" is not
+# recognized`, on a machine where nothing was wrong with the README at all.
+	$(GO) run ./scripts/checkreadme -file=README.md
 
 .PHONY: build
 build: build-frontend ## Build every binary
