@@ -131,6 +131,18 @@ Press **Test connection** to check the settings without keeping anything open, o
 open the connection. Once connected, the databases you can reach appear as a list; picking one
 fills the database field.
 
+While Hermes is working, a **Stop** button appears beside the others and is the only one that
+stays live. Every long step on this screen ends either in your keychain or in a server, and both
+can take as long as they like: reading a password on macOS or Linux can raise a dialog that
+waits for you, and a host that is not answering runs to the driver's own timeout. Stopping is
+never a failure — Hermes says the operation was stopped, and where the result is genuinely
+unknown, such as a save cut off part way, it says that instead of claiming either outcome.
+
+```
+[ Test connection ]  [ Connect ]  [ Save connection ]              [ Stop ]
+Working…
+```
+
 Already have a connection string? Paste it and press **Fill the form**:
 
 ```
@@ -305,6 +317,27 @@ postgres://reporting@db.example.com/analytics?application_name=hermes&search_pat
 
 Connection settings such as `connect_timeout` or `require_auth` are carried too, and kept apart
 from session settings — sending one as the other would quietly drop it.
+
+Neither table will hold a password. `password`, `sslpassword` and `pgpassword` are refused under
+`[connection.params]` and `[connection.options]`, on the way in and on the way out, with an
+error saying where passwords are actually kept:
+
+```toml
+[[connection]]
+id = 'b7f0c6e1-1a4d-4f2f-9d6a-2a1c8e0b3f55'
+host = 'db.example.com'
+port = 5432
+user = 'reporting'
+
+[connection.options]
+password = 'hunter2'
+```
+
+```
+~/.config/hermes/connections.toml: line 3, options.password: invalid connection:
+options.password would put a password in the connections file in plain text — Hermes keeps
+passwords in the keychain of the system
+```
 
 ## Roadmap
 
