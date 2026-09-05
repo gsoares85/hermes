@@ -159,3 +159,60 @@ func TestTheTargetNeverPrintsThePassword(t *testing.T) {
 		}
 	}
 }
+
+// The case-insensitive comparison exists because the environment of Windows is:
+// PgPassword and PGPASSWORD are one variable there, and an exact match would
+// leave the inherited one in place — where libpq would read it in preference to
+// what this package prepared. The branch had no test at all, so the rule was
+// written down and never exercised.
+//
+// It runs on every platform on purpose. On Unix the spelling is a different
+// variable, one libpq does not read and nobody sets, and dropping it costs
+// nothing; keeping one rule instead of two is the point, and a test that only
+// ran on Windows would let the rule diverge everywhere else.
+func TestApplyReplacesAnInheritedCredentialWhateverItsCase(t *testing.T) {
+	t.Parallel()
+
+	handoff, err := credential.InEnvironment(password)
+	if err != nil {
+		t.Fatalf("InEnvironment(...) = %v", err)
+	}
+
+	got := environmentOf(t, handoff,
+		"Path=/usr/bin",
+		"PgPassword=theirs",
+		"pgpassfile=/home/someone/.pgpass",
+		"PGPASSWORD=also-theirs",
+		"PgHost=localhost")
+
+	for _, unwanted := range []string{
+		"PgPassword=theirs", "pgpassfile=/home/someone/.pgpass", "PGPASSWORD=also-theirs",
+	} {
+		if slices.Contains(got, unwanted) {
+			t.Errorf("environment = %v, want %q gone", got, unwanted)
+		}
+	}
+	for _, kept := range []string{"Path=/usr/bin", "PgHost=localhost", "PGPASSWORD=" + password} {
+		if !slices.Contains(got, kept) {
+			t.Errorf("environment = %v, want it to carry %q", got, kept)
+		}
+	}
+}
+
+// The rule is about the whole name, not about what a name starts with.
+func TestApplyKeepsAVariableThatMerelyBeginsLikeOne(t *testing.T) {
+	t.Parallel()
+
+	handoff, err := credential.InEnvironment(password)
+	if err != nil {
+		t.Fatalf("InEnvironment(...) = %v", err)
+	}
+
+	got := environmentOf(t, handoff, "PGPASSWORD_FILE=/etc/secret", "PGPASSFILEDIR=/tmp")
+
+	for _, kept := range []string{"PGPASSWORD_FILE=/etc/secret", "PGPASSFILEDIR=/tmp"} {
+		if !slices.Contains(got, kept) {
+			t.Errorf("environment = %v, want it to keep %q", got, kept)
+		}
+	}
+}
