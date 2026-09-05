@@ -1,6 +1,7 @@
 package credential
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -128,19 +129,34 @@ func (s *Store) write(records string) (string, io.Closer, error) {
 	// leave a secret behind, because there is no secret in the file yet.
 	claim, err := hold(file)
 	if err != nil {
-		_ = os.Remove(file.Name())
-
-		return "", nil, err
+		return "", nil, errors.Join(err, discard(file.Name()))
 	}
 
 	if err := fill(file, records); err != nil {
-		_ = claim.Close()
-		_ = os.Remove(file.Name())
-
-		return "", nil, err
+		return "", nil, errors.Join(err, claim.Close(), discard(file.Name()))
 	}
 
 	return file.Name(), claim, nil
+}
+
+// discard removes a password file whose writing failed, and says so when it
+// cannot.
+//
+// The error is joined onto the failure rather than dropped, and that is not
+// tidiness. fill may have written part of a record before it failed, so a
+// removal that does not work leaves a secret on the disk — and with the removal
+// swallowed, the one report anybody would ever see is about the failure to
+// write, which says nothing about a file still being there. The sweep at the
+// next start-up would collect it, if it can, which is the question this is
+// there to raise.
+//
+// A file that has already gone is the outcome asked for.
+func discard(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing %s after failing to write it: %w", path, err)
+	}
+
+	return nil
 }
 
 // fill writes the records and flushes them. A child process reads this file

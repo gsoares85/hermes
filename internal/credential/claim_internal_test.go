@@ -3,6 +3,8 @@ package credential
 import (
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -85,5 +87,38 @@ func TestTheRealClaimCanBeGivenUpTwice(t *testing.T) {
 	}
 	if err := claim.Close(); err != nil {
 		t.Errorf("the second Close() = %v, want nil", err)
+	}
+}
+
+// A failure to write leaves a file that may already hold part of a record, so
+// the removal that cleans it up is the second thing that can go wrong — and it
+// used to go wrong silently. The report anybody would have seen was about the
+// failure to write, which says nothing about a secret still being on the disk.
+func TestAFailureToRemoveAHalfWrittenFileIsReported(t *testing.T) {
+	t.Parallel()
+
+	// A directory with something in it is what os.Remove refuses, on every
+	// platform and without needing a permission nobody has in a test.
+	occupied := filepath.Join(t.TempDir(), "occupied")
+	if err := os.MkdirAll(filepath.Join(occupied, "inside"), 0o700); err != nil {
+		t.Fatalf("creating %s: %v", occupied, err)
+	}
+
+	err := discard(occupied)
+	if err == nil {
+		t.Fatal("discard(...) = nil for a path it could not remove")
+	}
+	if !strings.Contains(err.Error(), occupied) {
+		t.Errorf("discard(...) = %v, want it to name the file left behind", err)
+	}
+}
+
+// A file that has already gone — swept by another process, or removed by the
+// failure that is being cleaned up after — is the outcome asked for.
+func TestRemovingAFileThatHasAlreadyGoneIsNotAFailure(t *testing.T) {
+	t.Parallel()
+
+	if err := discard(filepath.Join(t.TempDir(), "never-there")); err != nil {
+		t.Errorf("discard(...) = %v, want nil", err)
 	}
 }
