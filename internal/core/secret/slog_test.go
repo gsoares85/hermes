@@ -271,3 +271,59 @@ func TestHandlerRedactsAPasswordWithSpacesInIt(t *testing.T) {
 		t.Errorf("the log lost the host it was about: %s", line)
 	}
 }
+
+// The hole the handler documented as a known limit: a password put in an
+// attribute of its own, under a name saying what it is, went through untouched
+// because it is not a shape any pattern recognises. It is also the shape
+// somebody in a hurry reaches for.
+func TestHandlerRedactsAValueWhoseKeyNamesASecret(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{
+		"password", "pw", "pwd", "passwd", "pass",
+		"Password", "db_password", "dbPassword", "ssl-password",
+		"passphrase", "secret", "token", "apiKey", "credential",
+	} {
+		line := logged(t, func(logger *slog.Logger) {
+			logger.Info("saving", key, "correct horse battery")
+		})
+
+		if strings.Contains(line, "correct") {
+			t.Errorf("the attribute %q went through with the secret in it: %s", key, line)
+		}
+		if !strings.Contains(line, key) {
+			t.Errorf("the attribute %q lost its name: %s", key, line)
+		}
+	}
+}
+
+// The rule is a list of names rather than a search for "password" inside one,
+// and hasPassword is the reason. Whether a form carries a password is worth
+// logging and is not one, and a blunter rule would take it away.
+func TestHandlerKeepsAttributesThatOnlyTalkAboutPasswords(t *testing.T) {
+	t.Parallel()
+
+	line := logged(t, func(logger *slog.Logger) {
+		logger.Info("saving", "hasPassword", true, "passwordAttempts", 3, "user", "reporting")
+	})
+
+	for _, kept := range []string{"hasPassword", "true", "passwordAttempts", "3", "reporting"} {
+		if !strings.Contains(line, kept) {
+			t.Errorf("the log lost %q, which is not a secret: %s", kept, line)
+		}
+	}
+}
+
+// The same rule on the attributes bound to a logger, which are written on every
+// record it emits: a secret that gets past there gets past repeatedly.
+func TestHandlerRedactsABoundAttributeWhoseKeyNamesASecret(t *testing.T) {
+	t.Parallel()
+
+	line := logged(t, func(logger *slog.Logger) {
+		logger.With("password", "s3cr3t").Info("connecting")
+	})
+
+	if strings.Contains(line, "s3cr3t") {
+		t.Errorf("a bound attribute carried the secret: %s", line)
+	}
+}

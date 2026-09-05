@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // Placeholder left where a password was. It is fixed rather than derived from
@@ -105,6 +106,48 @@ var passwordJSON = regexp.MustCompile(`(?i)("(?:ssl)?password"\s*:\s*)"(?:\\.|[^
 // and a URI is the other shape it arrives in. The keyword form needs no entry:
 // the pattern above matches the "password=" inside "sslpassword=" already.
 var secretQueryKeys = []string{"password", "sslpassword"}
+
+// Attribute keys that are a secret by name, whatever they hold.
+//
+// The pattern matching in this file judges a value by its shape, so a password
+// logged on its own — no keyword, no braces, no URI around it — is a value it
+// cannot recognise. A key saying what the value is settles it instead.
+//
+// The list is exact rather than a substring search, and hasPassword is why:
+// whether a form carries a password is worth logging and is not one, and a rule
+// matching anything containing "password" would take it away. Names are folded
+// and stripped of the separators people write them with, so db_password and
+// dbPassword are the same name.
+var secretKeys = map[string]bool{
+	"password":    true,
+	"passwd":      true,
+	"pass":        true,
+	"pw":          true,
+	"pwd":         true,
+	"dbpassword":  true,
+	"sslpassword": true,
+	"pgpassword":  true,
+	"passphrase":  true,
+	"secret":      true,
+	"token":       true,
+	"apikey":      true,
+	"credential":  true,
+	"credentials": true,
+}
+
+// namesASecret reports whether an attribute key says its value is one.
+func namesASecret(key string) bool {
+	folded := strings.Map(func(r rune) rune {
+		switch r {
+		case '_', '-', '.', ' ':
+			return -1
+		default:
+			return unicode.ToLower(r)
+		}
+	}, key)
+
+	return secretKeys[folded]
+}
 
 // Redact returns the connection string with its password replaced, in both the
 // URL and the keyword form.

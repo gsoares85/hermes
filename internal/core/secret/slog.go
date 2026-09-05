@@ -16,9 +16,12 @@ import (
 // happen through this path — including through the framework's own logging,
 // which this application does not write and cannot review.
 //
-// What it is not is a proof. Redact recognises the shapes a connection string
-// travels in, so a secret carried in a shape of its own — a field of a struct
-// logged whole, a password put in an attribute of its own by name — still gets
+// It works two ways: on the shape of a value, which is what Redact judges, and
+// on the name of an attribute, because a value logged under the key "password"
+// says what it is however little it looks like a connection string.
+//
+// What it is not is a proof. A secret in a shape neither test recognises — a
+// field of a struct with an unremarkable name, logged whole — still gets
 // through. The boundary rule remains the one that matters: no type that can
 // hold a secret is logged. This is the net under it.
 type Handler struct {
@@ -86,9 +89,23 @@ func redactAttrs(attrs []slog.Attr) []slog.Attr {
 	return redacted
 }
 
-// The key is left alone. It is written by the call site, not by whatever the
-// call site was handed, and a key wide enough to hold a DSN is a different bug.
+// A key that names a secret settles it, whatever the value looks like.
+//
+// This was the documented hole: Redact recognises the shapes a connection
+// string travels in, and log.Info("saving", "pw", "s3cr3t") is not one of them.
+// A password put in an attribute of its own, under a name saying what it is,
+// went through untouched — and it is the shape somebody in a hurry reaches for.
+// It also catches every password the patterns cannot judge on their own,
+// starting with one that has spaces in it.
+//
+// The key itself is kept. It is written by the call site rather than by
+// whatever the call site was handed, and what a redacted log is for is telling
+// a reader that there was a password here, not pretending there was not.
 func redactAttr(attr slog.Attr) slog.Attr {
+	if namesASecret(attr.Key) {
+		return slog.String(attr.Key, redacted)
+	}
+
 	attr.Value = redactValue(attr.Value)
 
 	return attr
