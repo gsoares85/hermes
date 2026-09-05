@@ -1,23 +1,27 @@
 package ui_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/gsoares85/hermes/internal/core/conn"
+	"github.com/gsoares85/hermes/internal/core/secret"
 	"github.com/gsoares85/hermes/internal/driver"
 	"github.com/gsoares85/hermes/internal/ui"
 )
 
-const secret = "s3cr3t"
+const password = "s3cr3t"
 
 func form() ui.ConnectionForm {
 	return ui.ConnectionForm{
 		Name: "staging", Host: "db.example.com", Port: 5432,
-		Database: "hermes", User: "hermes", Password: secret,
+		Database: "hermes", User: "hermes", Password: password,
 		SSLMode: "disable",
 	}
 }
@@ -62,18 +66,20 @@ func TestNothingReturnedCarriesACredential(t *testing.T) {
 		ui.ConnectionView{},
 		ui.DiagnosisView{},
 		ui.StatusView{},
+		ui.SavedView{},
+		ui.VaultView{},
 	}
 
-	// The walk itself is checked before it is trusted. A secret is planted in
+	// The walk itself is checked before it is trusted. A password is planted in
 	// the nested field and the helper must find it — the previous version
 	// returned "<ui.DiagnosisView Value>" there and would have reported a real
 	// leak as clean.
 	planted := ui.StatusView{
 		ID:        "1",
 		State:     "down",
-		Diagnosis: ui.DiagnosisView{Failed: true, Detail: "postgres://hermes:" + secret + "@host/db"},
+		Diagnosis: ui.DiagnosisView{Failed: true, Detail: "postgres://hermes:" + password + "@host/db"},
 	}
-	if !strings.Contains(renderAll(planted), secret) {
+	if !strings.Contains(renderAll(planted), password) {
 		t.Fatal("the field walk does not descend into nested structs, so it cannot detect a leak there")
 	}
 
@@ -88,7 +94,7 @@ func TestNothingReturnedCarriesACredential(t *testing.T) {
 				name := strings.ToLower(typ.Field(i).Name)
 				for _, banned := range forbidden {
 					// HasPassword says whether one exists, and carries no
-					// secret; anything that would hold the value itself does.
+					// password; anything that would hold the value itself does.
 					if strings.Contains(name, banned) && !strings.HasPrefix(name, "has") {
 						t.Errorf("%s.%s can carry a credential across the boundary",
 							typ.Name(), typ.Field(i).Name)
@@ -104,9 +110,9 @@ func TestNothingReturnedCarriesACredential(t *testing.T) {
 func TestParseFillsTheFormWithoutThePassword(t *testing.T) {
 	t.Parallel()
 
-	service := ui.NewConnectionService(stubOpener{})
+	service := service(stubOpener{})
 
-	got, err := service.Parse("postgres://hermes:" + secret + "@db.example.com:5433/app?sslmode=require")
+	got, err := service.Parse("postgres://hermes:" + password + "@db.example.com:5433/app?sslmode=require")
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
@@ -121,7 +127,7 @@ func TestParseFillsTheFormWithoutThePassword(t *testing.T) {
 		t.Error("HasPassword = false, want the form to know one was pasted")
 	}
 
-	if rendered := renderAll(got); strings.Contains(rendered, secret) {
+	if rendered := renderAll(got); strings.Contains(rendered, password) {
 		t.Errorf("the parsed form carried the password: %s", rendered)
 	}
 }
@@ -129,7 +135,7 @@ func TestParseFillsTheFormWithoutThePassword(t *testing.T) {
 func TestParseReportsAMalformedURI(t *testing.T) {
 	t.Parallel()
 
-	service := ui.NewConnectionService(stubOpener{})
+	service := service(stubOpener{})
 
 	if _, err := service.Parse("mysql://nope/app"); err == nil {
 		t.Error("Parse accepted a URI that is not a postgres one")
@@ -141,7 +147,7 @@ func TestParseReportsAMalformedURI(t *testing.T) {
 func TestTestReturnsADiagnosisRatherThanAnError(t *testing.T) {
 	t.Parallel()
 
-	service := ui.NewConnectionService(stubOpener{
+	service := service(stubOpener{
 		pingErr: &driver.Failure{Class: driver.FailureAuth, Err: errors.New("rejected")},
 	})
 
@@ -161,7 +167,7 @@ func TestTestReturnsADiagnosisRatherThanAnError(t *testing.T) {
 func TestTestReportsSuccess(t *testing.T) {
 	t.Parallel()
 
-	service := ui.NewConnectionService(stubOpener{})
+	service := service(stubOpener{})
 
 	if got := service.Test(t.Context(), form()); got.Failed {
 		t.Errorf("a working connection reported a failure: %+v", got)
@@ -173,15 +179,15 @@ func TestTestReportsSuccess(t *testing.T) {
 func TestADiagnosisNeverCarriesThePassword(t *testing.T) {
 	t.Parallel()
 
-	service := ui.NewConnectionService(stubOpener{
+	service := service(stubOpener{
 		pingErr: &driver.Failure{
 			Class: driver.FailureAuth,
-			Err:   errors.New("failed: postgres://hermes:" + secret + "@db.example.com/hermes"),
+			Err:   errors.New("failed: postgres://hermes:" + password + "@db.example.com/hermes"),
 		},
 	})
 
 	got := service.Test(t.Context(), form())
-	if rendered := renderAll(got); strings.Contains(rendered, secret) {
+	if rendered := renderAll(got); strings.Contains(rendered, password) {
 		t.Errorf("the diagnosis leaked the password: %s", rendered)
 	}
 }
@@ -189,7 +195,7 @@ func TestADiagnosisNeverCarriesThePassword(t *testing.T) {
 func TestOpenKeepsTheConnectionAndReportsIt(t *testing.T) {
 	t.Parallel()
 
-	service := ui.NewConnectionService(stubOpener{})
+	service := service(stubOpener{})
 
 	opened, err := service.Open(t.Context(), form())
 	if err != nil {
@@ -221,7 +227,7 @@ func TestOpenKeepsTheConnectionAndReportsIt(t *testing.T) {
 func TestOpenRejectsAFormThatCannotConnect(t *testing.T) {
 	t.Parallel()
 
-	service := ui.NewConnectionService(stubOpener{})
+	service := service(stubOpener{})
 
 	broken := form()
 	broken.Host = ""
@@ -236,7 +242,7 @@ func TestOpenRejectsAFormThatCannotConnect(t *testing.T) {
 func TestEveryOpenConnectionGetsItsOwnIdentifier(t *testing.T) {
 	t.Parallel()
 
-	service := ui.NewConnectionService(stubOpener{})
+	service := service(stubOpener{})
 
 	first, err := service.Open(t.Context(), form())
 	if err != nil {
@@ -255,7 +261,7 @@ func TestEveryOpenConnectionGetsItsOwnIdentifier(t *testing.T) {
 func TestUnknownIdentifiersAreRejected(t *testing.T) {
 	t.Parallel()
 
-	service := ui.NewConnectionService(stubOpener{})
+	service := service(stubOpener{})
 
 	if _, err := service.Status("nope"); err == nil {
 		t.Error("Status accepted an identifier that was never opened")
@@ -273,7 +279,7 @@ func TestUnknownIdentifiersAreRejected(t *testing.T) {
 func TestSSLModesComeFromTheCore(t *testing.T) {
 	t.Parallel()
 
-	got := ui.NewConnectionService(stubOpener{}).SSLModes()
+	got := service(stubOpener{}).SSLModes()
 	if len(got) != 6 {
 		t.Fatalf("SSLModes() has %d entries, want the six libpq modes: %v", len(got), got)
 	}
@@ -288,7 +294,7 @@ func TestSSLModesComeFromTheCore(t *testing.T) {
 //
 // The earlier version called reflect.Value.String() field by field, which
 // returns "<ui.DiagnosisView Value>" for anything that is not a string and
-// never descended into it — so the field most likely to carry a secret, the
+// never descended into it — so the field most likely to carry a password, the
 // driver detail inside a status, was never actually looked at.
 func renderAll(value any) string {
 	return strings.ToLower(fmt.Sprintf("%+v", value))
@@ -302,4 +308,76 @@ func slicesContains(haystack []string, needle string) bool {
 	}
 
 	return false
+}
+
+// service builds the boundary the way the application wires it, with the
+// in-memory vault standing in for the keychain and an empty store.
+//
+// The vault is the real one rather than a stub on purpose: it is the same type
+// that runs on a machine without a keyring, so a test that passes here is a
+// test that passes there.
+func service(opener driver.Opener) *ui.ConnectionService {
+	return ui.NewConnectionService(ui.Dependencies{
+		Opener:      opener,
+		Store:       &memoryStore{},
+		Vault:       secret.NewMemory(),
+		VaultStatus: reporting(ui.VaultView{Backend: "keychain"}),
+	})
+}
+
+// memoryStore is the connections file, without the file.
+type memoryStore struct {
+	saved   []conn.Config
+	loadErr error
+	saveErr error
+}
+
+func (m *memoryStore) Load() ([]conn.Config, error) {
+	if m.loadErr != nil {
+		return nil, m.loadErr
+	}
+
+	return append([]conn.Config(nil), m.saved...), nil
+}
+
+func (m *memoryStore) Save(connections []conn.Config) error {
+	if m.saveErr != nil {
+		return m.saveErr
+	}
+	m.saved = append([]conn.Config(nil), connections...)
+
+	return nil
+}
+
+// The one type crossing this boundary that carries a password is the one that
+// must not print itself. %v reaches a log the moment anyone logs the call the
+// form arrived on, and the redaction is a net, not a proof.
+func TestTheFormNeverPrintsThePassword(t *testing.T) {
+	t.Parallel()
+
+	form := ui.ConnectionForm{
+		Name: "production", Host: "db.example.com", Port: 5432,
+		Database: "app", User: "reporting", Password: "s3cr3t",
+	}
+
+	var logged bytes.Buffer
+	slog.New(slog.NewTextHandler(&logged, nil)).Info("saving", "form", form)
+
+	printed := map[string]string{
+		"String": form.String(),
+		"%v":     fmt.Sprintf("%v", form),
+		"%+v":    fmt.Sprintf("%+v", form),
+		"slog":   logged.String(),
+	}
+
+	for how, text := range printed {
+		if strings.Contains(text, "s3cr3t") {
+			t.Errorf("the form printed by %s is %q, the secret survived", how, text)
+		}
+		// Useless is not the same as safe: what is left has to still identify
+		// the connection someone is reading the log about.
+		if !strings.Contains(text, "db.example.com") {
+			t.Errorf("the form printed by %s is %q, want it to still name the host", how, text)
+		}
+	}
 }

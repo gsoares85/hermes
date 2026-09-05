@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gsoares85/hermes/internal/core/secret"
 	"github.com/gsoares85/hermes/internal/driver"
 )
 
@@ -55,7 +56,7 @@ func Diagnose(err error, config Config) Diagnosis {
 	diagnosis.Class = class
 	// Redacted, because a driver that echoes the connection string it was
 	// given is exactly how a password reaches a bug report.
-	diagnosis.Detail = Redact(err.Error())
+	diagnosis.Detail = secret.Redact(err.Error())
 
 	return diagnosis
 }

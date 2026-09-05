@@ -94,6 +94,12 @@ jobs:
       - name: Lint Go with the integration tag
         run: golangci-lint run --build-tags=integration
 
+      # The suite behind the keychain tag only builds when the tag is set, so
+      # without this the one code path that talks to a real keychain would be
+      # the one nothing checks.
+      - name: Lint Go with the keychain tag
+        run: golangci-lint run --build-tags=keychain
+
       # Lifecycle scripts of every transitive dependency would otherwise run
       # with the credentials of the runner. Linting needs no native binary.
       - name: Install frontend dependencies
@@ -110,9 +116,20 @@ jobs:
         run: make check-readme
 
   security:
-    name: Dependency vulnerabilities
-    runs-on: ubuntu-latest
+    name: Dependency vulnerabilities (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    # Once per platform, because govulncheck reports what is *reachable* and
+    # reachability is decided by build tags. Read on Linux alone it never sees
+    # keychain_darwin.go or wincred_windows.go — the two files that call a
+    # native API through cgo and a syscall, and the two most worth hearing
+    # about. Natively rather than by cross-compiling: the analysis needs the
+    # cgo of the platform it is about, which is exactly what a runner of that
+    # platform has and a cross build does not.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -121,23 +138,28 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # cmd/hermes imports Wails, so this job type-checks cgo and needs the
+      # webview headers even though it never opens a window.
+      - uses: ./.github/actions/linux-webview
+        if: runner.os == 'Linux'
+
+      # A product that holds production database credentials cannot take a CVE
+      # in a transitive dependency by surprise, so it is scanned on every pull
+      # request rather than whenever someone remembers.
+      - name: Scan the Go dependencies
+        run: go run golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }} ./...
+
+      # The frontend has one dependency tree, not three, so it is audited once.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: runner.os == 'Linux'
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      # cmd/hermes imports Wails, so this job type-checks cgo and needs the
-      # webview headers even though it never opens a window.
-      - uses: ./.github/actions/linux-webview
-
-      # A product that holds production database credentials cannot take a CVE
-      # in a transitive dependency by surprise, so both ecosystems are scanned
-      # on every pull request rather than whenever someone remembers.
-      - name: Scan the Go dependencies
-        run: go run golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }} ./...
-
       - name: Scan the frontend dependencies
+        if: runner.os == 'Linux'
         run: npm audit --audit-level=high
         working-directory: frontend
 
@@ -154,20 +176,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Run unit tests
-        run: go test -race -coverprofile=coverage.out -coverpkg=./internal/... ./internal/...
-
-      # Below the floor the build fails, and a profile that measured nothing
-      # fails too, so the gate can never pass vacuously.
-      # internal/driver/postgres is left out of the count, not out of testing:
-      # the pgx adapter sits behind the thin interfaces of internal/driver and
-      # is exercised by the integration job, which this one does not run.
-      # Counting its statements while ignoring its coverage would drag the
-      # number down for code that is in fact tested. The run prints what it
-      # ignored, and a profile with everything ignored is refused.
-      - name: Enforce the coverage floor
-        run: |
-          go run ./scripts/checkcoverage -profile=coverage.out -min=85             -ignore=github.com/gsoares85/hermes/internal/driver/postgres
+      # Through make, not by repeating the command: the exclusion list lives in
+      # one place. It was written out twice once, the two copies drifted apart,
+      # and the result was `make cover` failing on Linux while this job passed —
+      # which teaches people to distrust the local command rather than the code.
+      - name: Run unit tests and enforce the coverage floor
+        run: make cover
 
       # A gate nobody has seen fail is a gate nobody knows works. This feeds it
       # a profile that is deliberately below the floor and fails the job if the
@@ -232,6 +246,98 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+  # The one job that talks to a real keychain. Everything else in the pipeline
+  # runs against the in-memory vault, which is exactly the double the
+  # implementations here have to be proven not to be more forgiving than.
+  #
+  # It fails rather than skips when a runner has no keyring: a skip would turn
+  # the job into one that passes by doing nothing, and the difference would only
+  # surface on the machine of someone trying to save a password.
+  keychain:
+    name: Keychain (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A GitHub runner has no desktop session, so it has neither a session bus
+      # nor a keyring on it. Both are installed and started here, which is the
+      # only way the Linux test is the real thing rather than a check that the
+      # fallback works.
+      - name: Install a keyring and a session bus
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gnome-keyring dbus-x11 libglib2.0-bin
+
+      # The password on stdin is what creates the login keyring, and it has to
+      # be a password: an empty one starts a daemon that answers on the bus and
+      # has no collection behind it, so the default alias resolves to a
+      # /org/freedesktop/secrets/collection/login that does not exist and every
+      # write fails. It is a throwaway secret for a throwaway runner, and the
+      # keyring it opens is unlocked for the life of the session — a locked one
+      # answers every read with a dialog nobody is there to accept.
+      #
+      # gdbus waits for the daemon to claim the name, so the test does not race
+      # the daemon it just started, and the collection is asked for by name
+      # afterwards: a keyring that is not there has to fail here, where the
+      # message says so, rather than inside a test that would blame the code.
+      - name: Run the contract against the keyring of the session
+        if: runner.os == 'Linux'
+        env:
+          DEFAULT_COLLECTION: /org/freedesktop/secrets/aliases/default
+        run: |
+          dbus-run-session -- bash -c '
+            echo -n "hermes-ci" | gnome-keyring-daemon --unlock --components=secrets
+            gdbus wait --session --timeout 10 org.freedesktop.secrets
+            gdbus introspect --session --dest org.freedesktop.secrets --object-path "$DEFAULT_COLLECTION" --only-properties
+            go test -tags=keychain -count=1 -timeout=5m ./internal/vault/...
+          '
+
+      # macOS and Windows keep the store of the logged-in user running already:
+      # the login keychain and the Credential Manager are part of the session.
+      - name: Run the contract against the keychain of the system
+        if: runner.os != 'Linux'
+        run: go test -tags=keychain -count=1 -timeout=5m ./internal/vault/...
+
+  # The other job that can only tell the truth on the machine it runs on. How a
+  # command line is read, and what a file permission even means, are different on
+  # each of the three systems, so the tests that assert them are written three
+  # times and every one of them has to run somewhere.
+  #
+  # Linux is in the matrix although the unit job already covers it: the point of
+  # this job is that the same suite passes on all three, and a matrix with a hole
+  # in it is a matrix nobody notices has one.
+  credentials:
+    name: Credential handoff (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Hand a credential to a real child process
+        run: go test -race -count=1 -timeout=5m ./internal/credential/...
 
   integration:
     name: Integration tests

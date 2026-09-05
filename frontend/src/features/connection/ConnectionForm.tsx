@@ -1,17 +1,26 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   applyParsed,
   closeConnection,
   databases as listDatabases,
+  deleteConnection,
   emptyForm,
+  formFromSaved,
   openConnection,
   parseURI,
+  saveConnection,
+  savedConnections,
   sslModes,
   testConnection,
+  vaultStatus,
+  wasCancelled,
+  type CancellablePromise,
   type ConnectionForm as Form,
   type DiagnosisView,
+  type SavedView,
   type StatusView,
+  type VaultView,
 } from "../../api/connection";
 
 /**
@@ -31,6 +40,34 @@ export function ConnectionForm(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [available, setAvailable] = useState<string[]>([]);
+  const [saved, setSaved] = useState<SavedView[]>([]);
+  const [vault, setVault] = useState<VaultView | null>(null);
+  // The connection whose Forget button has been pressed once. Removing a
+  // connection takes its password out of the keychain and there is nothing to
+  // undo it with, so it asks twice.
+  const [forgetting, setForgetting] = useState<string | null>(null);
+
+  // refreshSaved is called from the effect below and from every handler, so it
+  // cannot use the effect's own flag. Without this it can set state after the
+  // component has gone, which React 19 tolerates and the next one may not.
+  const mounted = useRef(true);
+
+  // The operation the window is waiting for, kept so that the person can stop
+  // it. Every long call on this screen ends in the keychain or in a server, and
+  // both can take as long as they like: on macOS and on Linux reading a
+  // password is a dialog, and a connection to a host that is not answering runs
+  // to the driver's own timeout. The Go side is cancellable the whole way down
+  // and the binding hands back a promise that carries the handle — this is
+  // where it stops being dropped on the floor.
+  const running = useRef<CancellablePromise<unknown> | null>(null);
+
+  useEffect(() => {
+    mounted.current = true;
+
+    return (): void => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -46,10 +83,75 @@ export function ConnectionForm(): React.JSX.Element {
         // text input rather than the window failing to draw.
       });
 
+    // Asked once, at startup, and never again: the answer cannot change while
+    // the application runs, and asking on every redraw would be a round trip
+    // to a keychain for something already known.
+    vaultStatus()
+      .then((status): void => {
+        if (active) {
+          setVault(status);
+        }
+      })
+      .catch((): void => {
+        // Outside the desktop shell there is no vault to report on, and a
+        // missing banner is better than a window that does not draw.
+      });
+
+    void refreshSaved();
+
     return (): void => {
       active = false;
     };
   }, []);
+
+  async function refreshSaved(): Promise<void> {
+    try {
+      const connections = await savedConnections();
+      if (mounted.current) {
+        setSaved(connections);
+      }
+    } catch (err) {
+      // A file someone broke by hand is reported rather than swallowed: an
+      // empty list would look exactly like never having saved anything.
+      if (mounted.current) {
+        setNotice(String(err));
+      }
+    }
+  }
+
+  /**
+   * Waits for a long operation, keeping the handle that stops it.
+   *
+   * Every caller goes through this rather than awaiting the binding directly,
+   * so that "the window is busy" and "this is what it is busy with" cannot
+   * drift apart: the button is disabled and the Stop button works, or neither
+   * does.
+   */
+  async function run<T>(pending: CancellablePromise<T>): Promise<T> {
+    running.current = pending;
+    setBusy(true);
+    try {
+      return await pending;
+    } finally {
+      running.current = null;
+      setBusy(false);
+    }
+  }
+
+  function onCancel(): void {
+    void running.current?.cancel();
+  }
+
+  /**
+   * Reports a failure, unless the failure is the person having stopped it.
+   *
+   * A cancelled operation is a normal outcome. Showing the message it rejects
+   * with would tell someone their connection is broken because they pressed
+   * Stop.
+   */
+  function report(err: unknown, stopped: string): void {
+    setNotice(wasCancelled(err) ? stopped : String(err));
+  }
 
   function update<K extends keyof Form>(field: K, value: Form[K]): void {
     setForm((current): Form => ({ ...current, [field]: value }));
@@ -71,21 +173,17 @@ export function ConnectionForm(): React.JSX.Element {
   }
 
   async function onTest(): Promise<void> {
-    setBusy(true);
     setDiagnosis(null);
     try {
-      setDiagnosis(await testConnection(form));
+      setDiagnosis(await run(testConnection(form)));
     } catch (err) {
-      setNotice(String(err));
-    } finally {
-      setBusy(false);
+      report(err, "The test was stopped.");
     }
   }
 
   async function onOpen(): Promise<void> {
-    setBusy(true);
     try {
-      const opened = await openConnection(form);
+      const opened = await run(openConnection(form));
       setStatus(opened);
       setDiagnosis(null);
       // The connection is open and the password has been used. Keeping it in
@@ -97,10 +195,61 @@ export function ConnectionForm(): React.JSX.Element {
       // database did it precisely to find out what is there.
       setAvailable(await listDatabases(opened.id));
     } catch (err) {
-      setNotice(String(err));
-    } finally {
-      setBusy(false);
+      report(err, "Connecting was stopped.");
     }
+  }
+
+  async function onSave(): Promise<void> {
+    try {
+      const stored = await run(saveConnection(form));
+      // The identifier comes back on a connection that had none, and keeping it
+      // is what makes the next save an edit instead of a second copy.
+      update("id", stored.id);
+      // The password is in the keychain now. Leaving it in the state of a page
+      // that is redrawn and inspected buys nothing.
+      update("password", "");
+      setNotice(`Saved “${stored.name === "" ? stored.host : stored.name}”.`);
+    } catch (err) {
+      report(err, "Saving was stopped. The connection may not have been written.");
+    } finally {
+      await refreshSaved();
+    }
+  }
+
+  // The first press arms, the second removes. A confirmation rather than an
+  // undo because there is nothing to undo with: the password is gone from the
+  // keychain, and Hermes never had a copy of it to put back.
+  function onForgetRequest(id: string): void {
+    if (forgetting !== id) {
+      setForgetting(id);
+      setNotice("Press Forget again to remove this connection and its password.");
+
+      return;
+    }
+
+    void onForget(id);
+  }
+
+  async function onForget(id: string): Promise<void> {
+    setForgetting(null);
+    try {
+      await run(deleteConnection(id));
+      if (form.id === id) {
+        setForm(emptyForm);
+      }
+      setNotice("The connection and its password were removed.");
+    } catch (err) {
+      report(err, "Forgetting was stopped. The connection may not have been removed.");
+    } finally {
+      await refreshSaved();
+    }
+  }
+
+  function onLoad(connection: SavedView): void {
+    setForgetting(null);
+    setForm(formFromSaved(connection));
+    setDiagnosis(null);
+    setNotice("Loaded. The password comes from the keychain when you connect.");
   }
 
   async function onClose(): Promise<void> {
@@ -119,6 +268,19 @@ export function ConnectionForm(): React.JSX.Element {
   return (
     <section className="connection">
       <h2>Connect</h2>
+
+      {vault !== null && <VaultBanner vault={vault} />}
+
+      {saved.length > 0 && (
+        <SavedConnections
+          connections={saved}
+          current={form.id}
+          busy={busy}
+          onLoad={onLoad}
+          forgetting={forgetting}
+          onForget={onForgetRequest}
+        />
+      )}
 
       <div className="connection__paste">
         <label htmlFor="uri">Paste a connection URI</label>
@@ -231,6 +393,22 @@ export function ConnectionForm(): React.JSX.Element {
             Disconnect
           </button>
         )}
+        <button type="button" onClick={(): void => void onSave()} disabled={busy}>
+          {form.id === "" ? "Save connection" : "Save changes"}
+        </button>
+        {/*
+          Shown only while something is running, and the only control on this
+          screen that is not disabled then. Every long call here ends in a
+          keychain or in a server, and both can take as long as they like: a
+          password read on macOS or Linux can be a dialog waiting for a person,
+          and a host that is not answering runs to the driver's own timeout.
+          Without this the window has a spinner and no way out.
+        */}
+        {busy && (
+          <button type="button" className="connection__stop" onClick={onCancel}>
+            Stop
+          </button>
+        )}
       </div>
 
       {status !== null && <StateIndicator status={status} />}
@@ -245,6 +423,98 @@ export function ConnectionForm(): React.JSX.Element {
       )}
       {diagnosis !== null && <DiagnosisPanel diagnosis={diagnosis} />}
     </section>
+  );
+}
+
+/**
+ * Where passwords are being kept, and a warning when the answer is "nowhere
+ * that outlives this window".
+ *
+ * Drawn only when there is something to say. A machine with a working keyring
+ * gets no banner, because a banner that is always there is a banner nobody
+ * reads on the day it matters.
+ */
+function VaultBanner({ vault }: { vault: VaultView }): React.JSX.Element | null {
+  if (vault.warning === "") {
+    return null;
+  }
+
+  return (
+    <p className="connection__vault" role="status">
+      {vault.warning}
+    </p>
+  );
+}
+
+/**
+ * The connections that have been saved.
+ *
+ * Loading one fills the form and leaves the password field empty: the Go side
+ * reads it from the keychain at the moment it connects, so it never travels out
+ * here. Forgetting one takes its password with it.
+ */
+function SavedConnections(props: {
+  connections: SavedView[];
+  current: string;
+  busy: boolean;
+  forgetting: string | null;
+  onLoad: (connection: SavedView) => void;
+  onForget: (id: string) => void;
+}): React.JSX.Element {
+  return (
+    <div className="connection__saved">
+      <p>Saved connections</p>
+      <ul>
+        {props.connections.map((connection): React.JSX.Element => (
+          <li key={connection.id}>
+            {/*
+              Disabled while the window is working, like Forget beside it, and
+              for a sharper reason. Loading replaces the whole form. Do it
+              while a save is in flight and the save answers with the
+              identifier of the connection it wrote, which is then applied to
+              the fields of the one just loaded — so the next save overwrites
+              the first connection with the second one's settings. Stop is the
+              way out of a save that is taking too long.
+            */}
+            <button
+              type="button"
+              className={connection.id === props.current ? "is-selected" : ""}
+              disabled={props.busy}
+              onClick={(): void => {
+                props.onLoad(connection);
+              }}
+            >
+              <span className="connection__saved-name">
+                {connection.name === "" ? connection.host : connection.name}
+              </span>
+              <span className="connection__saved-target">
+                {connection.user}@{connection.host}:{connection.port}
+                {connection.database === "" ? "" : `/${connection.database}`}
+              </span>
+            </button>
+            <button
+              type="button"
+              className={
+                props.forgetting === connection.id
+                  ? "connection__forget is-confirming"
+                  : "connection__forget"
+              }
+              disabled={props.busy}
+              aria-label={
+                props.forgetting === connection.id
+                  ? `Confirm removing ${connection.name === "" ? connection.host : connection.name}`
+                  : `Forget ${connection.name === "" ? connection.host : connection.name}`
+              }
+              onClick={(): void => {
+                props.onForget(connection.id);
+              }}
+            >
+              {props.forgetting === connection.id ? "Confirm" : "Forget"}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

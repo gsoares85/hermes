@@ -12,5 +12,7 @@ export type {
     ConnectionForm,
     ConnectionView,
     DiagnosisView,
-    StatusView
+    SavedView,
+    StatusView,
+    VaultView
 } from "./models.js";

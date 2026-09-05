@@ -57,8 +57,17 @@ body {
   color: var(--text-muted);
 }
 
+/*
+ * min-height is what pins the footer. A flex item is sized by its content
+ * before it is sized by the container, so a screen taller than the window used
+ * to push the status bar past the bottom edge and take the version with it —
+ * the one line that says which build is running is the one nobody can go and
+ * look up. The overflow puts the scrollbar on this block instead of the page.
+ */
 .app__main {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: 1.5rem;
 }
 
@@ -71,6 +80,17 @@ body {
   background: var(--surface-raised);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The armed state of Forget. Removing a connection takes its password out of
+ * the keychain and nothing can put it back, so the button says what the second
+ * press will do and looks like it means it.
+ */
+.connection__forget.is-confirming {
+  border-color: #b3261e;
+  color: #b3261e;
+  font-weight: 600;
 }
 
 /*
@@ -141,6 +161,14 @@ body {
   opacity: 0.55;
 }
 
+/* The only control that is live while the window is waiting, so it says so:
+   everything around it is dimmed by the rule above and this is not. */
+.connection__stop {
+  margin-left: auto;
+  border-color: var(--text-muted);
+  font-weight: 600;
+}
+
 .connection__notice,
 .connection__cause,
 .connection__next {
@@ -203,4 +231,56 @@ body {
 .connection__databases button.is-selected {
   border-color: var(--text);
   font-weight: 600;
+}
+
+/* Drawn only when there is no keychain, so it has to read as a warning at a
+   glance without being an error: nothing has failed, the passwords simply will
+   not outlive the window. */
+.connection__vault {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid #e8a33d;
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+
+.connection__saved ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0.35rem 0 1rem;
+  padding: 0;
+}
+
+.connection__saved li {
+  display: flex;
+  align-items: stretch;
+  gap: 0.35rem;
+}
+
+/* The row grows and the Forget button does not, so a long host name pushes
+   against the edge of the panel rather than against the button. */
+.connection__saved li > button:first-child {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  text-align: left;
+}
+
+.connection__saved button.is-selected {
+  border-color: var(--text);
+}
+
+.connection__saved-name {
+  font-weight: 600;
+}
+
+.connection__saved-target {
+  color: var(--text-muted);
+  font-size: 0.85em;
 }

@@ -28,10 +28,10 @@ The bet is focus: do for **one** engine what the competition tries to do for twe
 
 ## Project status
 
-**Pre-alpha — under active development.** You can connect to a server and see the databases you
-have access to; there is no object tree, no SQL editor and no backup yet. This README grows with
-every feature shipped: anything documented below with an example works. Anything in the
-*Roadmap* section does not.
+**Pre-alpha — under active development.** You can connect to a server, save the connection with
+its password in your system keychain, and see the databases you have access to; there is no
+object tree, no SQL editor and no backup yet. This README grows with every feature shipped:
+anything documented below with an example works. Anything in the *Roadmap* section does not.
 
 ## Principles
 
@@ -89,6 +89,10 @@ $ hermes --version
 hermes v0.1.0 (a1b2c3d, 2026-08-30T12:00:00Z, linux/amd64)
 ```
 
+The desktop app shows the same version in the status bar at the bottom of the window, with the
+commit and the build date in its tooltip — so a bug report can always say which build it is
+about.
+
 ### From source
 
 Requires [Go 1.25+](https://go.dev/dl/), [Node.js 22.12+](https://nodejs.org/), and the
@@ -127,6 +131,18 @@ Press **Test connection** to check the settings without keeping anything open, o
 open the connection. Once connected, the databases you can reach appear as a list; picking one
 fills the database field.
 
+While Hermes is working, a **Stop** button appears beside the others and is the only one that
+stays live. Every long step on this screen ends either in your keychain or in a server, and both
+can take as long as they like: reading a password on macOS or Linux can raise a dialog that
+waits for you, and a host that is not answering runs to the driver's own timeout. Stopping is
+never a failure — Hermes says the operation was stopped, and where the result is genuinely
+unknown, such as a save cut off part way, it says that instead of claiming either outcome.
+
+```
+[ Test connection ]  [ Connect ]  [ Save connection ]              [ Stop ]
+Working…
+```
+
 Already have a connection string? Paste it and press **Fill the form**:
 
 ```
@@ -140,6 +156,122 @@ window. A URI with no database at all works too:
 
 ```
 postgres://reporting@db.example.com:5432
+```
+
+### Saving a connection
+
+Give the connection a name and press **Save connection**. It appears in the *Saved connections*
+list at the top of the form; clicking one loads it back, and **Forget** removes it along with
+its password.
+
+The settings go in a file you can read, version and copy between machines:
+
+| Platform | Connections file |
+|---|---|
+| Linux | `~/.config/hermes/connections.toml` |
+| macOS | `~/Library/Application Support/hermes/connections.toml` |
+| Windows | `%AppData%\hermes\connections.toml` |
+
+```toml
+version = 1
+
+[[connection]]
+id = 'b7f0c6e1-1a4d-4f2f-9d6a-2a1c8e0b3f55'
+name = 'production — read only'
+host = 'db.example.com'
+port = 5432
+database = 'analytics'
+user = 'reporting'
+sslmode = 'verify-full'
+sslrootcert = '/etc/ssl/ca.pem'
+
+[connection.params]
+application_name = 'hermes'
+
+[[connection]]
+id = '3c9a1e42-7b58-4d10-9f2e-6d4b0a7c1e93'
+name = 'local'
+host = 'localhost'
+port = 5432
+user = 'postgres'
+sslmode = 'disable'
+```
+
+**There is no password field in this format, and no way to put one in it.** A file that names
+`password` at the top level is refused with an error saying so, rather than read as if the
+password had taken effect. The same goes for the two free-form tables: `password`,
+`sslpassword` and `pgpassword` are refused under `[connection.params]` and
+`[connection.options]` too, on the way in and on the way out, because a key libpq would read a
+secret from is a secret in a plain-text file whatever table it sits in. Committing this file to
+a repository or mailing it to a colleague hands over no secret.
+
+The `id` is what the password is filed under in your keychain, which is why it is a random
+identifier rather than the name: renaming a connection, or moving it to a different host, keeps
+the password attached to it.
+
+`version = 1` is read before anything else. A file from a newer Hermes is refused with a clear
+message instead of being half-understood — the file says how you reach production, and guessing
+at it is not an option.
+
+### Where your password is kept
+
+In the password store your operating system already has:
+
+| Platform | Store |
+|---|---|
+| Linux | the Secret Service of your desktop session — GNOME Keyring, KWallet |
+| macOS | the login keychain |
+| Windows | the Credential Manager, encrypted with DPAPI |
+
+Hermes talks to each of them through its native interface, never by shelling out to a
+command-line tool. It reads a password only when it actually opens the connection, so listing
+your saved connections never triggers the authorization dialog that macOS and Linux can raise.
+
+Four things Hermes never does with your password, each one covered by a test that fails the
+build:
+
+- write it to disk in plain text — the keychain is the only place it is ever stored;
+- put it in the connections file, which has nowhere to put one;
+- print it in a log, an error message or a report;
+- pass it on the command line of a program it starts, where every other process on the machine
+  could read it. The route `pg_dump` and `pg_restore` will take is already built and tested: the
+  environment, or a temporary password file created `0600` and removed afterwards. A file left
+  behind by a crash, a kill or a power cut is removed by the next start-up, which asks the
+  operating system whether anything still holds the file rather than trusting what its name
+  says — so a Hermes running a backup keeps its file, and one that died does not.
+
+Anything that could carry a connection string is redacted on the way out, so a message you paste
+into a bug report reads:
+
+```
+failed to connect to postgres://reporting:xxxxx@db.example.com:5432/analytics?sslmode=verify-full
+```
+
+#### A Linux without a keyring
+
+Minimal desktops, containers and some window managers run no Secret Service. Hermes says so
+rather than failing quietly, and keeps working:
+
+```
+Hermes could not reach the Secret Service of this desktop session: the vault is unavailable:
+no session bus. Passwords are kept in memory for this session only, and will be asked for
+again the next time Hermes starts. Install and start a keyring — gnome-keyring or
+kwalletmanager — and start Hermes again.
+```
+
+Your connections are still saved; only the passwords are forgotten when you quit. Nothing is
+written to disk to work around it — an encrypted file whose key sits next to it is plain text
+with extra steps. To get persistent passwords, install a keyring:
+
+```sh
+# Debian / Ubuntu
+sudo apt install gnome-keyring
+
+# Fedora
+sudo dnf install gnome-keyring
+
+# KDE
+sudo apt install kwalletmanager
 ```
 
 ### Failures that tell you what to do
@@ -186,13 +318,33 @@ postgres://reporting@db.example.com/analytics?application_name=hermes&search_pat
 Connection settings such as `connect_timeout` or `require_auth` are carried too, and kept apart
 from session settings — sending one as the other would quietly drop it.
 
+Neither table will hold a password. `password`, `sslpassword` and `pgpassword` are refused under
+`[connection.params]` and `[connection.options]`, on the way in and on the way out, with an
+error saying where passwords are actually kept:
+
+```toml
+[[connection]]
+id = 'b7f0c6e1-1a4d-4f2f-9d6a-2a1c8e0b3f55'
+host = 'db.example.com'
+port = 5432
+user = 'reporting'
+
+[connection.options]
+password = 'hunter2'
+```
+
+```
+~/.config/hermes/connections.toml: line 3, options.password: invalid connection:
+options.password would put a password in the connections file in plain text — Hermes keeps
+passwords in the keychain of the system
+```
+
 ## Roadmap
 
 What is being built, in order:
 
-**Foundation** — connect to PostgreSQL 12+ with actionable failure diagnostics, passwords
-stored in the OS keychain, lazy object-tree navigation, and a cancelable job engine with
-progress reporting.
+**Foundation** — lazy object-tree navigation and a cancelable job engine with progress
+reporting. Connecting, actionable failure diagnostics and keychain-backed passwords are done.
 
 **Query and data** — SQL editor with cancelable execution, a virtualized grid using keyset
 pagination (no `OFFSET` on large tables), and inline editing that shows the `UPDATE` before it

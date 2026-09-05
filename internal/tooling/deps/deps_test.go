@@ -2,6 +2,7 @@ package deps_test
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -47,6 +48,44 @@ var projectRules = []deps.Rule{
 		},
 	},
 	{
+		// The vault contract lives in internal/core/secret, where it is
+		// consumed; every implementation of it lives in internal/vault, and
+		// so does every library that talks to a keychain. The whole tree is
+		// forbidden rather than only its subpackages — unlike internal/driver,
+		// there is no contract in there for the core to legitimately reach.
+		// internal/credential is the same shape: handing a password to a child
+		// process means files and process environments, which is infrastructure
+		// and stays outside. See ADR-0010.
+		Reason:   "the core layer must not reach an implementation of the vault",
+		Packages: module + "/internal/core",
+		Forbidden: []string{
+			module + "/internal/vault",
+			module + "/internal/credential",
+			module + "/internal/filestore",
+		},
+	},
+	{
+		// The rule that would have caught the mistake ADR-0010 was written to
+		// prevent. Without it, cgo and D-Bus in the domain compile and pass:
+		// the rules above name a driver and a framework, and a keychain is
+		// neither.
+		//
+		// It is stated for the core alone. The UI is covered by the rule above
+		// forbidding internal/vault, which is the only way it could reach a
+		// keychain of its own accord; naming the libraries there too would fire
+		// the day internal/ui legitimately imports Wails, which brings D-Bus
+		// with it on Linux — a failure for the wrong reason teaches people to
+		// edit the gate rather than the code.
+		Reason:   "the core layer must not talk to an operating system keychain",
+		Packages: module + "/internal/core",
+		Forbidden: []string{
+			"github.com/keybase/go-keychain",
+			"github.com/danieljoos/wincred",
+			"github.com/godbus/dbus",
+			"github.com/zalando/go-keyring",
+		},
+	},
+	{
 		Reason:   "the core layer must not depend on development tooling",
 		Packages: module + "/internal/core",
 		Forbidden: []string{
@@ -70,6 +109,18 @@ var projectRules = []deps.Rule{
 		Packages: module + "/internal/ui",
 		Forbidden: []string{
 			module + "/internal/driver/",
+		},
+	},
+	{
+		// The same rule again, for the vault. The window is handed one by the
+		// command that wires the application together, exactly as it is handed
+		// an engine.
+		Reason:   "the UI layer must be handed a vault, never reach for one",
+		Packages: module + "/internal/ui",
+		Forbidden: []string{
+			module + "/internal/vault",
+			module + "/internal/credential",
+			module + "/internal/filestore",
 		},
 	},
 }
@@ -158,6 +209,58 @@ func TestCheckReportsEveryViolationSorted(t *testing.T) {
 	}
 }
 
+// The rules are data, and data can be written down without ever being wired in.
+// A rule protecting the layer from something nothing imports yet passes exactly
+// as well when it has been deleted, misspelled or never added — which is the
+// state internal/vault and internal/credential are in until the phases that
+// create them. This feeds the real project rules a graph that violates each new
+// edge, so the gate is proven to bite before there is anything for it to bite.
+func TestTheProjectRulesForbidReachingForAVault(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct{ pkg, imported string }{
+		"a keychain library in the core": {
+			module + "/internal/core/conn", "github.com/keybase/go-keychain",
+		},
+		"the credential store of Windows in the core": {
+			module + "/internal/core/conn", "github.com/danieljoos/wincred",
+		},
+		"the session bus in the core": {
+			module + "/internal/core/conn", "github.com/godbus/dbus/v5",
+		},
+		"a vault implementation in the core": {
+			module + "/internal/core/conn", module + "/internal/vault",
+		},
+		"the credential helper in the core": {
+			module + "/internal/core/dump", module + "/internal/credential",
+		},
+		"a vault implementation in the UI": {
+			module + "/internal/ui", module + "/internal/vault",
+		},
+		"the credential helper in the UI": {
+			module + "/internal/ui", module + "/internal/credential",
+		},
+		"the file store in the core": {
+			module + "/internal/core/profile", module + "/internal/filestore",
+		},
+		"the file store in the UI": {
+			module + "/internal/ui", module + "/internal/filestore",
+		},
+	}
+
+	for name, forbidden := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			graph := map[string][]string{forbidden.pkg: {forbidden.imported}}
+			if got := deps.Check(graph, projectRules); len(got) == 0 {
+				t.Errorf("%s importing %s is allowed by the project rules",
+					forbidden.pkg, forbidden.imported)
+			}
+		})
+	}
+}
+
 // The rule applied to the repository itself. This is the gate: it fails the
 // build the day someone imports the UI, a driver or the test harness from the
 // core, which is the moment the architecture stops being true.
@@ -176,17 +279,44 @@ func TestTheProjectRespectsTheDependencyRule(t *testing.T) {
 	}
 }
 
+// The platforms the product is built for. The graph is read once per platform
+// because build tags make it a different graph on each: internal/vault has one
+// implementation per operating system, and each of them imports a different
+// keychain library. A gate that only ever looked at the runner it happened to
+// run on would enforce the rule about go-keychain on macOS alone — which is to
+// say, never, since the pipeline reads this on Linux.
+var platforms = []string{"linux", "darwin", "windows"}
+
 // buildGraph asks the toolchain for the full dependency list of every package
-// in the module, which is the same graph the compiler sees.
+// in the module, on every platform it is built for, which is the same graph
+// each of those compilers sees.
 func buildGraph(t *testing.T) map[string][]string {
+	t.Helper()
+
+	graph := make(map[string][]string)
+	for _, platform := range platforms {
+		for pkg, deps := range platformGraph(t, platform) {
+			// Unioned rather than kept apart: a rule is broken if it is broken
+			// anywhere, and the violation names the package either way.
+			graph[pkg] = append(graph[pkg], deps...)
+		}
+	}
+
+	return graph
+}
+
+func platformGraph(t *testing.T, platform string) map[string][]string {
 	t.Helper()
 
 	command := exec.CommandContext(t.Context(), "go", "list", "-deps", "-json", "./...")
 	command.Dir = "../../.."
+	// CGO off because this only ever parses: a darwin graph read on a Linux
+	// runner must not need a C toolchain that can target darwin.
+	command.Env = append(os.Environ(), "GOOS="+platform, "CGO_ENABLED=0")
 
 	output, err := command.Output()
 	if err != nil {
-		t.Fatalf("listing the packages of the module: %v", err)
+		t.Fatalf("listing the packages of the module for %s: %v", platform, err)
 	}
 
 	type listed struct {
@@ -207,4 +337,34 @@ func buildGraph(t *testing.T) map[string][]string {
 	}
 
 	return graph
+}
+
+// A gate that reads one platform enforces the rules of one platform. The three
+// keychain libraries are each behind a build tag, so a graph read on a single
+// operating system contains exactly one of them — and the rule forbidding the
+// other two would pass by never being tested.
+//
+// This asserts the reading itself: the union has to contain all three, or the
+// gate above is quietly checking a third of what it claims to.
+func TestTheGraphIsReadForEveryPlatformTheProductIsBuiltFor(t *testing.T) {
+	t.Parallel()
+
+	graph := buildGraph(t)
+
+	imports := make(map[string]bool)
+	for _, deps := range graph {
+		for _, imported := range deps {
+			imports[imported] = true
+		}
+	}
+
+	for _, keychain := range []string{
+		"github.com/keybase/go-keychain",
+		"github.com/danieljoos/wincred",
+		"github.com/godbus/dbus/v5",
+	} {
+		if !imports[keychain] {
+			t.Errorf("%s is in no graph, so the rule forbidding it in the core is never exercised", keychain)
+		}
+	}
 }
