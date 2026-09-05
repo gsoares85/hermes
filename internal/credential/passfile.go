@@ -96,7 +96,7 @@ func (s *Store) InFile(targets ...Target) (Handoff, error) {
 		return Handoff{}, nil
 	}
 
-	path, claim, err := s.write(records)
+	path, claim, err := s.write(records, hold)
 	if err != nil {
 		return Handoff{}, err
 	}
@@ -104,10 +104,16 @@ func (s *Store) InFile(targets ...Target) (Handoff, error) {
 	return Handoff{env: []string{passfileVariable + "=" + path}, path: path, claim: claim}, nil
 }
 
+// claiming is how a file is claimed. It is a parameter rather than a call so
+// that a test can stand in the middle of this and assert the one thing the
+// order here exists to guarantee: at the moment the claim is taken, the file is
+// still empty.
+type claiming func(file *os.File) (io.Closer, error)
+
 // write creates the password file and answers the claim on it, which is what
 // tells every sweep on this machine that an operation is using it and what the
 // operating system takes back when this process ends however it ends.
-func (s *Store) write(records string) (string, io.Closer, error) {
+func (s *Store) write(records string, claimed claiming) (string, io.Closer, error) {
 	if err := privatedir.Make(s.dir); err != nil {
 		return "", nil, err
 	}
@@ -119,21 +125,35 @@ func (s *Store) write(records string) (string, io.Closer, error) {
 	if err != nil {
 		return "", nil, fmt.Errorf("creating a password file in %s: %w", s.dir, err)
 	}
-	defer func() { _ = file.Close() }()
 
+	// Closed before the file is removed on every path below, and that order is
+	// load-bearing on Windows: a file is only removable there when every open
+	// handle shares deletion, and the ones Go opens do not. Cleaning up while
+	// this was still open left the file exactly where the failure said it had
+	// not. The claim holds a handle of its own that does share deletion, which
+	// is why removing works with that one still open.
+	//
 	// Claimed before a single byte is written. Between the file appearing in
 	// the directory and the claim being taken there is a moment in which a
 	// sweep running at that instant would collect it, and taking the claim here
 	// keeps that moment down to a couple of system calls over an empty file.
 	// The most it can cost is this operation failing to authenticate; it cannot
 	// leave a secret behind, because there is no secret in the file yet.
-	claim, err := hold(file)
+	claim, err := claimed(file)
 	if err != nil {
-		return "", nil, errors.Join(err, discard(file.Name()))
+		return "", nil, errors.Join(err, file.Close(), discard(file.Name()))
 	}
 
 	if err := fill(file, records); err != nil {
-		return "", nil, errors.Join(err, claim.Close(), discard(file.Name()))
+		return "", nil, errors.Join(err, file.Close(), claim.Close(), discard(file.Name()))
+	}
+
+	// Closed here rather than by a defer, because a write that fails on close
+	// has still failed, and handing back a path to a file whose last bytes
+	// never landed is handing back a password a child cannot read.
+	if err := file.Close(); err != nil {
+		return "", nil, errors.Join(
+			fmt.Errorf("finishing %s: %w", file.Name(), err), claim.Close(), discard(file.Name()))
 	}
 
 	return file.Name(), claim, nil
