@@ -247,3 +247,66 @@ func TestSSLModesAreTheLibpqSet(t *testing.T) {
 		}
 	}
 }
+
+// Params and Options are maps of text, so the promise that a saved connection
+// carries no password is not something the type can keep on its own: password
+// is a keyword libpq honours, and one written under either map reaches the
+// connections file in plain text and the connection string after it.
+//
+// It is refused rather than dropped. Someone who typed it there believes it is
+// taking effect, and a setting silently removed is a connection that fails to
+// authenticate for a reason nothing on screen explains.
+func TestASecretUnderAFreeFormKeyIsNotAValidConnection(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		params, options map[string]string
+		field           string
+	}{
+		"password in params":     {params: map[string]string{"password": "s3cr3t"}, field: "params.password"},
+		"password in options":    {options: map[string]string{"password": "s3cr3t"}, field: "options.password"},
+		"sslpassword in options": {options: map[string]string{"sslpassword": "s3cr3t"}, field: "options.sslpassword"},
+		"pgpassword in params":   {params: map[string]string{"pgpassword": "s3cr3t"}, field: "params.pgpassword"},
+		"spelled loudly":         {params: map[string]string{" PASSWORD ": "s3cr3t"}, field: "params. PASSWORD "},
+	}
+
+	for name, carrying := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			config := sample()
+			config.Params, config.Options = carrying.params, carrying.options
+
+			err := config.Validate()
+			if !errors.Is(err, conn.ErrInvalidConfig) {
+				t.Fatalf("Validate() = %v, want an invalid connection", err)
+			}
+
+			var invalid conn.InvalidField
+			if !errors.As(err, &invalid) {
+				t.Fatalf("Validate() = %v, want it to name the field", err)
+			}
+			if invalid.Field != carrying.field {
+				t.Errorf("Validate() blamed %q, want %q", invalid.Field, carrying.field)
+			}
+			if strings.Contains(err.Error(), "s3cr3t") {
+				t.Errorf("the refusal quotes the secret: %v", err)
+			}
+		})
+	}
+}
+
+// The settings that are not secrets stay welcome. A rule that refused the whole
+// map would be a rule nobody could use application_name or connect_timeout
+// under.
+func TestOrdinarySettingsAreStillValid(t *testing.T) {
+	t.Parallel()
+
+	config := sample()
+	config.Params = map[string]string{"application_name": "hermes", "search_path": "public"}
+	config.Options = map[string]string{"connect_timeout": "10", "require_auth": "scram-sha-256"}
+
+	if err := config.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil", err)
+	}
+}

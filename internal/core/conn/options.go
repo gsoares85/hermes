@@ -1,5 +1,10 @@
 package conn
 
+import (
+	"slices"
+	"strings"
+)
+
 // Connection keywords libpq understands, as opposed to session parameters.
 //
 // The distinction is not cosmetic. A session parameter is a GUC sent to the
@@ -87,3 +92,40 @@ const (
 	// keywordUnsupported is refused rather than dropped.
 	keywordUnsupported
 )
+
+// Keywords that carry a secret, whichever free-form map they arrive in.
+//
+// Params and Options are maps of text, so the guarantee that a saved connection
+// holds no password is not a property of the types it is made of: password is a
+// legitimate libpq keyword, and nothing stopped it being written under either
+// map. This is the list that stops it, and it names every spelling libpq or its
+// environment honours rather than only the obvious one.
+var credentialKeywords = map[string]bool{
+	"password":    true,
+	"sslpassword": true,
+	"pgpassword":  true,
+}
+
+// CredentialKeyword answers the first key of these settings that carries a
+// secret, and whether there was one.
+//
+// The comparison is trimmed and folded because the file is written by hand:
+// " Password " is the same keyword to anyone reading it, and a rule that only
+// catches the tidy spelling catches only the honest mistake. The keys are
+// sorted so that a file with two of them always names the same one, which is
+// what keeps the message worth asserting on.
+func CredentialKeyword(settings map[string]string) (string, bool) {
+	keys := make([]string, 0, len(settings))
+	for key := range settings {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+
+	for _, key := range keys {
+		if credentialKeywords[strings.ToLower(strings.TrimSpace(key))] {
+			return key, true
+		}
+	}
+
+	return "", false
+}

@@ -177,7 +177,33 @@ func (c Config) Validate() error {
 		return err
 	}
 
-	return nil
+	// The two free-form maps are where the promise that this format holds no
+	// password would otherwise end. Params and Options are maps of text, and
+	// password is a keyword libpq honours, so without this a secret written
+	// under either one is saved to the connections file in plain text and
+	// emitted into the connection string afterwards. Refused rather than
+	// dropped: someone who typed it there believes it is taking effect, and
+	// has to be told where passwords actually live.
+	if err := c.noCredentials("params", c.Params); err != nil {
+		return err
+	}
+
+	return c.noCredentials("options", c.Options)
+}
+
+// noCredentials refuses a secret smuggled in under a free-form key.
+func (c Config) noCredentials(field string, settings map[string]string) error {
+	key, found := CredentialKeyword(settings)
+	if !found {
+		return nil
+	}
+
+	return InvalidField{
+		Field: field + "." + key,
+		Problem: fmt.Sprintf(
+			"%s.%s would put a password in the connections file in plain text — Hermes keeps passwords in the keychain of the system",
+			field, key),
+	}
 }
 
 // validate accepts the empty mode: not choosing is different from choosing

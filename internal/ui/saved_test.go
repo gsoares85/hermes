@@ -680,3 +680,41 @@ func TestSaveRefusesAnIdentifierTheKeychainCannotAddress(t *testing.T) {
 		t.Errorf("the connection was written anyway: %+v", listed)
 	}
 }
+
+// The window carries params and options through so that a pasted URI does not
+// lose them. Both are maps of text, and password is a keyword libpq honours, so
+// a form arriving with one there is a password on its way to a plain-text file
+// and to the connection string after it. It is refused at the boundary, before
+// anything is written and before the keychain is touched.
+func TestSaveRefusesAPasswordSmuggledThroughTheSettings(t *testing.T) {
+	t.Parallel()
+
+	const password = "correct-horse-battery-staple"
+
+	cases := map[string]ui.ConnectionForm{
+		"params":  {Params: map[string]string{"password": password}},
+		"options": {Options: map[string]string{"sslpassword": password}},
+	}
+
+	for name, carrying := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			service, store, vault := saved(t)
+
+			smuggled := form()
+			smuggled.Params, smuggled.Options = carrying.Params, carrying.Options
+
+			if _, err := service.Save(t.Context(), smuggled); err == nil {
+				t.Fatal("Save() accepted a password under a free-form key")
+			}
+
+			if len(store.saved) != 0 {
+				t.Errorf("the connection was written anyway: %+v", store.saved)
+			}
+			if _, err := vault.Get(t.Context(), secret.ConnectionRef(smuggled.ID)); err == nil {
+				t.Error("a password reached the keychain for a connection that was refused")
+			}
+		})
+	}
+}

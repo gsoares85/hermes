@@ -185,9 +185,13 @@ user = 'postgres'
 sslmode = 'disable'
 ```
 
-**There is no password field in this format, and there is no way to add one.** A file that names
-one is refused with an error saying so, rather than read as if the password had taken effect.
-Committing this file to a repository or mailing it to a colleague hands over no secret.
+**There is no password field in this format, and no way to put one in it.** A file that names
+`password` at the top level is refused with an error saying so, rather than read as if the
+password had taken effect. The same goes for the two free-form tables: `password`,
+`sslpassword` and `pgpassword` are refused under `[connection.params]` and
+`[connection.options]` too, on the way in and on the way out, because a key libpq would read a
+secret from is a secret in a plain-text file whatever table it sits in. Committing this file to
+a repository or mailing it to a colleague hands over no secret.
 
 The `id` is what the password is filed under in your keychain, which is why it is a random
 identifier rather than the name: renaming a connection, or moving it to a different host, keeps

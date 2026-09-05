@@ -21,10 +21,12 @@ const Version = 1
 
 // ReadConnections reads a connections file.
 //
-// Nothing it returns carries a password, because nothing it reads can: the
-// format has no field for one. A file that names one is refused rather than
-// quietly ignored, so that someone who typed a password into it is told where
-// passwords actually live instead of believing this one took effect.
+// Nothing it returns carries a password. The format has no field for one, and
+// the two free-form maps it does have are checked for the keywords libpq would
+// read a secret from — password under params is a password in a plain-text
+// file, whatever the struct says. Either way the file is refused rather than
+// quietly cleaned up, so that someone who typed a password into it is told
+// where passwords actually live instead of believing this one took effect.
 func ReadConnections(r io.Reader) ([]conn.Config, error) {
 	source, err := io.ReadAll(r)
 	if err != nil {
@@ -71,12 +73,45 @@ func WriteConnections(w io.Writer, connections []conn.Config) error {
 		}
 		seen[id] = index
 
+		// The one rule this has to repeat rather than leave to the reader. The
+		// format has no password field, but params and options are maps of
+		// text and password is a libpq keyword, so a secret can reach the file
+		// through either. Refusing on the way in as well as on the way out is
+		// what stops this build writing bytes it would then refuse to read.
+		if err := credentialFree(index, config); err != nil {
+			return err
+		}
+
 		written.Connections = append(written.Connections, entryOf(config))
 	}
 
 	encoder := toml.NewEncoder(w)
 	if err := encoder.Encode(written); err != nil {
 		return fmt.Errorf("writing the connections file: %w", err)
+	}
+
+	return nil
+}
+
+// credentialFree refuses a connection carrying a secret under a free-form key,
+// naming the connection so that the person can find it in a list they handed
+// over whole.
+func credentialFree(index int, config conn.Config) error {
+	for _, settings := range []struct {
+		field  string
+		values map[string]string
+	}{
+		{"params", config.Params},
+		{"options", config.Options},
+	} {
+		key, found := conn.CredentialKeyword(settings.values)
+		if !found {
+			continue
+		}
+
+		return fmt.Errorf(
+			"%w: connection %d (%s) carries a password in %s.%s, and this file is never where a password goes",
+			ErrInvalidFile, index+1, config.Name, settings.field, key)
 	}
 
 	return nil
@@ -93,9 +128,14 @@ type file struct {
 //
 // It is a type of its own rather than conn.Config with tags, and that is the
 // design rather than an accident of layering: conn.Config has a Password field
-// and this has nowhere to put one. The guarantee that a saved connection never
-// carries a secret is therefore a property of the type, checked by the
-// compiler, instead of a tag someone has to remember not to add.
+// and this has nowhere to put one. The compiler keeps that much on its own —
+// there is no field to assign a password to and no tag to forget.
+//
+// What the compiler cannot keep is the last two fields. Params and Options are
+// maps of text, and password is a keyword libpq honours, so the type alone
+// would let a secret in through either of them. That is why the guarantee is
+// the type plus one rule: conn.CredentialKeyword, applied when the file is
+// written and again when it is read.
 //
 // The scalars come before the tables because TOML gives every key after a table
 // header to that table: with params written first, archived would be read back

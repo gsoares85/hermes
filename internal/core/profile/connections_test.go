@@ -539,3 +539,73 @@ func TestTheFileSharesNoMapWithTheConnectionsItCarries(t *testing.T) {
 		t.Errorf("editing what was read changed the connection that was written: %v", original.Options)
 	}
 }
+
+// The adversarial version of the test above, and the one that matters more.
+// The struct has no password field, but params and options are maps of text and
+// password is a keyword libpq honours: a secret written under either of them
+// used to be saved to disk in plain text and then read back without complaint.
+func TestASecretUnderAFreeFormKeyIsRefused(t *testing.T) {
+	t.Parallel()
+
+	const password = "correct-horse-battery-staple"
+
+	cases := map[string]conn.Config{
+		"params":                {Params: map[string]string{"password": password}},
+		"options":               {Options: map[string]string{"password": password}},
+		"options sslpassword":   {Options: map[string]string{"sslpassword": password}},
+		"params pgpassword":     {Params: map[string]string{"PGPASSWORD": password}},
+		"options in mixed case": {Options: map[string]string{"Password": password}},
+	}
+
+	for name, carrying := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			smuggled := sample()
+			smuggled.Params = carrying.Params
+			smuggled.Options = carrying.Options
+
+			var written bytes.Buffer
+			err := profile.WriteConnections(&written, []conn.Config{smuggled})
+			if err == nil {
+				t.Fatalf("the connections file was written with the password in it:\n%s", written.String())
+			}
+			if !errors.Is(err, profile.ErrInvalidFile) {
+				t.Errorf("WriteConnections(...) = %v, want it to be an invalid file", err)
+			}
+			if bytes.Contains(written.Bytes(), []byte(password)) {
+				t.Errorf("the refused write left the password behind:\n%s", written.String())
+			}
+		})
+	}
+}
+
+// The other half: a file somebody wrote by hand is refused on the way in, so a
+// password put there before this rule existed is never read as if it had taken
+// effect.
+func TestASecretUnderAFreeFormKeyIsRefusedWhenRead(t *testing.T) {
+	t.Parallel()
+
+	const file = `version = 1
+
+[[connection]]
+id = 'one'
+host = 'db.example.com'
+port = 5432
+user = 'reader'
+
+[connection.options]
+password = 'correct-horse-battery-staple'
+`
+
+	_, err := profile.ReadConnections(strings.NewReader(file))
+	if err == nil {
+		t.Fatal("ReadConnections(...) = nil, want a refusal")
+	}
+	if !errors.Is(err, conn.ErrInvalidConfig) {
+		t.Errorf("ReadConnections(...) = %v, want an invalid connection", err)
+	}
+	if !strings.Contains(err.Error(), "keychain") {
+		t.Errorf("ReadConnections(...) = %v, want it to say where passwords go", err)
+	}
+}
