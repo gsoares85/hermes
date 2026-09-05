@@ -762,3 +762,39 @@ func TestEditingAConnectionKeepsItArchived(t *testing.T) {
 		t.Errorf("the listed connection is %+v, want it still archived", listed)
 	}
 }
+
+// The comment on vaultTimeout says it bounds every call this boundary makes to
+// the keychain, and VaultStatus used to hand the context through untouched. It
+// happened to be bounded by the vault package, which is a different package and
+// a function the caller wires in: a guarantee that depends on which function
+// was passed is not one this boundary makes.
+func TestEveryCallToTheKeychainCarriesADeadline(t *testing.T) {
+	t.Parallel()
+
+	var (
+		asked    bool
+		deadline bool
+	)
+
+	service := ui.NewConnectionService(ui.Dependencies{
+		Opener: stubOpener{},
+		Store:  &memoryStore{},
+		Vault:  secret.NewMemory(),
+		VaultStatus: func(ctx context.Context) (ui.VaultView, error) {
+			asked = true
+			_, deadline = ctx.Deadline()
+
+			return ui.VaultView{Backend: "keychain"}, nil
+		},
+	})
+
+	if _, err := service.VaultStatus(context.Background()); err != nil {
+		t.Fatalf("VaultStatus() = %v", err)
+	}
+	if !asked {
+		t.Fatal("VaultStatus() never asked")
+	}
+	if !deadline {
+		t.Error("VaultStatus() handed the keychain a context with no deadline")
+	}
+}

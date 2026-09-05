@@ -239,6 +239,13 @@ func (s *ConnectionService) VaultStatus(ctx context.Context) (VaultView, error) 
 		return VaultView{}, nil
 	}
 
+	// Bounded here like every other call to the keychain, and for a reason this
+	// one has of its own: what answers is a function the caller supplied. It
+	// happens to be one that cannot hang today, and a guarantee that depends on
+	// which function was wired in is not a guarantee this boundary makes.
+	ctx, cancel := context.WithTimeout(ctx, vaultTimeout)
+	defer cancel()
+
 	view, err := s.vaultStatus(ctx)
 	if err != nil {
 		return VaultView{}, secret.Error(err)
