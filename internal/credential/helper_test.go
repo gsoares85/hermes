@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"testing"
 
 	"github.com/gsoares85/hermes/internal/credential"
@@ -88,8 +89,10 @@ func report() {
 // kills this process outright, which is the point: nothing deferred here will
 // ever run, and only the sweep can clean up after it.
 func writeAndWait() {
-	announce(writeHelperPassfile())
-	waitForParent()
+	handoff := writeHelperPassfile()
+
+	announce(handoff.String())
+	waitForParent(handoff)
 }
 
 // watchAndWait installs the handler a binary installs, and then does nothing at
@@ -101,15 +104,26 @@ func watchAndWait() {
 	stop := store.ReleaseOnInterrupt(context.Background())
 	defer stop()
 
-	announce("watching, " + writeHelperPassfile())
-	waitForParent()
+	handoff := writeHelperPassfile()
+
+	announce("watching, " + handoff.String())
+	waitForParent(handoff)
 }
 
 func helperStore() *credential.Store {
 	return credential.NewStore(os.Getenv(helperDirectory))
 }
 
-func writeHelperPassfile() string {
+// writeHelperPassfile answers the handoff rather than only what it prints,
+// because the handoff is what holds the claim on the file.
+//
+// On Unix the claim is an *os.File, and the runtime closes the descriptor of
+// one nothing can reach any more — which drops the lock and turns this child's
+// live password file into one any sweep is entitled to remove. Returning the
+// string alone made the handoff unreachable the moment this returned, so the
+// child spent the whole of its wait one garbage collection away from losing the
+// file the test is about.
+func writeHelperPassfile() credential.Handoff {
 	handoff, err := helperStore().InFile(credential.Target{
 		Host:     "db.example.com",
 		Port:     5432,
@@ -122,7 +136,7 @@ func writeHelperPassfile() string {
 		os.Exit(3)
 	}
 
-	return handoff.String()
+	return handoff
 }
 
 // announce writes the one line the parent reads before it acts on this process.
@@ -133,8 +147,15 @@ func announce(value any) {
 }
 
 // waitForParent blocks until the parent closes the pipe, or kills this process.
-func waitForParent() {
+//
+// It is handed whatever has to stay alive for as long as the wait lasts. A
+// deferred keep-alive would not do: this ends the process itself, and os.Exit
+// runs nothing that was deferred.
+func waitForParent(alive ...any) {
 	_, _ = io.Copy(io.Discard, os.Stdin)
+
+	runtime.KeepAlive(alive)
+
 	os.Exit(0)
 }
 
