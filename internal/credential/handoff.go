@@ -56,6 +56,14 @@ var (
 // The zero value is the handoff that hands nothing over, and it is usable:
 // Apply leaves the environment alone and Release succeeds. That is what lets a
 // caller defer Release without first asking which kind of handoff it got.
+//
+// A handoff has to stay reachable until the child has finished reading what it
+// points at, and deferring Release is what makes that true. It is not only
+// tidiness: on Unix the claim is an *os.File, the runtime closes the descriptor
+// of one it finds unreachable, and closing it drops the lock. A handoff dropped
+// on the floor while a dump is still starting therefore ends as a file the
+// sweep is entitled to remove, and a pg_dump that cannot authenticate for a
+// reason nothing in the log explains.
 type Handoff struct {
 	env  []string
 	path string
@@ -90,6 +98,10 @@ func InEnvironment(password string) (Handoff, error) {
 // PGPASSFILE, so a variable inherited from the terminal Hermes was started
 // from would beat the file this package just wrote, and the child would
 // authenticate as somebody's leftover shell export.
+//
+// Applying does not hand the claim over to the command: the handoff is still
+// what keeps the file alive, and it has to outlive the child. See the note on
+// the type.
 func (h Handoff) Apply(command *exec.Cmd) {
 	if len(h.env) == 0 {
 		return
