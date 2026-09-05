@@ -8,17 +8,17 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/gsoares85/hermes/internal/privatedir"
 )
 
-// The modes the password file and its directory are created with.
+// The mode the password file is created with. Its directory is
+// privatedir.Make's business.
 //
 // 0600 is what libpq itself demands: it refuses to read a password file that
 // anyone else can. Saying so here rather than trusting the umask is the
 // difference between a permission and a hope.
-const (
-	fileMode = 0o600
-	dirMode  = 0o700
-)
+const fileMode = 0o600
 
 // Target is one server a child process will have to authenticate to.
 //
@@ -107,8 +107,8 @@ func (s *Store) InFile(targets ...Target) (Handoff, error) {
 // tells every sweep on this machine that an operation is using it and what the
 // operating system takes back when this process ends however it ends.
 func (s *Store) write(records string) (string, io.Closer, error) {
-	if err := os.MkdirAll(s.dir, dirMode); err != nil {
-		return "", nil, fmt.Errorf("creating %s: %w", s.dir, err)
+	if err := privatedir.Make(s.dir); err != nil {
+		return "", nil, err
 	}
 
 	// The name carries the process that wrote it. It is a label, not evidence:

@@ -16,17 +16,16 @@ import (
 
 	"github.com/gsoares85/hermes/internal/core/conn"
 	"github.com/gsoares85/hermes/internal/core/profile"
+	"github.com/gsoares85/hermes/internal/privatedir"
 )
 
-// The modes files and directories of Hermes are created with.
+// The mode the connections file is created with. Its directory is
+// privatedir.Make's business.
 //
 // The connections file holds no password — the format has no field for one —
 // but it does hold every host someone can reach and the user they reach it as,
 // which is a map of where to attack and who to go in as. It is theirs to read.
-const (
-	fileMode = 0o600
-	dirMode  = 0o700
-)
+const fileMode = 0o600
 
 // Connections is the connections file on disk.
 type Connections struct {
@@ -96,8 +95,8 @@ func (c *Connections) Load() ([]conn.Config, error) {
 // syncDir does nothing there.
 func (c *Connections) Save(connections []conn.Config) error {
 	directory := filepath.Dir(c.path)
-	if err := os.MkdirAll(directory, dirMode); err != nil {
-		return fmt.Errorf("creating %s: %w", directory, err)
+	if err := privatedir.Make(directory); err != nil {
+		return err
 	}
 
 	temporary, err := os.CreateTemp(directory, ".connections-*.toml")
