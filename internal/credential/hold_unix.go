@@ -64,7 +64,9 @@ func hold(file *os.File) (io.Closer, error) {
 // "in use" for a file this very process is holding — which is what stops a
 // second Hermes, and this one, sweeping a file an operation is still using.
 func orphaned(path string) bool {
-	file, err := os.OpenFile(path, os.O_RDWR, fileMode)
+	// The path is one this package built and the sweep read out of its own
+	// directory, never one that arrived from outside.
+	file, err := os.OpenFile(path, os.O_RDWR, fileMode) //nolint:gosec // a path of ours, listed from our own directory
 	if errors.Is(err, os.ErrNotExist) {
 		// Already gone: another sweep got there first, which is the outcome
 		// asked for and not worth a word.

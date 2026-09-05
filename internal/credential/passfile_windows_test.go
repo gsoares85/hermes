@@ -3,9 +3,10 @@
 package credential_test
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/windows"
 
 	"github.com/gsoares85/hermes/internal/credential"
 )
@@ -54,17 +55,23 @@ func TestThePasswordFileIsReadableOnlyByThisUser(t *testing.T) {
 // form, which names every principal by SID. The spelled-out form is translated
 // into the language of the system, and a test that read it would pass or fail
 // depending on where the machine was bought.
+//
+// Asked of Windows directly rather than through PowerShell. A subprocess brings
+// its own ways to fail that have nothing to do with the file — a shell that is
+// not on the path, a profile that writes to stderr, a policy that will not run
+// the command — and every one of them reads here as an access list that could
+// not be checked. This is one call, and what it answers is the descriptor
+// itself.
 func accessListOf(t *testing.T, path string) string {
 	t.Helper()
 
-	query := "(Get-Acl -LiteralPath '" + path + "').Sddl"
-
-	output, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", query).Output()
+	descriptor, err := windows.GetNamedSecurityInfo(
+		path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatalf("reading the access list of %s: %v", path, err)
 	}
 
-	access := strings.TrimSpace(string(output))
+	access := descriptor.String()
 	if !strings.Contains(access, "D:") {
 		t.Fatalf("the access list read for %s is %q, which is not one", path, access)
 	}

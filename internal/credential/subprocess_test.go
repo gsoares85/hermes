@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gsoares85/hermes/internal/credential"
 )
@@ -303,6 +304,15 @@ func TestGuardSweepsAtTheStartAndReleasesAtTheEnd(t *testing.T) {
 	store := credential.NewStore(directory)
 	release := store.Guard(t.Context())
 
+	// The sweep runs in the background, so it is waited for rather than
+	// assumed done: the stale file going is what says it has read the
+	// directory. Without this the write below races it, and a sweep that lists
+	// the directory in the moment between our file being created and being
+	// claimed takes it — the window the design accepts and names in Sweep,
+	// which costs one operation its authentication and is not a thing a test
+	// should gamble on once per run.
+	sweptAway(t, stale)
+
 	ours, err := store.InFile(target())
 	if err != nil {
 		t.Fatalf("InFile(...) = %v", err)
@@ -318,6 +328,27 @@ func TestGuardSweepsAtTheStartAndReleasesAtTheEnd(t *testing.T) {
 	if err := ours.Release(); err != nil {
 		t.Errorf("Release() after the guard released it = %v, want nil", err)
 	}
+}
+
+// sweptAway waits for the background sweep to remove a file, and fails if it
+// never does.
+//
+// Polling rather than a fixed pause: a sleep long enough for a loaded runner is
+// a second added to every run, and one short enough not to be is the flake it
+// was meant to remove.
+func sweptAway(t *testing.T, path string) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			return
+		}
+
+		time.Sleep(time.Millisecond)
+	}
+
+	t.Fatalf("the sweep left %s behind", path)
 }
 
 // deadProcess returns the identifier of a process that has certainly finished:

@@ -53,17 +53,17 @@ func TestASweepThatCannotAskAboutAFileSaysSo(t *testing.T) {
 		t.Fatalf("InFile(...) = %v", err)
 	}
 	path := handoff.path
-	if err := handoff.Release(); err != nil {
-		t.Fatalf("Release() = %v", err)
+	if released := handoff.Release(); released != nil {
+		t.Fatalf("Release() = %v", released)
 	}
 
 	// Written back with a mode nothing can open, which is the state an access
 	// rule somebody changed leaves behind.
-	if err := os.WriteFile(path, []byte("h:5432:d:u:s3cr3t\n"), 0o600); err != nil {
-		t.Fatalf("writing %s: %v", path, err)
+	if wrote := os.WriteFile(path, []byte("h:5432:d:u:s3cr3t\n"), 0o600); wrote != nil {
+		t.Fatalf("writing %s: %v", path, wrote)
 	}
-	if err := os.Chmod(path, 0o000); err != nil {
-		t.Fatalf("chmod %s: %v", path, err)
+	if locked := os.Chmod(path, 0o000); locked != nil {
+		t.Fatalf("chmod %s: %v", path, locked)
 	}
 
 	var written bytes.Buffer

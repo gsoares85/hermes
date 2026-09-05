@@ -32,7 +32,7 @@ func TestAClaimRefusesAnythingButTheFileThatWasCreated(t *testing.T) {
 				t.Fatalf("linking %s: %v", path, err)
 			}
 		},
-		"another file of the same name": func(t *testing.T, dir, path string) {
+		"another file of the same name": func(t *testing.T, _, path string) {
 			t.Helper()
 
 			if err := os.WriteFile(path, []byte("theirs"), 0o600); err != nil {
@@ -48,14 +48,14 @@ func TestAClaimRefusesAnythingButTheFileThatWasCreated(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "pgpass-1-abc")
 
-			file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, fileMode)
-			if err != nil {
-				t.Fatalf("creating %s: %v", path, err)
+			file, created := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, fileMode)
+			if created != nil {
+				t.Fatalf("creating %s: %v", path, created)
 			}
 			defer func() { _ = file.Close() }()
 
-			if err := os.Remove(path); err != nil {
-				t.Fatalf("removing %s: %v", path, err)
+			if removed := os.Remove(path); removed != nil {
+				t.Fatalf("removing %s: %v", path, removed)
 			}
 			swap(t, dir, path)
 

@@ -19,7 +19,9 @@ import (
 // The directory is opened read-only, which is what fsync on a directory takes
 // on Linux and on macOS.
 func syncDir(path string) error {
-	dir, err := os.Open(path)
+	// The path is the directory of the connections file, which this package
+	// chose and has just written into.
+	dir, err := os.Open(path) //nolint:gosec // the directory we were configured with
 	if err != nil {
 		return fmt.Errorf("opening %s to flush it: %w", path, err)
 	}
