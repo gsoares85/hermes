@@ -17,8 +17,10 @@ import (
 // unkillable by Ctrl-C — the first interrupt runs the cleanup, and every one
 // after it lands in a channel nobody reads.
 //
-// Unix only, because Windows offers no way to deliver a signal to another
-// process; there the guarantee is asserted by the exit that reraise performs.
+// Unix only, because Windows offers no way to deliver an interrupt to another
+// process. The end of the same promise on that platform — that reraise ends
+// this process rather than returning — is asserted directly, on both platforms,
+// by TestReraiseEndsTheProcess.
 func TestAnInterruptStillEndsTheProcess(t *testing.T) {
 	t.Parallel()
 
