@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -298,5 +299,166 @@ func TestAClosedSessionRefusesWorkOnARealServer(t *testing.T) {
 	}
 	if session.InTransaction() {
 		t.Error("a closed session reports an open transaction")
+	}
+}
+
+// The seam reads a result set, which is the thing the catalog introspection is
+// built on: every query it makes returns many rows, and until now the contract
+// had no way to carry them.
+//
+// One version is enough here, unlike the catalog queries above it. What this
+// exercises is the adapter between pgx and the seam, and that adapter is the
+// same code on every server; the queries that differ by version are the ones
+// that read pg_catalog, and those are tested where they live.
+func TestQueryReadsEveryRowOfAResult(t *testing.T) {
+	t.Parallel()
+
+	pool := openPool(t, testsupport.SupportedVersions[0])
+	session := openSession(t, pool)
+
+	table := createTable(t, session, "rows", "(id int primary key, label text)")
+	for id, label := range map[int]string{1: "one", 2: "two", 3: "three"} {
+		if err := session.Exec(t.Context(),
+			"INSERT INTO "+table+" (id, label) VALUES ($1, $2)", id, label); err != nil {
+			t.Fatalf("inserting %d: %v", id, err)
+		}
+	}
+
+	rows := session.Query(t.Context(), "SELECT id, label FROM "+table+" ORDER BY id")
+	defer rows.Close()
+
+	read := map[int]string{}
+	for rows.Next() {
+		var (
+			id    int
+			label string
+		)
+		if err := rows.Scan(&id, &label); err != nil {
+			t.Fatalf("scanning a row: %v", err)
+		}
+		read[id] = label
+	}
+
+	if err := rows.Err(); err != nil {
+		t.Fatalf("reading the result: %v", err)
+	}
+
+	want := map[int]string{1: "one", 2: "two", 3: "three"}
+	if !reflect.DeepEqual(read, want) {
+		t.Errorf("the result is %v, want %v", read, want)
+	}
+}
+
+// A result set holds the connection of the session it came from, so closing it
+// has to give that connection back. Without this the introspection of a schema
+// — which is one query per kind of object — would strand a connection per
+// query and stop on the third.
+func TestAClosedResultReleasesTheConnection(t *testing.T) {
+	t.Parallel()
+
+	pool := openPool(t, testsupport.SupportedVersions[0])
+	session := openSession(t, pool)
+
+	// More reads in a row than the pool has connections, which is what makes
+	// this an assertion rather than a coincidence.
+	for i := range 10 {
+		rows := session.Query(t.Context(), "SELECT generate_series(1, 3)")
+		for rows.Next() {
+			var value int
+			if err := rows.Scan(&value); err != nil {
+				t.Fatalf("read %d: scanning: %v", i, err)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+		rows.Close()
+
+		// Twice, because the contract says so and because a deferred Close
+		// after an explicit one is the shape every caller will write.
+		rows.Close()
+	}
+}
+
+// The failure has to arrive as a failure. A query the server refuses answers no
+// rows, and a caller that reads only the loop would take that for an empty
+// table — which, for a catalog read, is a schema that looks like it has nothing
+// in it.
+func TestAQueryTheServerRefusesFailsThroughErr(t *testing.T) {
+	t.Parallel()
+
+	pool := openPool(t, testsupport.SupportedVersions[0])
+	session := openSession(t, pool)
+
+	rows := session.Query(t.Context(), "SELECT * FROM a_table_that_does_not_exist")
+	defer rows.Close()
+
+	if rows.Next() {
+		t.Error("Next answered true for a query the server refused")
+	}
+
+	err := rows.Err()
+	if err == nil {
+		t.Fatal("Err() = nil for a query the server refused")
+	}
+
+	// Classified, so the layer above can tell a broken query from a broken
+	// connection instead of matching on the driver's own text. The SQLSTATE is
+	// the part that matters here: 42P01 is undefined_table, and carrying it
+	// across the seam is what lets the catalog reader say which object was
+	// missing rather than "something went wrong".
+	var failure *driver.Failure
+	if !errors.As(err, &failure) {
+		t.Fatalf("Err() = %v, want it classified as a driver failure", err)
+	}
+	if failure.SQLState != "42P01" {
+		t.Errorf("the failure carries SQLSTATE %q, want 42P01", failure.SQLState)
+	}
+}
+
+// Statements inside a transaction go through the transaction, and a result set
+// is a statement. Reading through the connection instead would show a caller
+// rows their own open transaction had already deleted.
+func TestQueryInsideATransactionSeesTheTransaction(t *testing.T) {
+	t.Parallel()
+
+	pool := openPool(t, testsupport.SupportedVersions[0])
+	session := openSession(t, pool)
+
+	table := createTable(t, session, "rows_tx", "(id int primary key)")
+	if err := session.Exec(t.Context(), "INSERT INTO "+table+" VALUES (1)"); err != nil {
+		t.Fatalf("inserting: %v", err)
+	}
+
+	if err := session.Begin(t.Context()); err != nil {
+		t.Fatalf("Begin() = %v", err)
+	}
+	if err := session.Exec(t.Context(), "INSERT INTO "+table+" VALUES (2)"); err != nil {
+		t.Fatalf("inserting inside the transaction: %v", err)
+	}
+
+	rows := session.Query(t.Context(), "SELECT id FROM "+table+" ORDER BY id")
+	var read []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scanning: %v", err)
+		}
+		read = append(read, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("reading inside the transaction: %v", err)
+	}
+	rows.Close()
+
+	if !reflect.DeepEqual(read, []int{1, 2}) {
+		t.Errorf("the transaction read %v, want [1 2]: the query did not go through it", read)
+	}
+
+	if err := session.Rollback(t.Context()); err != nil {
+		t.Fatalf("Rollback() = %v", err)
+	}
+	if got := countRows(t, session, table); got != 1 {
+		t.Errorf("the table holds %d rows after the rollback, want 1", got)
 	}
 }

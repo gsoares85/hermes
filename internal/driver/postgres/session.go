@@ -41,6 +41,7 @@ func (p *connPool) Session(ctx context.Context) (driver.Session, error) {
 type runner interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
 // runner picks between the two, once, so that no method below repeats the
@@ -83,6 +84,26 @@ func (s *session) QueryRow(ctx context.Context, sql string, args ...any) driver.
 	}
 
 	return run.QueryRow(ctx, sql, args...)
+}
+
+// Query sends a query and answers the result set.
+//
+// The error pgx returns here is folded into the result rather than returned
+// beside it, because the contract gives Query no error to return: a caller has
+// one place to look for a failure instead of two, and Err is the place the
+// contract already requires them to look.
+func (s *session) Query(ctx context.Context, sql string, args ...any) driver.Rows {
+	run := s.runner()
+	if run == nil {
+		return failedRows{err: driver.ErrSessionClosed}
+	}
+
+	sent, err := run.Query(ctx, sql, args...)
+	if err != nil {
+		return failedRows{err: classify(fmt.Errorf("running the query: %w", err))}
+	}
+
+	return rows{inner: sent}
 }
 
 // failedRow carries a failure that was found before the query was sent.

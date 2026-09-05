@@ -104,6 +104,49 @@ type Row interface {
 	Scan(dest ...any) error
 }
 
+// Rows is a result set being read one row at a time.
+//
+// It is this package's own interface for the same reason Row is: a pgx result
+// set must never cross the seam. It is also the first thing on this contract
+// that is a resource rather than a value — reading it holds the connection the
+// session checked out — so the rules below are part of the contract, not advice.
+//
+// The shape is the one Go has settled on for cursors, and it has a trap the
+// godoc has to name: Next answers false both for "no more rows" and for
+// "something broke", and only Err tells the two apart. A loop that reads Next
+// and never reads Err reports an empty result for a connection that died, which
+// is the difference between "this schema has no tables" and "the server is
+// gone".
+//
+//	rows := session.Query(ctx, sql)
+//	defer rows.Close()
+//
+//	for rows.Next() {
+//	    if err := rows.Scan(&name); err != nil { return err }
+//	}
+//
+//	return rows.Err()
+type Rows interface {
+	// Next advances to the next row and reports whether there is one. It
+	// answers false at the end of the result and on failure alike; Err says
+	// which happened.
+	Next() bool
+
+	// Scan reads the current row into destinations the caller owns. It is only
+	// valid after Next has answered true.
+	Scan(dest ...any) error
+
+	// Err answers the failure that ended the read, and nil when the result was
+	// read to the end. It has to be checked after the loop.
+	Err() error
+
+	// Close releases the result and the connection it was holding. The caller
+	// closes, always, and a deferred Close is the only shape that survives an
+	// early return. It is safe to call more than once, and safe to call after
+	// the result has been read to the end.
+	Close()
+}
+
 // Session is one connection checked out of a pool, with a transaction scope of
 // its own.
 //
@@ -118,6 +161,19 @@ type Session interface {
 	// QueryRow runs a query expected to return a single row. The error, if
 	// any, surfaces from Scan.
 	QueryRow(ctx context.Context, sql string, args ...any) Row
+
+	// Query runs a query that returns many rows.
+	//
+	// There is no error to return, for the same reason QueryRow has none: a
+	// failure to send the query is a failure of the result, and giving it two
+	// ways out would let a caller check one and miss the other. It surfaces
+	// from Err, which the contract on Rows requires reading anyway.
+	//
+	// The result holds this session's connection until it is closed. Reading a
+	// second result before closing the first is not two queries in parallel —
+	// there is one connection — so a caller that needs both at once needs two
+	// sessions.
+	Query(ctx context.Context, sql string, args ...any) Rows
 
 	// Begin opens a transaction. It fails with ErrTransactionActive if one is
 	// already open: nested transactions are a different feature, and silently

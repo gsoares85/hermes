@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/gsoares85/hermes/internal/driver"
 )
 
@@ -45,6 +47,26 @@ func TestAClosedSessionRefusesWorkInsteadOfPanicking(t *testing.T) {
 		}
 	})
 
+	// A result set has two places a failure can surface — the loop and Err —
+	// and a caller that only reads the loop would take an empty answer for an
+	// empty table. Both have to say the session is closed.
+	t.Run("Query", func(t *testing.T) {
+		t.Parallel()
+
+		rows := closed(t).Query(t.Context(), "SELECT 1")
+		defer rows.Close()
+
+		if rows.Next() {
+			t.Error("Next on a closed session answered true, so the loop would run")
+		}
+		if err := rows.Err(); !errors.Is(err, driver.ErrSessionClosed) {
+			t.Errorf("Err after Query on a closed session = %v, want ErrSessionClosed", err)
+		}
+		if err := rows.Scan(); !errors.Is(err, driver.ErrSessionClosed) {
+			t.Errorf("Scan after Query on a closed session = %v, want ErrSessionClosed", err)
+		}
+	})
+
 	t.Run("Begin", func(t *testing.T) {
 		t.Parallel()
 
@@ -62,4 +84,27 @@ func TestClosingTwiceIsSafe(t *testing.T) {
 	s := &session{}
 	s.Close()
 	s.Close()
+}
+
+// The seam is a seal, not a label.
+//
+// Embedding pgx.Rows in the adapter would promote every method it has, so the
+// value handed back as driver.Rows could be asserted straight back to the pgx
+// interface — and the core layer would reach Conn(), FieldDescriptions() and
+// the rest through a type it is not allowed to import. That is the arrangement
+// ADR-0009 exists to prevent, and an interface it can be asserted through is
+// not a seam.
+func TestAResultSetDoesNotCarryThePgxTypeAcrossTheSeam(t *testing.T) {
+	t.Parallel()
+
+	crossing := map[string]driver.Rows{
+		"a result":        rows{},
+		"a failed result": failedRows{},
+	}
+
+	for name, result := range crossing {
+		if _, isPgx := result.(pgx.Rows); isPgx {
+			t.Errorf("%s can be asserted back to pgx.Rows, so the seam is a label", name)
+		}
+	}
 }
