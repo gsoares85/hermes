@@ -384,14 +384,17 @@ func TestAVaultThatRefusesToStoreIsReported(t *testing.T) {
 	}
 }
 
-// The connection is gone from the file either way, so the message has to say
-// that the password is the part still there rather than imply nothing happened.
-func TestAVaultThatRefusesToForgetIsReported(t *testing.T) {
+// A keychain that will not give the password up leaves the connection where it
+// was, so that Forget can simply be pressed again. Removing the connection and
+// reporting the orphaned secret would leave a person with nothing to press: the
+// row the button is on would be gone.
+func TestAVaultThatRefusesToForgetKeepsTheConnection(t *testing.T) {
 	t.Parallel()
 
+	store := &memoryStore{saved: []conn.Config{{ID: "an-id", Host: "h", Port: 5432, User: "u"}}}
 	service := ui.NewConnectionService(ui.Dependencies{
 		Opener: stubOpener{},
-		Store:  &memoryStore{saved: []conn.Config{{ID: "an-id", Host: "h", Port: 5432, User: "u"}}},
+		Store:  store,
 		Vault:  refusingVault{err: errors.New("the keychain is locked")},
 	})
 
@@ -399,8 +402,43 @@ func TestAVaultThatRefusesToForgetIsReported(t *testing.T) {
 	if err == nil {
 		t.Fatal("Delete() = nil, want the keychain refusal to be reported")
 	}
-	if !strings.Contains(err.Error(), "still in the keychain") {
-		t.Errorf("the error does not say what is left behind: %v", err)
+	if !strings.Contains(err.Error(), "the connection was kept") {
+		t.Errorf("the error does not say the connection is still there: %v", err)
+	}
+
+	listed, err := service.List()
+	if err != nil {
+		t.Fatalf("List() = %v", err)
+	}
+	if len(listed) != 1 {
+		t.Errorf("the connection is %v, want it kept so that Forget can be pressed again", listed)
+	}
+}
+
+// And the second press works, because a keychain with nothing under the
+// reference is the ordinary answer rather than a failure — which is what makes
+// the retry a retry rather than a second way to fail.
+func TestForgettingAgainAfterTheKeychainRecoversFinishesTheJob(t *testing.T) {
+	t.Parallel()
+
+	service, store, vault := saved(t)
+
+	view, err := service.Save(t.Context(), form())
+	if err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	// The password removed, the connection not — the state a refusal on the
+	// file would leave behind.
+	if err := vault.Delete(t.Context(), secret.ConnectionRef(view.ID)); err != nil {
+		t.Fatalf("emptying the keychain: %v", err)
+	}
+
+	if err := service.Delete(t.Context(), view.ID); err != nil {
+		t.Fatalf("the second Delete() = %v, want it to finish the job", err)
+	}
+	if len(store.saved) != 0 {
+		t.Errorf("the file still holds %+v", store.saved)
 	}
 }
 

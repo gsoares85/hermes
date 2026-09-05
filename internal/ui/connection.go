@@ -362,19 +362,35 @@ func (s *ConnectionService) List() ([]SavedView, error) {
 // Both, because a secret left behind is an item in the keychain of the person
 // that nothing will ever look for again: invisible litter that outlives the
 // application.
+//
+// The password goes first, which is the mirror of the order Save uses and the
+// same argument. Either order can fail halfway, so the question is which
+// half-done state a person can get out of. Removing the connection first fails
+// into a secret nothing points at any more — unreachable from here, with no
+// second Forget to press, because the connection it belonged to is gone.
+// Removing the password first fails into a connection that is still listed and
+// still has its Forget button: the operation can simply be repeated, and the
+// second attempt finds no secret and says so is normal.
 func (s *ConnectionService) Delete(ctx context.Context, id string) error {
-	if err := s.forget(id); err != nil {
+	if err := s.discard(ctx, id); err != nil {
 		return err
 	}
 
+	return s.forget(id)
+}
+
+// discard takes the password out of the keychain.
+//
+// A connection saved without a password has no secret to remove, and that is a
+// normal outcome rather than a failure — so is a second Forget after one that
+// failed on the file.
+func (s *ConnectionService) discard(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, vaultTimeout)
 	defer cancel()
 
-	// A connection saved without a password has no secret to remove, and that
-	// is a normal outcome rather than a failure.
 	if err := s.vault.Delete(ctx, secret.ConnectionRef(id)); err != nil &&
 		!errors.Is(err, secret.ErrNotFound) {
-		return fmt.Errorf("the connection was removed, but its password is still in the keychain: %w",
+		return fmt.Errorf("the password could not be removed from the keychain, so the connection was kept: %w",
 			secret.Error(err))
 	}
 
