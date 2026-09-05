@@ -139,8 +139,14 @@ func TestOwnerOfReadsOnlyTheNamesThisPackageWrites(t *testing.T) {
 		if want == "" && ours {
 			t.Errorf("ownerOf(%q) claimed the file for process %s", name, got)
 		}
-		if want != "" && got != want {
-			t.Errorf("ownerOf(%q) = %q, %t, want %q", name, got, ours, want)
+		// Both halves of the answer, because the second is the one that
+		// decides anything: a name reported as not ours is skipped by Sweep
+		// and by ReleaseAll alike. Asserting only the identifier would pass
+		// while every file this package writes went unrecognised — a password
+		// left on the disk for ever, which is the outcome the package exists
+		// to prevent.
+		if want != "" && (!ours || got != want) {
+			t.Errorf("ownerOf(%q) = %q, %t, want %q, true", name, got, ours, want)
 		}
 	}
 }
