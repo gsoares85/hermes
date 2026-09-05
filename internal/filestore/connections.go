@@ -77,13 +77,23 @@ func (c *Connections) Load() ([]conn.Config, error) {
 // Save writes the whole list, replacing whatever was there.
 //
 // The bytes go to a temporary file beside the real one, are flushed to the
-// disk, and are then renamed over it. Both halves are needed and they answer
-// different questions. The rename is what makes the replacement atomic for
-// anything else reading the file: nobody ever sees it half written. The flush
-// is what makes it survive the machine losing power, because a rename orders
-// the directory entry and says nothing about whether the bytes it now points at
-// ever left the page cache — without it the file that replaces a good list can
-// be a file of zeros.
+// disk, are renamed over it, and the directory is flushed in turn. Each step
+// answers a different question, and leaving any of them out breaks a different
+// promise.
+//
+// The rename is what makes the replacement atomic for anything else reading the
+// file: nobody ever sees it half written. Flushing the file is what keeps its
+// contents through a power cut, because a rename orders the directory entry and
+// says nothing about whether the bytes it now points at ever left the page
+// cache — without it the file that replaces a good list can be a file of zeros.
+// Flushing the directory is what keeps the rename itself: in POSIX the entry is
+// as unflushed as the bytes were, so without it a power cut can lose the
+// replacement and bring the old list back.
+//
+// Together they are the whole of the promise, and no more than it: what
+// survives a power cut is the previous list or the new one, never a damaged
+// file. Windows keeps the last step in its own metadata journal, which is why
+// syncDir does nothing there.
 func (c *Connections) Save(connections []conn.Config) error {
 	directory := filepath.Dir(c.path)
 	if err := os.MkdirAll(directory, dirMode); err != nil {
@@ -106,7 +116,7 @@ func (c *Connections) Save(connections []conn.Config) error {
 		return fmt.Errorf("replacing %s: %w", c.path, err)
 	}
 
-	return nil
+	return syncDir(directory)
 }
 
 func write(file *os.File, connections []conn.Config) error {
