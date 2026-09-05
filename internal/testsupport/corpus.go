@@ -5,6 +5,7 @@ package testsupport
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -38,6 +39,7 @@ func Corpus(t *testing.T, instance *Instance) string {
 
 	schema := fmt.Sprintf("corpus_%d", corpusSequence.Add(1))
 
+	installExtensions(t, instance)
 	instance.Exec(t, "CREATE SCHEMA "+schema)
 
 	// Not dropped when the test ends, and that is not an omission. Exec runs
@@ -51,6 +53,37 @@ func Corpus(t *testing.T, instance *Instance) string {
 	}
 
 	return schema
+}
+
+// Extensions belong to the database rather than to a schema, so they are
+// installed once per container instead of once per corpus.
+//
+// It has to be serialised, and IF NOT EXISTS is not enough: two tests building
+// their own corpus at the same time both find it missing and both try to create
+// it, and the second one fails on the unique index over the extension name.
+// That is a race in the fixture that reads as a failure of the code under test,
+// which is the worst kind of flake to be handed.
+var (
+	extensionsOnce  sync.Mutex
+	extensionsBuilt = map[string]bool{}
+)
+
+func installExtensions(t *testing.T, instance *Instance) {
+	t.Helper()
+
+	extensionsOnce.Lock()
+	defer extensionsOnce.Unlock()
+
+	if extensionsBuilt[instance.Version] {
+		return
+	}
+
+	// btree_gist is what lets an exclusion constraint mix an equality on a
+	// scalar with an overlap on a range, which is the shape the corpus needs
+	// and the one information_schema cannot see at all.
+	instance.Exec(t, "CREATE EXTENSION IF NOT EXISTS btree_gist")
+
+	extensionsBuilt[instance.Version] = true
 }
 
 // schemaToken is what stands in for the schema in the statements below.
@@ -145,4 +178,64 @@ var corpusStatements = []string{
 	// A table with no columns at all is legal, and it is the shape that finds
 	// a reader which assumes every table joins to at least one row.
 	`CREATE TABLE {schema}.empty_table ()`,
+
+	// Every kind of constraint the model compares, on one table, so that a
+	// kind lost between the query and the model is one failing assertion
+	// rather than a schema that merely looks a little smaller.
+	//
+	// The keys are deliberately over more than one column, because the order
+	// of a key is part of it: (a, b) and (b, a) are different constraints, and
+	// a reader that unnests without keeping the order gets it right about half
+	// the time.
+	`CREATE TABLE {schema}.constrained (
+		first integer NOT NULL,
+		second integer NOT NULL,
+		label text,
+		amount numeric(10,2) CHECK (amount > 0),
+		CONSTRAINT constrained_pk PRIMARY KEY (first, second),
+		CONSTRAINT constrained_unique UNIQUE (second, label),
+		CONSTRAINT constrained_check CHECK (char_length(label) < 100)
+	)`,
+
+	// A foreign key that points at itself, which is legal and which a
+	// topological order has to survive.
+	`CREATE TABLE {schema}.employee (
+		id integer PRIMARY KEY,
+		manager integer REFERENCES {schema}.employee (id)
+	)`,
+
+	// Foreign keys in a circle. PostgreSQL allows it, no CREATE TABLE order
+	// produces it, and the only way to write it is to add one of them
+	// afterwards — which is what the DDL phase will have to work out for
+	// itself.
+	`CREATE TABLE {schema}.circle_a (id integer PRIMARY KEY, b_id integer)`,
+	`CREATE TABLE {schema}.circle_b (id integer PRIMARY KEY, a_id integer)`,
+	`ALTER TABLE {schema}.circle_a ADD CONSTRAINT circle_a_to_b
+		FOREIGN KEY (b_id) REFERENCES {schema}.circle_b (id) ON DELETE SET NULL`,
+	`ALTER TABLE {schema}.circle_b ADD CONSTRAINT circle_b_to_a
+		FOREIGN KEY (a_id) REFERENCES {schema}.circle_a (id) ON DELETE CASCADE`,
+
+	// An exclusion constraint, which is the thing information_schema cannot
+	// see at all and one of the reasons ADR-0007 reads the catalog instead.
+	// The extension it needs is installed once per container, above.
+	`CREATE TABLE {schema}.booking (
+		room integer,
+		during tsrange,
+		EXCLUDE USING gist (room WITH =, during WITH &&)
+	)`,
+
+	// The indexes that are not a plain list of columns. Every one of these is
+	// invisible to information_schema, and each has broken a diff somewhere.
+	`CREATE TABLE {schema}.indexed (
+		id integer PRIMARY KEY,
+		email text,
+		status text,
+		created timestamp with time zone,
+		payload text
+	)`,
+	`CREATE INDEX indexed_partial ON {schema}.indexed (email) WHERE status = 'active'`,
+	`CREATE INDEX indexed_expression ON {schema}.indexed (lower(email))`,
+	`CREATE UNIQUE INDEX indexed_unique ON {schema}.indexed (email, status)`,
+	`CREATE INDEX indexed_include ON {schema}.indexed (status) INCLUDE (payload)`,
+	`CREATE INDEX indexed_descending ON {schema}.indexed (created DESC NULLS LAST)`,
 }

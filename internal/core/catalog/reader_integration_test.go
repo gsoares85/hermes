@@ -85,13 +85,27 @@ func anonymise(schema catalog.Schema) catalog.Schema {
 	for i, table := range schema.Tables {
 		table.Columns = append([]catalog.Column(nil), table.Columns...)
 		for j := range table.Columns {
-			table.Columns[j].Default = strings.ReplaceAll(
-				table.Columns[j].Default, name+".", "{schema}.")
+			table.Columns[j].Default = anonymiseText(table.Columns[j].Default, name)
 		}
+
+		table.Constraints = append([]catalog.Constraint(nil), table.Constraints...)
+		for j := range table.Constraints {
+			table.Constraints[j].Definition = anonymiseText(table.Constraints[j].Definition, name)
+		}
+
+		table.Indexes = append([]catalog.Index(nil), table.Indexes...)
+		for j := range table.Indexes {
+			table.Indexes[j].Definition = anonymiseText(table.Indexes[j].Definition, name)
+		}
+
 		anonymised.Tables[i] = table
 	}
 
 	return anonymised
+}
+
+func anonymiseText(text, schema string) string {
+	return strings.ReplaceAll(text, schema+".", "{schema}.")
 }
 
 // tableIn finds a table by name, failing the test when it is not there.
@@ -196,7 +210,84 @@ func describeTable(want, got catalog.Table) string {
 		}
 	}
 
+	if difference := describeConstraints(want, got); difference != "" {
+		return difference
+	}
+
+	return describeIndexes(want, got)
+}
+
+func describeConstraints(want, got catalog.Table) string {
+	if len(want.Constraints) != len(got.Constraints) {
+		return report("the constraints of "+want.Name.String(),
+			constraintNames(want), constraintNames(got))
+	}
+
+	for i := range want.Constraints {
+		if !sameConstraint(want.Constraints[i], got.Constraints[i]) {
+			return report(want.Name.String()+" constraint "+want.Constraints[i].Name.String(),
+				want.Constraints[i], got.Constraints[i])
+		}
+	}
+
 	return ""
+}
+
+func describeIndexes(want, got catalog.Table) string {
+	if len(want.Indexes) != len(got.Indexes) {
+		return report("the indexes of "+want.Name.String(), indexNames(want), indexNames(got))
+	}
+
+	for i := range want.Indexes {
+		if !sameIndex(want.Indexes[i], got.Indexes[i]) {
+			return report(want.Name.String()+" index "+want.Indexes[i].Name.String(),
+				want.Indexes[i], got.Indexes[i])
+		}
+	}
+
+	return ""
+}
+
+// Compared field by field because both carry a slice, which == cannot compare.
+func sameConstraint(want, got catalog.Constraint) bool {
+	return want.Name == got.Name && want.Kind == got.Kind &&
+		want.Definition == got.Definition && sameNames(want.Columns, got.Columns)
+}
+
+func sameIndex(want, got catalog.Index) bool {
+	return want.Name == got.Name && want.Unique == got.Unique && want.Primary == got.Primary &&
+		want.Definition == got.Definition && sameNames(want.Columns, got.Columns)
+}
+
+func sameNames(want, got []catalog.Name) bool {
+	if len(want) != len(got) {
+		return false
+	}
+	for i := range want {
+		if want[i] != got[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func constraintNames(table catalog.Table) []string {
+	found := make([]string, 0, len(table.Constraints))
+	for _, constraint := range table.Constraints {
+		found = append(found, constraint.Name.String())
+	}
+
+	return found
+}
+
+func indexNames(table catalog.Table) []string {
+	found := make([]string, 0, len(table.Indexes))
+	for _, index := range table.Indexes {
+		found = append(found, index.Name.String())
+	}
+
+	return found
 }
 
 func report(what string, want, got any) string {
@@ -385,5 +476,202 @@ func TestReadingTheSameSchemaTwiceGivesTheSameModel(t *testing.T) {
 
 	if difference := describe(first, second); difference != "" {
 		t.Errorf("two readings of one schema differ: %s", difference)
+	}
+}
+
+// constraintIn finds a constraint by name, failing the test when it is missing.
+func constraintIn(t *testing.T, table catalog.Table, name string) catalog.Constraint {
+	t.Helper()
+
+	for _, constraint := range table.Constraints {
+		if constraint.Name.String() == name {
+			return constraint
+		}
+	}
+
+	t.Fatalf("the table %s has no constraint %q; it has %v", table.Name, name, constraintNames(table))
+
+	return catalog.Constraint{}
+}
+
+func indexIn(t *testing.T, table catalog.Table, name string) catalog.Index {
+	t.Helper()
+
+	for _, index := range table.Indexes {
+		if index.Name.String() == name {
+			return index
+		}
+	}
+
+	t.Fatalf("the table %s has no index %q; it has %v", table.Name, name, indexNames(table))
+
+	return catalog.Index{}
+}
+
+// The five kinds, read off a real server, with their keys in the order the key
+// has.
+func TestEveryKindOfConstraintIsRead(t *testing.T) {
+	t.Parallel()
+
+	schema := readCorpus(t, testsupport.SupportedVersions[0])
+	constrained := tableIn(t, schema, "constrained")
+
+	for name, kind := range map[string]catalog.ConstraintKind{
+		"constrained_pk":     catalog.ConstraintPrimaryKey,
+		"constrained_unique": catalog.ConstraintUnique,
+		"constrained_check":  catalog.ConstraintCheck,
+	} {
+		if got := constraintIn(t, constrained, name).Kind; got != kind {
+			t.Errorf("%s reads as %q, want %q", name, got, kind)
+		}
+	}
+
+	// The order of a key is part of it. The primary key is (first, second) and
+	// the unique is (second, label): a reader that unnests without keeping the
+	// ordinality gets one of them wrong.
+	key := constraintIn(t, constrained, "constrained_pk").Columns
+	if len(key) != 2 || key[0].String() != "first" || key[1].String() != "second" {
+		t.Errorf("the primary key reads as %v, want [first second]", key)
+	}
+
+	unique := constraintIn(t, constrained, "constrained_unique").Columns
+	if len(unique) != 2 || unique[0].String() != "second" || unique[1].String() != "label" {
+		t.Errorf("the unique key reads as %v, want [second label]", unique)
+	}
+
+	booking := tableIn(t, schema, "booking")
+	if len(booking.Constraints) == 0 {
+		t.Fatal("the exclusion constraint was not read at all")
+	}
+	if got := booking.Constraints[0].Kind; got != catalog.ConstraintExclusion {
+		t.Errorf("the exclusion constraint reads as %q", got)
+	}
+}
+
+// Foreign keys, including the two shapes a dependency order has to survive: a
+// table pointing at itself, and two pointing at each other.
+func TestForeignKeysAreReadIncludingTheCircularOnes(t *testing.T) {
+	t.Parallel()
+
+	schema := readCorpus(t, testsupport.SupportedVersions[0])
+
+	self := tableIn(t, schema, "employee")
+	found := false
+	for _, constraint := range self.Constraints {
+		if constraint.Kind == catalog.ConstraintForeignKey {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the self-referencing foreign key was not read: %v", constraintNames(self))
+	}
+
+	toB := constraintIn(t, tableIn(t, schema, "circle_a"), "circle_a_to_b")
+	toA := constraintIn(t, tableIn(t, schema, "circle_b"), "circle_b_to_a")
+
+	if toB.Kind != catalog.ConstraintForeignKey || toA.Kind != catalog.ConstraintForeignKey {
+		t.Errorf("the circular keys read as %q and %q", toB.Kind, toA.Kind)
+	}
+	// The referential action lives in the definition, and losing it would let a
+	// sync recreate a key that deletes different rows.
+	if !strings.Contains(toB.Definition, "ON DELETE SET NULL") {
+		t.Errorf("circle_a_to_b reads as %q, want its ON DELETE", toB.Definition)
+	}
+	if !strings.Contains(toA.Definition, "ON DELETE CASCADE") {
+		t.Errorf("circle_b_to_a reads as %q, want its ON DELETE", toA.Definition)
+	}
+}
+
+// The indexes information_schema cannot see, which is one of the reasons the
+// catalog is read directly.
+func TestTheIndexesThatOnlyTheCatalogKnowsAreRead(t *testing.T) {
+	t.Parallel()
+
+	schema := readCorpus(t, testsupport.SupportedVersions[0])
+	indexed := tableIn(t, schema, "indexed")
+
+	partial := indexIn(t, indexed, "indexed_partial")
+	if !strings.Contains(partial.Definition, "WHERE") {
+		t.Errorf("the partial index reads as %q, want its WHERE", partial.Definition)
+	}
+
+	// An index by expression names no column: there is no column number to
+	// join, which is exactly why the definition is kept.
+	expression := indexIn(t, indexed, "indexed_expression")
+	if len(expression.Columns) != 0 {
+		t.Errorf("the index by expression names %v", expression.Columns)
+	}
+	if !strings.Contains(expression.Definition, "lower") {
+		t.Errorf("the index by expression reads as %q", expression.Definition)
+	}
+
+	// INCLUDE carries a column without ordering by it, and the key has to stop
+	// where the key stops.
+	include := indexIn(t, indexed, "indexed_include")
+	if len(include.Columns) != 1 || include.Columns[0].String() != "status" {
+		t.Errorf("the INCLUDE index has key %v, want [status]", include.Columns)
+	}
+	if !strings.Contains(include.Definition, "INCLUDE") {
+		t.Errorf("the INCLUDE index reads as %q, want its payload", include.Definition)
+	}
+
+	if !indexIn(t, indexed, "indexed_unique").Unique {
+		t.Error("the unique index reads as not unique")
+	}
+	if !strings.Contains(indexIn(t, indexed, "indexed_descending").Definition, "DESC") {
+		t.Error("the descending index lost its direction")
+	}
+}
+
+// An index that exists only because a constraint does is the constraint's, and
+// listing it as well would put one object in the model twice — and make the DDL
+// phase emit a constraint and then an index the constraint already created.
+func TestAnIndexBackingAConstraintIsNotListedTwice(t *testing.T) {
+	t.Parallel()
+
+	schema := readCorpus(t, testsupport.SupportedVersions[0])
+	constrained := tableIn(t, schema, "constrained")
+
+	for _, index := range constrained.Indexes {
+		if index.Name.String() == "constrained_pk" || index.Name.String() == "constrained_unique" {
+			t.Errorf("%s is listed as an index as well as a constraint", index.Name)
+		}
+	}
+
+	// And an index nobody declared a constraint for is still there.
+	indexIn(t, tableIn(t, schema, "indexed"), "indexed_unique")
+}
+
+// The divergence the version matrix exists to find, asserted rather than
+// assumed.
+//
+// PostgreSQL 18 began cataloguing NOT NULL as a constraint of its own, one row
+// per column, where every earlier version records it only as attnotnull.
+// Reading those rows would give the same schema two extra constraints per
+// column on 18 and none on 17 — a diff between two servers reporting changes
+// nobody made. This checks the model has none of them anywhere, on every
+// version, so the filter that excludes them cannot be removed quietly.
+func TestNotNullIsNeverReadAsAConstraint(t *testing.T) {
+	t.Parallel()
+
+	for _, version := range testsupport.SupportedVersions {
+		t.Run(version, func(t *testing.T) {
+			schema := readCorpus(t, version)
+
+			for _, table := range schema.Tables {
+				for _, constraint := range table.Constraints {
+					if constraint.Kind == "n" || strings.HasPrefix(constraint.Definition, "NOT NULL") {
+						t.Errorf("PostgreSQL %s: %s.%s reads NOT NULL as a constraint (%q)",
+							version, table.Name, constraint.Name, constraint.Definition)
+					}
+				}
+			}
+
+			// And the column still says so, which is where every version agrees
+			// it lives.
+			if !columnIn(t, tableIn(t, schema, "constrained"), "first").NotNull {
+				t.Errorf("PostgreSQL %s: the column lost its NOT NULL", version)
+			}
+		})
 	}
 }

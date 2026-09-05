@@ -75,8 +75,19 @@ func (r *Reader) Read(ctx context.Context, schema Name) (Schema, error) {
 		return Schema{}, err
 	}
 
-	if err := r.columns(ctx, schema, tables); err != nil {
-		return Schema{}, err
+	// Each of these fills the tables it belongs to, and each is one query for
+	// the whole schema. A failure in any of them fails the read: answering a
+	// partial schema would be worse than answering nothing, because a diff
+	// would compare against it and offer to drop whatever the failed query
+	// would have listed.
+	for _, read := range []func(context.Context, Name, map[string]*Table) error{
+		r.columns,
+		r.constraints,
+		r.indexes,
+	} {
+		if err := read(ctx, schema, tables); err != nil {
+			return Schema{}, err
+		}
 	}
 
 	for _, name := range order {

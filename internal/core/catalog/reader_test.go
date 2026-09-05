@@ -41,8 +41,30 @@ func (a *answers) Query(_ context.Context, sql string, _ ...any) driver.Rows {
 	return &fakeRows{}
 }
 
+// reads reports whether a query is the one that reads this catalog table.
+//
+// It compares the first FROM, not any mention. Every one of these joins
+// pg_class, and the index query mentions pg_constraint in the subquery that
+// excludes constraint-backed indexes — so anything looser answers one query
+// with the rows meant for another, which arrives as a scan of the wrong width
+// rather than as anything that reads like the mistake it is.
 func reads(sql, table string) bool {
-	return strings.Contains(sql, "FROM pg_catalog."+table)
+	const marker = "FROM pg_catalog."
+
+	start := strings.Index(sql, marker)
+	if start < 0 {
+		return false
+	}
+
+	rest := sql[start+len(marker):]
+
+	return strings.HasPrefix(rest, table) && ends(rest[len(table):])
+}
+
+// ends reports whether the identifier stopped here rather than continuing —
+// pg_class must not match the query that reads pg_classifier.
+func ends(rest string) bool {
+	return rest == "" || strings.ContainsRune(" \n\t\r", rune(rest[0]))
 }
 
 type fakeRows struct {
@@ -102,6 +124,20 @@ func assign(into, value any) error {
 			return fmt.Errorf("%v is not a boolean", value)
 		}
 		*target = flag
+	case *[]string:
+		// The shape a column list arrives in — the key of a constraint, the
+		// columns of an index.
+		if value == nil {
+			*target = nil
+
+			return nil
+		}
+
+		list, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("%v is not a list of names", value)
+		}
+		*target = list
 	case **string:
 		// The shape a column the catalog can answer NULL for arrives in. The
 		// fixture writes plain text for a value and nil for NULL.
@@ -463,5 +499,177 @@ func TestAQuotedSchemaIsStrippedFromATypeToo(t *testing.T) {
 
 	if got := schema.Tables[0].Columns[0].Type.String(); got != "mood" {
 		t.Errorf("the type reads as %q, want mood", got)
+	}
+}
+
+// The five kinds of constraint the model compares, each landing on the table it
+// belongs to and keeping the order of its key.
+func TestConstraintsAreReadWithTheirKindAndTheirKeyOrder(t *testing.T) {
+	t.Parallel()
+
+	server := &answers{rows: map[string][][]any{
+		"pg_namespace": existing(),
+		"pg_class":     {{"orders"}},
+		"pg_attribute": {},
+		"pg_constraint": {
+			{"orders", "orders_pk", "p", "PRIMARY KEY (a, b)", []string{"a", "b"}},
+			{"orders", "orders_fk", "f", "FOREIGN KEY (c) REFERENCES other(id)", []string{"c"}},
+			{"orders", "orders_uq", "u", "UNIQUE (b, a)", []string{"b", "a"}},
+			{"orders", "orders_ck", "c", "CHECK ((amount > 0))", []string{"amount"}},
+			{"orders", "orders_ex", "x", "EXCLUDE USING gist (room WITH =)", []string{"room"}},
+		},
+	}}
+
+	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+	if err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+
+	kinds := map[string]catalog.ConstraintKind{}
+	keys := map[string][]string{}
+	for _, constraint := range schema.Tables[0].Constraints {
+		kinds[constraint.Name.String()] = constraint.Kind
+		for _, column := range constraint.Columns {
+			keys[constraint.Name.String()] = append(keys[constraint.Name.String()], column.String())
+		}
+	}
+
+	want := map[string]catalog.ConstraintKind{
+		"orders_pk": catalog.ConstraintPrimaryKey,
+		"orders_fk": catalog.ConstraintForeignKey,
+		"orders_uq": catalog.ConstraintUnique,
+		"orders_ck": catalog.ConstraintCheck,
+		"orders_ex": catalog.ConstraintExclusion,
+	}
+	for name, kind := range want {
+		if kinds[name] != kind {
+			t.Errorf("%s reads as %q, want %q", name, kinds[name], kind)
+		}
+	}
+
+	// The order of a key is part of it: (a, b) and (b, a) are different
+	// constraints, and a reader that loses the order gets it right about half
+	// the time.
+	if got := keys["orders_pk"]; len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Errorf("the primary key reads as %v, want [a b]", got)
+	}
+	if got := keys["orders_uq"]; len(got) != 2 || got[0] != "b" || got[1] != "a" {
+		t.Errorf("the unique key reads as %v, want [b a]", got)
+	}
+}
+
+// A kind from a version newer than this build is carried through rather than
+// dropped or flattened into "unknown". ADR-0007 requires an object that is not
+// compared to be named as not compared, and this is that case arriving from the
+// future.
+func TestAConstraintKindThisBuildDoesNotKnowIsCarriedThrough(t *testing.T) {
+	t.Parallel()
+
+	server := &answers{rows: map[string][][]any{
+		"pg_namespace":  existing(),
+		"pg_class":      {{"orders"}},
+		"pg_attribute":  {},
+		"pg_constraint": {{"orders", "odd", "z", "SOMETHING NEW", []string(nil)}},
+	}}
+
+	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+	if err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+
+	if got := schema.Tables[0].Constraints[0].Kind; got != catalog.ConstraintKind("z") {
+		t.Errorf("an unknown kind reads as %q, want it carried through", got)
+	}
+}
+
+// Indexes carry what makes them different from one another, and the key stops
+// where the key stops: a column carried by INCLUDE is not one the index is
+// ordered by.
+func TestIndexesAreReadWithWhatDistinguishesThem(t *testing.T) {
+	t.Parallel()
+
+	server := &answers{rows: map[string][][]any{
+		"pg_namespace": existing(),
+		"pg_class":     {{"orders"}},
+		"pg_attribute": {},
+		"pg_index": {
+			{"orders", "by_email", true, false,
+				"CREATE UNIQUE INDEX by_email ON orders USING btree (email)", []string{"email"}},
+			{"orders", "by_expression", false, false,
+				"CREATE INDEX by_expression ON orders USING btree (lower(email))", []string(nil)},
+		},
+	}}
+
+	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+	if err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+	indexes := schema.Tables[0].Indexes
+
+	if !indexes[0].Unique || indexes[0].Primary {
+		t.Errorf("the unique index reads as %+v", indexes[0])
+	}
+	// An index by expression names no column, and the definition is where the
+	// expression survives.
+	if len(indexes[1].Columns) != 0 {
+		t.Errorf("an index by expression names columns: %v", indexes[1].Columns)
+	}
+	if indexes[1].Definition == "" {
+		t.Error("an index by expression came back with no definition")
+	}
+}
+
+// A constraint or an index of a table that was not listed is a fault, for the
+// same reason a column of one is.
+func TestAConstraintOrIndexOfAnUnknownTableIsAFault(t *testing.T) {
+	t.Parallel()
+
+	for name, rows := range map[string]map[string][][]any{
+		"a constraint": {
+			"pg_namespace":  existing(),
+			"pg_class":      {{"orders"}},
+			"pg_attribute":  {},
+			"pg_constraint": {{"elsewhere", "c", "p", "PRIMARY KEY (a)", []string{"a"}}},
+		},
+		"an index": {
+			"pg_namespace": existing(),
+			"pg_class":     {{"orders"}},
+			"pg_attribute": {},
+			"pg_index":     {{"elsewhere", "i", false, false, "CREATE INDEX", []string{"a"}}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			server := &answers{rows: rows}
+			if _, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales")); err == nil {
+				t.Errorf("Read() = nil for %s of a table that was not listed", name)
+			}
+		})
+	}
+}
+
+// A failure reading constraints or indexes fails the whole read, like every
+// other query.
+func TestAFailureReadingConstraintsOrIndexesFailsTheRead(t *testing.T) {
+	t.Parallel()
+
+	for _, table := range []string{"pg_constraint", "pg_index"} {
+		t.Run(table, func(t *testing.T) {
+			t.Parallel()
+
+			server := &answers{
+				rows: map[string][][]any{
+					"pg_namespace": existing(),
+					"pg_class":     {{"orders"}},
+					"pg_attribute": {},
+				},
+				err: map[string]error{table: errors.New("the server went away")},
+			}
+
+			if _, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales")); err == nil {
+				t.Errorf("Read() = nil when %s could not be read", table)
+			}
+		})
 	}
 }
