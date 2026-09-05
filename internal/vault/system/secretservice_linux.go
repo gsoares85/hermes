@@ -334,10 +334,28 @@ func (s *secretService) answer(ctx context.Context, prompt dbus.ObjectPath) erro
 		return fmt.Errorf("asking %s for authorisation: %w", prompt, err)
 	}
 
+	return awaitCompletion(ctx, prompt, completed, func() { s.dismiss(prompt) })
+}
+
+// awaitCompletion waits for the dialog to answer, for the person to be given up
+// on, or for the bus to go away.
+//
+// It is separate from the call that opens the dialog because it is the part
+// worth driving in a test: both defects this loop has had — a spin when the
+// connection closed, and a tidy-up that inherited a dead deadline — are
+// reachable with nothing but a channel and a context, and neither was reachable
+// through a bus at all. The keychain job unlocks the keyring with an empty
+// password, so it never raises a dialog and never comes anywhere near here.
+func awaitCompletion(
+	ctx context.Context,
+	prompt dbus.ObjectPath,
+	completed <-chan *dbus.Signal,
+	dismiss func(),
+) error {
 	for {
 		select {
 		case <-ctx.Done():
-			s.dismiss(prompt)
+			dismiss()
 
 			return fmt.Errorf("giving up on the authorisation dialog: %w", ctx.Err())
 		case signal, listening := <-completed:
@@ -347,6 +365,9 @@ func (s *secretService) answer(ctx context.Context, prompt dbus.ObjectPath) erro
 			// with a dialog still open turned this loop into a spin consuming
 			// a core until the context — which has no deadline of its own —
 			// happened to be cancelled.
+			//
+			// The dialog is not dismissed here on purpose: there is no bus
+			// left to say so on.
 			if !listening {
 				return fmt.Errorf("%w: the session bus closed while %s was on screen",
 					secret.ErrUnavailable, prompt)
@@ -372,10 +393,17 @@ func (s *secretService) answer(ctx context.Context, prompt dbus.ObjectPath) erro
 // wedged inside the code that exists to guarantee cancellation is the bug this
 // whole path was written to prevent.
 func (s *secretService) dismiss(prompt dbus.ObjectPath) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), dismissTimeout)
+	ctx, cancel := dismissing()
 	defer cancel()
 
 	_ = s.object(prompt).CallWithContext(ctx, promptInterface+".Dismiss", 0).Err
+}
+
+// dismissing is the context the tidy-up gets: a deadline of its own, and no tie
+// to the one that has just expired. Named so that the two properties can be
+// asserted rather than read.
+func dismissing() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), dismissTimeout)
 }
 
 func completion(signal *dbus.Signal) error {
