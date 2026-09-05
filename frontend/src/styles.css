@@ -161,6 +161,14 @@ body {
   opacity: 0.55;
 }
 
+/* The only control that is live while the window is waiting, so it says so:
+   everything around it is dimmed by the rule above and this is not. */
+.connection__stop {
+  margin-left: auto;
+  border-color: var(--text-muted);
+  font-weight: 600;
+}
+
 .connection__notice,
 .connection__cause,
 .connection__next {

@@ -1,3 +1,5 @@
+import { CancelError, type CancellablePromise } from "@wailsio/runtime";
+
 import { ConnectionService } from "../../bindings/github.com/gsoares85/hermes/internal/ui";
 import type {
   ConnectionForm,
@@ -9,6 +11,18 @@ import type {
 } from "../../bindings/github.com/gsoares85/hermes/internal/ui/models";
 
 export type { ConnectionForm, ConnectionView, DiagnosisView, SavedView, StatusView, VaultView };
+export type { CancellablePromise };
+
+/**
+ * Whether a failure is the person having pressed Cancel.
+ *
+ * It is a normal outcome and not an error to report: the window says the
+ * operation was stopped and goes back to how it was, rather than showing the
+ * message a broken connection would produce.
+ */
+export function wasCancelled(err: unknown): boolean {
+  return err instanceof CancelError;
+}
 
 /**
  * An empty form.
@@ -52,14 +66,21 @@ export async function parseURI(uri: string): Promise<ConnectionView> {
   return await ConnectionService.Parse(uri);
 }
 
-/** Tries the connection and explains the result, success or failure. */
-export async function testConnection(form: ConnectionForm): Promise<DiagnosisView> {
-  return await ConnectionService.Test(form);
+/**
+ * Tries the connection and explains the result, success or failure.
+ *
+ * The promise is handed back as the binding made it, cancellable, rather than
+ * awaited here. A test can wait on a keychain dialog or on a server that never
+ * answers, and the Go side is cancellable the whole way down: swallowing the
+ * handle is what would leave the window with a button and no way out.
+ */
+export function testConnection(form: ConnectionForm): CancellablePromise<DiagnosisView> {
+  return ConnectionService.Test(form);
 }
 
-/** Connects and keeps the connection, returning its state. */
-export async function openConnection(form: ConnectionForm): Promise<StatusView> {
-  return await ConnectionService.Open(form);
+/** Connects and keeps the connection, returning its state. Cancellable. */
+export function openConnection(form: ConnectionForm): CancellablePromise<StatusView> {
+  return ConnectionService.Open(form);
 }
 
 /** Reads the last known state without contacting the server. */
@@ -100,9 +121,12 @@ export async function sslModes(): Promise<string[]> {
  * The two go to different places — the connection to a file, the password to
  * the keychain of the system — and the Go side is what knows that. Nothing
  * comes back carrying the password: the returned view has no field for one.
+ *
+ * Cancellable, because writing the password is a call to the keychain and a
+ * keychain can put a dialog in front of a person and wait.
  */
-export async function saveConnection(form: ConnectionForm): Promise<SavedView> {
-  return await ConnectionService.Save(form);
+export function saveConnection(form: ConnectionForm): CancellablePromise<SavedView> {
+  return ConnectionService.Save(form);
 }
 
 /**
@@ -117,9 +141,9 @@ export async function savedConnections(): Promise<SavedView[]> {
   return (await ConnectionService.List()) ?? [];
 }
 
-/** Removes a connection and the password that belonged to it. */
-export async function deleteConnection(id: string): Promise<void> {
-  await ConnectionService.Delete(id);
+/** Removes a connection and the password that belonged to it. Cancellable. */
+export function deleteConnection(id: string): CancellablePromise<void> {
+  return ConnectionService.Delete(id);
 }
 
 /**

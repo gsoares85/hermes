@@ -14,6 +14,8 @@ import {
   sslModes,
   testConnection,
   vaultStatus,
+  wasCancelled,
+  type CancellablePromise,
   type ConnectionForm as Form,
   type DiagnosisView,
   type SavedView,
@@ -49,6 +51,15 @@ export function ConnectionForm(): React.JSX.Element {
   // cannot use the effect's own flag. Without this it can set state after the
   // component has gone, which React 19 tolerates and the next one may not.
   const mounted = useRef(true);
+
+  // The operation the window is waiting for, kept so that the person can stop
+  // it. Every long call on this screen ends in the keychain or in a server, and
+  // both can take as long as they like: on macOS and on Linux reading a
+  // password is a dialog, and a connection to a host that is not answering runs
+  // to the driver's own timeout. The Go side is cancellable the whole way down
+  // and the binding hands back a promise that carries the handle — this is
+  // where it stops being dropped on the floor.
+  const running = useRef<CancellablePromise<unknown> | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -108,6 +119,40 @@ export function ConnectionForm(): React.JSX.Element {
     }
   }
 
+  /**
+   * Waits for a long operation, keeping the handle that stops it.
+   *
+   * Every caller goes through this rather than awaiting the binding directly,
+   * so that "the window is busy" and "this is what it is busy with" cannot
+   * drift apart: the button is disabled and the Stop button works, or neither
+   * does.
+   */
+  async function run<T>(pending: CancellablePromise<T>): Promise<T> {
+    running.current = pending;
+    setBusy(true);
+    try {
+      return await pending;
+    } finally {
+      running.current = null;
+      setBusy(false);
+    }
+  }
+
+  function onCancel(): void {
+    void running.current?.cancel();
+  }
+
+  /**
+   * Reports a failure, unless the failure is the person having stopped it.
+   *
+   * A cancelled operation is a normal outcome. Showing the message it rejects
+   * with would tell someone their connection is broken because they pressed
+   * Stop.
+   */
+  function report(err: unknown, stopped: string): void {
+    setNotice(wasCancelled(err) ? stopped : String(err));
+  }
+
   function update<K extends keyof Form>(field: K, value: Form[K]): void {
     setForm((current): Form => ({ ...current, [field]: value }));
   }
@@ -128,21 +173,17 @@ export function ConnectionForm(): React.JSX.Element {
   }
 
   async function onTest(): Promise<void> {
-    setBusy(true);
     setDiagnosis(null);
     try {
-      setDiagnosis(await testConnection(form));
+      setDiagnosis(await run(testConnection(form)));
     } catch (err) {
-      setNotice(String(err));
-    } finally {
-      setBusy(false);
+      report(err, "The test was stopped.");
     }
   }
 
   async function onOpen(): Promise<void> {
-    setBusy(true);
     try {
-      const opened = await openConnection(form);
+      const opened = await run(openConnection(form));
       setStatus(opened);
       setDiagnosis(null);
       // The connection is open and the password has been used. Keeping it in
@@ -154,16 +195,13 @@ export function ConnectionForm(): React.JSX.Element {
       // database did it precisely to find out what is there.
       setAvailable(await listDatabases(opened.id));
     } catch (err) {
-      setNotice(String(err));
-    } finally {
-      setBusy(false);
+      report(err, "Connecting was stopped.");
     }
   }
 
   async function onSave(): Promise<void> {
-    setBusy(true);
     try {
-      const stored = await saveConnection(form);
+      const stored = await run(saveConnection(form));
       // The identifier comes back on a connection that had none, and keeping it
       // is what makes the next save an edit instead of a second copy.
       update("id", stored.id);
@@ -172,10 +210,9 @@ export function ConnectionForm(): React.JSX.Element {
       update("password", "");
       setNotice(`Saved “${stored.name === "" ? stored.host : stored.name}”.`);
     } catch (err) {
-      setNotice(String(err));
+      report(err, "Saving was stopped. The connection may not have been written.");
     } finally {
       await refreshSaved();
-      setBusy(false);
     }
   }
 
@@ -195,18 +232,16 @@ export function ConnectionForm(): React.JSX.Element {
 
   async function onForget(id: string): Promise<void> {
     setForgetting(null);
-    setBusy(true);
     try {
-      await deleteConnection(id);
+      await run(deleteConnection(id));
       if (form.id === id) {
         setForm(emptyForm);
       }
       setNotice("The connection and its password were removed.");
     } catch (err) {
-      setNotice(String(err));
+      report(err, "Forgetting was stopped. The connection may not have been removed.");
     } finally {
       await refreshSaved();
-      setBusy(false);
     }
   }
 
@@ -361,6 +396,19 @@ export function ConnectionForm(): React.JSX.Element {
         <button type="button" onClick={(): void => void onSave()} disabled={busy}>
           {form.id === "" ? "Save connection" : "Save changes"}
         </button>
+        {/*
+          Shown only while something is running, and the only control on this
+          screen that is not disabled then. Every long call here ends in a
+          keychain or in a server, and both can take as long as they like: a
+          password read on macOS or Linux can be a dialog waiting for a person,
+          and a host that is not answering runs to the driver's own timeout.
+          Without this the window has a spinner and no way out.
+        */}
+        {busy && (
+          <button type="button" className="connection__stop" onClick={onCancel}>
+            Stop
+          </button>
+        )}
       </div>
 
       {status !== null && <StateIndicator status={status} />}
