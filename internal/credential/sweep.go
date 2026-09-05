@@ -105,6 +105,13 @@ func (s *Store) Sweep() (int, error) {
 // what it can answer: which files are ours. The whole directory rather than a
 // remembered list, because the point of this is the paths nobody remembered —
 // a handoff whose Release never ran is exactly the file that is still there.
+//
+// It removes files and does not give up claims, and the two callers it has are
+// both the process ending — Guard's release and the interrupt handler — where
+// the operating system gives up every claim a moment later whatever this does.
+// A caller that is not ending the process must still Release each handoff it
+// holds: this leaves the file gone and the claim open, which is a descriptor
+// per file for as long as that process lives.
 func (s *Store) ReleaseAll() (int, error) {
 	ours := strconv.Itoa(os.Getpid())
 
