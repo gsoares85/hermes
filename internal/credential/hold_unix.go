@@ -34,7 +34,7 @@ func hold(file *os.File) (io.Closer, error) {
 		return nil, fmt.Errorf("claiming %s: %w", file.Name(), err)
 	}
 
-	return claim, nil
+	return closeOnce(claim), nil
 }
 
 // orphaned reports whether nothing holds the file any more, which is the only

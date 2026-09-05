@@ -40,10 +40,15 @@ func hold(file *os.File) (io.Closer, error) {
 		return nil, fmt.Errorf("claiming %s: %w", file.Name(), err)
 	}
 
-	return held(handle), nil
+	return closeOnce(held(handle)), nil
 }
 
 // held is the open handle, and closing it is what gives the claim up.
+//
+// It is a number, and CloseHandle on a number closed already is not a no-op:
+// Windows recycles handle values, so the second close lands on whatever object
+// was opened next. Nothing outside hold constructs one of these — closeOnce is
+// what stands between it and a second call.
 type held syscall.Handle
 
 func (h held) Close() error {
