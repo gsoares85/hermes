@@ -281,16 +281,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gnome-keyring dbus-x11 libglib2.0-bin
 
-      # The empty password creates and unlocks the login keyring: a keyring that
-      # is locked answers every read with a dialog nobody is there to accept.
+      # The password on stdin is what creates the login keyring, and it has to
+      # be a password: an empty one starts a daemon that answers on the bus and
+      # has no collection behind it, so the default alias resolves to a
+      # /org/freedesktop/secrets/collection/login that does not exist and every
+      # write fails. It is a throwaway secret for a throwaway runner, and the
+      # keyring it opens is unlocked for the life of the session — a locked one
+      # answers every read with a dialog nobody is there to accept.
+      #
       # gdbus waits for the daemon to claim the name, so the test does not race
-      # the daemon it just started.
+      # the daemon it just started, and the collection is asked for by name
+      # afterwards: a keyring that is not there has to fail here, where the
+      # message says so, rather than inside a test that would blame the code.
       - name: Run the contract against the keyring of the session
         if: runner.os == 'Linux'
+        env:
+          DEFAULT_COLLECTION: /org/freedesktop/secrets/aliases/default
         run: |
           dbus-run-session -- bash -c '
-            echo -n "" | gnome-keyring-daemon --unlock --components=secrets
+            echo -n "hermes-ci" | gnome-keyring-daemon --unlock --components=secrets
             gdbus wait --session --timeout 10 org.freedesktop.secrets
+            gdbus introspect --session --dest org.freedesktop.secrets --object-path "$DEFAULT_COLLECTION" --only-properties
             go test -tags=keychain -count=1 -timeout=5m ./internal/vault/...
           '
 
