@@ -1,4 +1,4 @@
-package vault
+package system
 
 import "github.com/gsoares85/hermes/internal/core/secret"
 

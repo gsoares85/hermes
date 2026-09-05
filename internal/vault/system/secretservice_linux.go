@@ -1,6 +1,6 @@
 //go:build linux
 
-package vault
+package system
 
 import (
 	"context"
@@ -20,9 +20,12 @@ import (
 // being stuck. See dismiss.
 const dismissTimeout = 2 * time.Second
 
+// Backend names the store to a person, and Advice says what to do when it does
+// not answer. Both are prose: they end up in the warning the window shows, and
+// somebody has to be able to act on them.
 const (
-	systemBackend = "the Secret Service of this desktop session"
-	systemAdvice  = "Install and start a keyring — gnome-keyring or kwalletmanager — and start Hermes again."
+	Backend = "the Secret Service of this desktop session"
+	Advice  = "Install and start a keyring — gnome-keyring or kwalletmanager — and start Hermes again."
 )
 
 // Names from the Secret Service specification, which is the interface every
@@ -76,7 +79,9 @@ type payload struct {
 	ContentType string
 }
 
-func openSystem(ctx context.Context) (Vault, error) {
+// Open answers the keyring of this desktop session, and refuses when there is
+// none to reach.
+func Open(ctx context.Context) (Vault, error) {
 	if err := localBus(os.Getenv(busAddressVariable)); err != nil {
 		return nil, err
 	}
@@ -185,7 +190,7 @@ func (s *secretService) Get(ctx context.Context, ref secret.Ref) (string, error)
 	var value payload
 	call := s.object(item).CallWithContext(ctx, itemInterface+".GetSecret", 0, s.session)
 	if err := call.Store(&value); err != nil {
-		return "", fmt.Errorf("reading %v from %s: %w", ref, systemBackend, err)
+		return "", fmt.Errorf("reading %v from %s: %w", ref, Backend, err)
 	}
 
 	return string(value.Value), nil
@@ -221,7 +226,7 @@ func (s *secretService) Set(ctx context.Context, ref secret.Ref, value string) e
 	call := s.object(collectionPath).
 		CallWithContext(ctx, collectionInterface+".CreateItem", 0, properties, stored, true)
 	if err := call.Store(&item, &prompt); err != nil {
-		return fmt.Errorf("storing %v in %s: %w", ref, systemBackend, err)
+		return fmt.Errorf("storing %v in %s: %w", ref, Backend, err)
 	}
 	if item != noPrompt {
 		return nil
@@ -242,7 +247,7 @@ func (s *secretService) Delete(ctx context.Context, ref secret.Ref) error {
 
 	var prompt dbus.ObjectPath
 	if err := s.object(item).CallWithContext(ctx, itemInterface+".Delete", 0).Store(&prompt); err != nil {
-		return fmt.Errorf("deleting %v from %s: %w", ref, systemBackend, err)
+		return fmt.Errorf("deleting %v from %s: %w", ref, Backend, err)
 	}
 
 	return s.answer(ctx, prompt)
@@ -263,7 +268,7 @@ func (s *secretService) find(ctx context.Context, ref secret.Ref) (dbus.ObjectPa
 	var unlocked, locked []dbus.ObjectPath
 	call := s.service().CallWithContext(ctx, serviceInterface+".SearchItems", 0, attributes(ref))
 	if err := call.Store(&unlocked, &locked); err != nil {
-		return "", fmt.Errorf("searching %s for %v: %w", systemBackend, ref, err)
+		return "", fmt.Errorf("searching %s for %v: %w", Backend, ref, err)
 	}
 
 	if len(unlocked) > 0 {

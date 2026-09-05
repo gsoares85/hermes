@@ -9,6 +9,7 @@ import (
 
 	"github.com/gsoares85/hermes/internal/core/secret"
 	"github.com/gsoares85/hermes/internal/core/secret/secrettest"
+	"github.com/gsoares85/hermes/internal/vault/system"
 )
 
 // The tests live inside the package because what they exercise is the choice
@@ -20,13 +21,13 @@ import (
 func TestOpenUsesTheStoreOfTheSystemWhenItAnswers(t *testing.T) {
 	t.Parallel()
 
-	system := newStub(0)
+	store := newStub(0)
 
-	vault, status := open(t.Context(), system.open, time.Second)
+	vault, status := open(t.Context(), store.open, time.Second)
 	t.Cleanup(func() { _ = vault.Close() })
 
-	if status.Backend != systemBackend {
-		t.Errorf("backend is %q, want %q", status.Backend, systemBackend)
+	if status.Backend != system.Backend {
+		t.Errorf("backend is %q, want %q", status.Backend, system.Backend)
 	}
 	if status.Warning != "" {
 		t.Errorf("an available vault carries the warning %q, want none", status.Warning)
@@ -58,7 +59,7 @@ func TestTheWarningSaysWhatBrokeAndWhatToDoAboutIt(t *testing.T) {
 	vault, status := open(t.Context(), failing(errors.New("no keyring is running")), time.Second)
 	t.Cleanup(func() { _ = vault.Close() })
 
-	for _, want := range []string{"no keyring is running", systemBackend, systemAdvice, "this session"} {
+	for _, want := range []string{"no keyring is running", system.Backend, system.Advice, "this session"} {
 		if !strings.Contains(status.Warning, want) {
 			t.Errorf("the warning does not mention %q:\n%s", want, status.Warning)
 		}

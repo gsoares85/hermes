@@ -1,6 +1,6 @@
 //go:build windows
 
-package vault
+package system
 
 import (
 	"context"
@@ -12,9 +12,12 @@ import (
 	"github.com/gsoares85/hermes/internal/core/secret"
 )
 
+// Backend names the store to a person, and Advice says what to do when it does
+// not answer. Both are prose: they end up in the warning the window shows, and
+// somebody has to be able to act on them.
 const (
-	systemBackend = "the Windows Credential Manager"
-	systemAdvice  = "Check that the Credential Manager service is running, then start Hermes again."
+	Backend = "the Windows Credential Manager"
+	Advice  = "Check that the Credential Manager service is running, then start Hermes again."
 )
 
 // credentialManager stores secrets as generic credentials of the current user.
@@ -26,10 +29,15 @@ const (
 // an argument never reaches a command line.
 type credentialManager struct{}
 
-func openSystem(_ context.Context) (Vault, error) {
+// Open answers the Credential Manager of this user, and refuses when it cannot
+// be reached.
+//
+// The read of the probe is the availability check: a store that is there
+// answers "element not found", and one that is not answers something else.
+func Open(_ context.Context) (Vault, error) {
 	if _, err := wincred.GetGenericCredential(target(probe)); err != nil &&
 		!errors.Is(err, wincred.ErrElementNotFound) {
-		return nil, fmt.Errorf("%w: %s did not answer: %w", secret.ErrUnavailable, systemBackend, err)
+		return nil, fmt.Errorf("%w: %s did not answer: %w", secret.ErrUnavailable, Backend, err)
 	}
 
 	return credentialManager{}, nil
@@ -45,7 +53,7 @@ func (credentialManager) Get(ctx context.Context, ref secret.Ref) (string, error
 		return "", fmt.Errorf("%w: %v", secret.ErrNotFound, ref)
 	}
 	if err != nil {
-		return "", fmt.Errorf("reading %v from %s: %w", ref, systemBackend, err)
+		return "", fmt.Errorf("reading %v from %s: %w", ref, Backend, err)
 	}
 
 	return string(credential.CredentialBlob), nil
@@ -68,7 +76,7 @@ func (credentialManager) Set(ctx context.Context, ref secret.Ref, value string) 
 	credential.Persist = wincred.PersistLocalMachine
 
 	if err := credential.Write(); err != nil {
-		return fmt.Errorf("storing %v in %s: %w", ref, systemBackend, err)
+		return fmt.Errorf("storing %v in %s: %w", ref, Backend, err)
 	}
 
 	return nil
@@ -84,7 +92,7 @@ func (credentialManager) Delete(ctx context.Context, ref secret.Ref) error {
 		return fmt.Errorf("%w: %v", secret.ErrNotFound, ref)
 	}
 	if err != nil {
-		return fmt.Errorf("deleting %v from %s: %w", ref, systemBackend, err)
+		return fmt.Errorf("deleting %v from %s: %w", ref, Backend, err)
 	}
 
 	return nil

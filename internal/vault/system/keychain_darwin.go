@@ -1,6 +1,6 @@
 //go:build darwin
 
-package vault
+package system
 
 import (
 	"context"
@@ -12,9 +12,12 @@ import (
 	"github.com/gsoares85/hermes/internal/core/secret"
 )
 
+// Backend names the store to a person, and Advice says what to do when it does
+// not answer. Both are prose: they end up in the warning the window shows, and
+// somebody has to be able to act on them.
 const (
-	systemBackend = "the macOS keychain"
-	systemAdvice  = "Unlock your login keychain in Keychain Access and start Hermes again."
+	Backend = "the macOS keychain"
+	Advice  = "Unlock your login keychain in Keychain Access and start Hermes again."
 )
 
 // appleKeychain stores secrets as generic passwords in the default keychain.
@@ -27,11 +30,15 @@ const (
 // exists to enforce. See ADR-0010.
 type appleKeychain struct{}
 
-func openSystem(_ context.Context) (Vault, error) {
+// Open answers the keychain of this Mac, and refuses when it cannot be reached.
+//
+// The read of the probe is the availability check: a store that is there
+// answers "not found", and one that is locked or absent answers something else.
+func Open(_ context.Context) (Vault, error) {
 	// A missing item answers nil, nil here, so any error at all is the keychain
 	// itself refusing: locked, absent, or unreachable from this process.
 	if _, err := keychain.GetGenericPassword(probe.Service, probe.Account, "", ""); err != nil {
-		return nil, fmt.Errorf("%w: %s did not answer: %w", secret.ErrUnavailable, systemBackend, err)
+		return nil, fmt.Errorf("%w: %s did not answer: %w", secret.ErrUnavailable, Backend, err)
 	}
 
 	return appleKeychain{}, nil
@@ -44,7 +51,7 @@ func (appleKeychain) Get(ctx context.Context, ref secret.Ref) (string, error) {
 
 	data, err := keychain.GetGenericPassword(ref.Service, ref.Account, "", "")
 	if err != nil {
-		return "", fmt.Errorf("reading %v from %s: %w", ref, systemBackend, err)
+		return "", fmt.Errorf("reading %v from %s: %w", ref, Backend, err)
 	}
 	if data == nil {
 		return "", fmt.Errorf("%w: %v", secret.ErrNotFound, ref)
@@ -73,7 +80,7 @@ func (k appleKeychain) Set(ctx context.Context, ref secret.Ref, value string) er
 		return k.replace(ref, value)
 	}
 	if err != nil {
-		return fmt.Errorf("storing %v in %s: %w", ref, systemBackend, err)
+		return fmt.Errorf("storing %v in %s: %w", ref, Backend, err)
 	}
 
 	return nil
@@ -93,7 +100,7 @@ func (appleKeychain) replace(ref secret.Ref, value string) error {
 	update.SetData([]byte(value))
 
 	if err := keychain.UpdateItem(query, update); err != nil {
-		return fmt.Errorf("replacing %v in %s: %w", ref, systemBackend, err)
+		return fmt.Errorf("replacing %v in %s: %w", ref, Backend, err)
 	}
 
 	return nil
@@ -109,7 +116,7 @@ func (appleKeychain) Delete(ctx context.Context, ref secret.Ref) error {
 		return fmt.Errorf("%w: %v", secret.ErrNotFound, ref)
 	}
 	if err != nil {
-		return fmt.Errorf("deleting %v from %s: %w", ref, systemBackend, err)
+		return fmt.Errorf("deleting %v from %s: %w", ref, Backend, err)
 	}
 
 	return nil
