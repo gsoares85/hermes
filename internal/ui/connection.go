@@ -261,7 +261,7 @@ func (s *ConnectionService) VaultStatus(ctx context.Context) (VaultView, error) 
 // carries one replaces the connection it names, which is what editing is.
 func (s *ConnectionService) Save(ctx context.Context, form ConnectionForm) (SavedView, error) {
 	config := configOf(form)
-	if strings.TrimSpace(config.ID) == "" {
+	if config.ID == "" {
 		config.ID = conn.NewID()
 	}
 	if err := config.Validate(); err != nil {
@@ -672,7 +672,12 @@ func configOf(form ConnectionForm) conn.Config {
 	}
 
 	return conn.Config{
-		ID:       form.ID,
+		// Trimmed here rather than only tested trimmed. The identifier is what
+		// the password is filed under and what the file is deduplicated on, and
+		// profile compares it trimmed — so " a" and "a" are one connection
+		// there and were two on the way in. One normalisation, at the boundary
+		// the value arrives at, instead of a rule each end has to remember.
+		ID:       strings.TrimSpace(form.ID),
 		Name:     form.Name,
 		Host:     form.Host,
 		Port:     port,

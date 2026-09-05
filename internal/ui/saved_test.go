@@ -798,3 +798,49 @@ func TestEveryCallToTheKeychainCarriesADeadline(t *testing.T) {
 		t.Error("VaultStatus() handed the keychain a context with no deadline")
 	}
 }
+
+// The identifier was tested trimmed and written untrimmed, while the file
+// compares it trimmed: " a" and "a" were two connections here and one there.
+// Nothing produced the difference today, because every identifier is generated
+// — but a form is a form, and the two ends assumed a normalisation neither of
+// them did.
+func TestAnIdentifierIsSavedTrimmed(t *testing.T) {
+	t.Parallel()
+
+	service, store, vault := saved(t)
+
+	first, err := service.Save(t.Context(), form())
+	if err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	// The same connection, edited, with the identifier surrounded by the
+	// whitespace a paste brings with it.
+	edited := form()
+	edited.ID, edited.Host = "  "+first.ID+"  ", "moved.example.com"
+
+	view, err := service.Save(t.Context(), edited)
+	if err != nil {
+		t.Fatalf("the second Save() = %v", err)
+	}
+
+	if view.ID != first.ID {
+		t.Errorf("Save() answered id %q, want %q", view.ID, first.ID)
+	}
+	if len(store.saved) != 1 {
+		t.Fatalf("the file holds %d connections, want 1: the padded id made a second one", len(store.saved))
+	}
+	if store.saved[0].ID != first.ID {
+		t.Errorf("the saved id is %q, want %q", store.saved[0].ID, first.ID)
+	}
+
+	// And the password went to the item the first save filed it under, rather
+	// than to one nothing will ever look for again.
+	stored, err := vault.Get(t.Context(), secret.ConnectionRef(first.ID))
+	if err != nil {
+		t.Fatalf("reading the password back: %v", err)
+	}
+	if stored != edited.Password {
+		t.Errorf("the keychain holds a different password than the last save wrote")
+	}
+}
