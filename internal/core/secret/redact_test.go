@@ -335,3 +335,39 @@ func TestRedactLeavesTheWordPasswordInProseAlone(t *testing.T) {
 		}
 	}
 }
+
+// A passphrase with spaces in it is the recommended kind, and the value used to
+// stop at the first one: "correct" went and "horse battery" stayed, printed
+// next to the placeholder. Half a secret removed is a secret leaked.
+func TestRedactHidesAPasswordWithSpacesInIt(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct{ in, want string }{
+		"to the closing brace": {
+			"{Host:h Password:correct horse battery}",
+			"{Host:h Password:xxxxx}",
+		},
+		"to the comma": {
+			"{Password:two words, Port:5432}",
+			"{Password:xxxxx, Port:5432}",
+		},
+		"in a map": {
+			"map[password:correct horse battery]",
+			"map[password:xxxxx]",
+		},
+		"the key passphrase too": {
+			"{SSLPassword:my long passphrase}",
+			"{SSLPassword:xxxxx}",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := secret.Redact(tc.in); got != tc.want {
+				t.Errorf("Redact(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

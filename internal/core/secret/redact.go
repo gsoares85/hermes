@@ -51,12 +51,26 @@ var (
 	passwordQuotedField = regexp.MustCompile(
 		`(?i)((?:ssl)?password\s*:\s*)('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")`)
 
-	// The value stops at the delimiters that end a rendered field rather than
-	// at a space alone: a password is the last thing before the closing brace
-	// as often as not, and swallowing the brace would corrupt the message
-	// around the secret rather than only removing the secret.
+	// The value runs to the next structural delimiter, and a space is not one
+	// of them. Passphrases with spaces are common and recommended, and a value
+	// that stopped at the first space redacted "correct" and left
+	// "horse battery" printed beside the placeholder — the shape this handler
+	// exists to catch, caught half way.
+	//
+	// The first character still may not be a space, and that is what keeps
+	// prose out: a colon followed by a space is how English writes, a colon
+	// followed immediately by a value is how Go prints, so
+	// "Wrong password: check the spelling" survives intact.
+	//
+	// What it costs is the rest of the render: a struct printed as
+	// {Password:s3cr3t Port:5432} comes back as {Password:xxxxx}, because
+	// nothing in what fmt writes tells a space inside a value from a space
+	// between two fields. That trade is deliberate and only goes one way. The
+	// delimiters are kept out of the match so that the brace, the bracket and
+	// the comma around the secret survive: corrupting the message is a cost,
+	// leaking the secret is a failure.
 	passwordRenderedField = regexp.MustCompile(
-		`(?i)((?:ssl)?password:)([^\s,}\])"';]+)`)
+		`(?i)((?:ssl)?password:)([^\s,}\])"';\n\r][^,}\])"';\n\r]*)`)
 )
 
 // Passwords in a JSON object, which is the shape the frontend boundary uses:

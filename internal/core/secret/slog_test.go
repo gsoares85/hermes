@@ -246,3 +246,28 @@ func TestHandlerReportsAFailureToWrite(t *testing.T) {
 		t.Errorf("Handle(...) = %v, want it to report %v", err, full)
 	}
 }
+
+// The handler renders an attribute it does not recognise with %+v, which is
+// where a struct holding a passphrase with spaces in it used to come out with
+// most of the passphrase still in it.
+func TestHandlerRedactsAPasswordWithSpacesInIt(t *testing.T) {
+	t.Parallel()
+
+	type form struct {
+		Host     string
+		Password string
+	}
+
+	line := logged(t, func(logger *slog.Logger) {
+		logger.Info("saving", "form", form{Host: "db.example.com", Password: "correct horse battery"})
+	})
+
+	for _, word := range []string{"correct", "horse", "battery"} {
+		if strings.Contains(line, word) {
+			t.Errorf("the log carries %q of the passphrase: %s", word, line)
+		}
+	}
+	if !strings.Contains(line, "db.example.com") {
+		t.Errorf("the log lost the host it was about: %s", line)
+	}
+}
