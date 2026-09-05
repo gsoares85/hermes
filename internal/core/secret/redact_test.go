@@ -371,3 +371,68 @@ func TestRedactHidesAPasswordWithSpacesInIt(t *testing.T) {
 		})
 	}
 }
+
+// The password file record: host:port:database:user:password.
+//
+// It is the only serialised form of a password Hermes writes itself, and it was
+// the one shape the redaction did not know — Redact("h:5432:db:u:s3cr3t") used
+// to answer itself. Nothing logs a record today, which makes this the pattern
+// that closes the next slog.Debug rather than a live leak.
+func TestRedactHidesThePasswordInAPasswordFileRecord(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct{ in, want string }{
+		"a record": {
+			"h:5432:db:u:s3cr3t",
+			"h:5432:db:u:xxxxx",
+		},
+		"the four fields before it survive": {
+			"db.example.com:5432:analytics:reporting:s3cr3t",
+			"db.example.com:5432:analytics:reporting:xxxxx",
+		},
+		"a passphrase with spaces": {
+			"db.example.com:5432:analytics:reporting:correct horse battery",
+			"db.example.com:5432:analytics:reporting:xxxxx",
+		},
+		"the wildcards libpq allows": {
+			"*:*:*:postgres:s3cr3t",
+			"*:*:*:postgres:xxxxx",
+		},
+		"a host with an escaped colon": {
+			`host\:one:5432:db:user:s3cr3t`,
+			`host\:one:5432:db:user:xxxxx`,
+		},
+		"every line of a file": {
+			"a:5432:d:u:first" + "\n" + "b:5433:d:u:second",
+			"a:5432:d:u:xxxxx" + "\n" + "b:5433:d:u:xxxxx",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := secret.Redact(tc.in); got != tc.want {
+				t.Errorf("Redact(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// The pattern decides from the shape of a whole line, so it has to leave alone
+// every line that merely has colons in it. A timestamp, a host and port named
+// in a sentence, and prose are not records.
+func TestRedactLeavesTextThatOnlyLooksLikeARecordAlone(t *testing.T) {
+	t.Parallel()
+
+	for _, text := range []string{
+		"connected to db.example.com:5432 as reporting",
+		"12:34:56 warning: something happened",
+		"a:b:c:d:e",
+		"host:5432:db:user",
+	} {
+		if got := secret.Redact(text); got != text {
+			t.Errorf("Redact(%q) = %q, want it unchanged: it is not a record", text, got)
+		}
+	}
+}

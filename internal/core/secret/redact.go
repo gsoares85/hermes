@@ -73,6 +73,26 @@ var (
 		`(?i)((?:ssl)?password:)([^\s,}\])"';\n\r][^,}\])"';\n\r]*)`)
 )
 
+// A password file record: host:port:database:user:password, one to a line.
+//
+// This is the only serialised form of a password Hermes produces itself —
+// internal/credential writes exactly this shape to hand a credential to
+// pg_dump — and it was the one shape the redaction did not know. Nothing logs a
+// record today, so this closes the next slog.Debug rather than a live leak, and
+// the next one is the one nobody reviews.
+//
+// Anchored to a whole line, because that is what a record is: a line of prose
+// that happens to contain four colons is not one. The port field has to be
+// digits or the wildcard, which is what libpq writes there and what keeps an
+// ordinary sentence from matching. Only the fifth field is replaced, so the
+// server, the database and the user a person is trying to diagnose survive.
+//
+// A field escapes a colon with a backslash, so the pattern consumes an escape
+// together with what follows it: a password beginning after an escaped colon
+// still starts where libpq would say it starts.
+var pgpassRecord = regexp.MustCompile(
+	`(?m)^((?:[^:\\\n\r]|\\.)*:(?:\d+|\*):(?:[^:\\\n\r]|\\.)*:(?:[^:\\\n\r]|\\.)*:).+$`)
+
 // Passwords in a JSON object, which is the shape the frontend boundary uses:
 // the window serialises its form, so a message quoting one carries the secret
 // as "password":"…" rather than as password=….
@@ -122,7 +142,12 @@ func Redact(text string) string {
 	// bare one would otherwise stop at, leaving the secret between them.
 	redactedText = passwordQuotedField.ReplaceAllString(redactedText, "${1}"+redacted)
 
-	return passwordRenderedField.ReplaceAllString(redactedText, "${1}"+redacted)
+	redactedText = passwordRenderedField.ReplaceAllString(redactedText, "${1}"+redacted)
+
+	// Last, and on the text the earlier patterns have already been through: a
+	// record carries no keyword to key on, so this is the one rule that decides
+	// from the shape of a whole line alone.
+	return pgpassRecord.ReplaceAllString(redactedText, "${1}"+redacted)
 }
 
 func redactURL(parsed *url.URL) string {
