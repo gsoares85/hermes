@@ -23,11 +23,28 @@ import (
 //
 // A descriptor of its own, because a flock lives and dies with the open file
 // description it was taken on, and the one the content is written through is
-// closed as soon as the content is written.
+// closed as soon as the content is written. Duplicating the descriptor is not
+// an option for the same reason: a dup shares the description, and would share
+// its end.
+//
+// Reopening by name is therefore unavoidable, and it opens a window: between
+// the file being created and being reopened, the name could be made to point
+// somewhere else. The password does not escape either way — it is written
+// through the original descriptor — but PGPASSFILE would name a file of
+// somebody else's, and a child would authenticate against records nobody here
+// wrote. O_NOFOLLOW refuses to open a symbolic link at all, and the identity
+// check refuses everything else: what came back has to be the very file that
+// was created, not another one that took its name.
 func hold(file *os.File) (io.Closer, error) {
-	claim, err := os.OpenFile(file.Name(), os.O_RDWR, fileMode)
+	claim, err := os.OpenFile(file.Name(), os.O_RDWR|syscall.O_NOFOLLOW, fileMode)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s to claim it: %w", file.Name(), err)
+	}
+
+	if err := sameFile(file, claim); err != nil {
+		_ = claim.Close()
+
+		return nil, err
 	}
 
 	if err := syscall.Flock(int(claim.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
@@ -67,4 +84,29 @@ func orphaned(path string) bool {
 	defer func() { _ = file.Close() }()
 
 	return syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil
+}
+
+// sameFile reports that the reopened name is still the file that was created,
+// by the only identity a filesystem has: the device and the inode.
+//
+// A name is not an identity. Between the file being created and being reopened
+// somebody could have replaced it, and a claim taken on the replacement is a
+// claim on nothing — the sweep would collect the real file, and the child would
+// read whatever the imposter holds.
+func sameFile(created, reopened *os.File) error {
+	original, err := created.Stat()
+	if err != nil {
+		return fmt.Errorf("looking at %s: %w", created.Name(), err)
+	}
+
+	current, err := reopened.Stat()
+	if err != nil {
+		return fmt.Errorf("looking at %s: %w", reopened.Name(), err)
+	}
+
+	if !os.SameFile(original, current) {
+		return fmt.Errorf("claiming %s: it is no longer the file that was created", created.Name())
+	}
+
+	return nil
 }
