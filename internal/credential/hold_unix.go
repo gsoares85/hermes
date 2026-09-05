@@ -3,8 +3,10 @@
 package credential
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"syscall"
 )
@@ -46,7 +48,20 @@ func hold(file *os.File) (io.Closer, error) {
 // second Hermes, and this one, sweeping a file an operation is still using.
 func orphaned(path string) bool {
 	file, err := os.OpenFile(path, os.O_RDWR, fileMode)
+	if errors.Is(err, os.ErrNotExist) {
+		// Already gone: another sweep got there first, which is the outcome
+		// asked for and not worth a word.
+		return false
+	}
 	if err != nil {
+		// This is not "in use", it is "could not ask" — a mode somebody
+		// changed, an access rule, a filesystem that went away. Answered the
+		// conservative way like every other doubt here, and said out loud,
+		// because a file in this state is never swept: the password stays on
+		// the disk for ever and nothing else would ever mention it.
+		slog.Warn("could not ask whether a password file is still in use",
+			"file", path, "error", err)
+
 		return false
 	}
 	defer func() { _ = file.Close() }()

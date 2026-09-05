@@ -3,8 +3,10 @@
 package credential
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"syscall"
 )
@@ -75,9 +77,39 @@ func orphaned(path string) bool {
 	handle, err := syscall.CreateFile(name, syscall.GENERIC_READ, 0, nil,
 		syscall.OPEN_EXISTING, syscall.FILE_ATTRIBUTE_NORMAL, 0)
 	if err != nil {
+		reportIfUnaskable(path, err)
+
 		return false
 	}
 	_ = syscall.CloseHandle(handle)
 
 	return true
+}
+
+// Refusals that answer the question rather than dodge it. A sharing violation
+// is somebody holding the file, which is precisely what this asks; a file that
+// has gone was swept by another process a moment ago. Neither is worth a word.
+const (
+	errorFileNotFound     = syscall.Errno(2)
+	errorPathNotFound     = syscall.Errno(3)
+	errorSharingViolation = syscall.Errno(32)
+	errorLockViolation    = syscall.Errno(33)
+)
+
+// reportIfUnaskable says so when the probe failed for a reason that is not an
+// answer — an access rule, a mode somebody changed, a volume that went away.
+//
+// It matters because the conservative reply to "could not ask" is "in use", and
+// a file answered that way is never swept: the password stays on the disk for
+// ever, which is the outcome the claim was introduced to end, reached by
+// another road. Nothing else would ever mention it.
+func reportIfUnaskable(path string, err error) {
+	switch {
+	case errors.Is(err, errorSharingViolation), errors.Is(err, errorLockViolation),
+		errors.Is(err, errorFileNotFound), errors.Is(err, errorPathNotFound):
+		return
+	}
+
+	slog.Warn("could not ask whether a password file is still in use",
+		"file", path, "error", err)
 }
