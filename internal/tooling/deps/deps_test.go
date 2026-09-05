@@ -246,6 +246,26 @@ func TestTheProjectRulesForbidReachingForAVault(t *testing.T) {
 		"the file store in the UI": {
 			module + "/internal/ui", module + "/internal/filestore",
 		},
+
+		// The catalog is the package that most wants to reach for a driver:
+		// everything it does is read pg_catalog, and the shortest way to write
+		// that is to hold a pgx connection. It must not. The rules that stop it
+		// are the ones already written for internal/core, which match by
+		// prefix and therefore reach every package under it — these cases are
+		// what proves that rather than assuming it, because a rule believed to
+		// cover a package it does not is a gate that passes by not looking.
+		"a driver implementation in the catalog": {
+			module + "/internal/core/catalog", module + "/internal/driver/postgres",
+		},
+		"pgx in the catalog": {
+			module + "/internal/core/catalog", "github.com/jackc/pgx/v5",
+		},
+		"pgx in the DDL writer": {
+			module + "/internal/core/ddl", "github.com/jackc/pgx/v5",
+		},
+		"the test harness in the catalog": {
+			module + "/internal/core/catalog", module + "/internal/testsupport",
+		},
 	}
 
 	for name, forbidden := range cases {
