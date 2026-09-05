@@ -269,7 +269,8 @@ func (s *ConnectionService) Save(ctx context.Context, form ConnectionForm) (Save
 		return SavedView{}, secret.Error(err)
 	}
 
-	if err := s.record(config); err != nil {
+	stored, err := s.record(config)
+	if err != nil {
 		return SavedView{}, err
 	}
 
@@ -281,23 +282,27 @@ func (s *ConnectionService) Save(ctx context.Context, form ConnectionForm) (Save
 		return SavedView{}, err
 	}
 
-	return savedView(config), nil
+	return savedView(stored), nil
 }
 
-// record puts the connection in the file, holding the lock for exactly as long
-// as that takes and no longer.
+// record puts the connection in the file and answers it as the file now holds
+// it, holding the lock for exactly as long as that takes and no longer.
 //
-// The keychain is deliberately outside it. A call to the keychain can open a
-// dialog and wait for a person, and holding this lock across one would put
-// every other call to this service behind that dialog — List above all, which
-// the window makes after every save and again at startup.
-func (s *ConnectionService) record(config conn.Config) error {
+// It answers rather than returning nothing because the file keeps something the
+// form does not carry: see replacing below. A caller that reported the form
+// back would tell the window a connection had been unarchived when it had not.
+//
+// The keychain is deliberately outside the lock. A call to the keychain can
+// open a dialog and wait for a person, and holding this lock across one would
+// put every other call to this service behind that dialog — List above all,
+// which the window makes after every save and again at startup.
+func (s *ConnectionService) record(config conn.Config) (conn.Config, error) {
 	s.saved.Lock()
 	defer s.saved.Unlock()
 
 	saved, err := s.store.Load()
 	if err != nil {
-		return secret.Error(err)
+		return conn.Config{}, secret.Error(err)
 	}
 
 	// The store is handed a connection with the password taken out of it. The
@@ -307,11 +312,24 @@ func (s *ConnectionService) record(config conn.Config) error {
 	stored := config
 	stored.Password = ""
 
-	if err := s.store.Save(replacing(saved, stored)); err != nil {
-		return secret.Error(err)
+	connections := replacing(saved, stored)
+	if err := s.store.Save(connections); err != nil {
+		return conn.Config{}, secret.Error(err)
 	}
 
-	return nil
+	return connections[indexOf(connections, stored.ID)], nil
+}
+
+// indexOf finds the connection replacing just placed. It is always there:
+// replacing either overwrites an entry with this identifier or appends one.
+func indexOf(connections []conn.Config, id string) int {
+	for index, existing := range connections {
+		if existing.ID == id {
+			return index
+		}
+	}
+
+	return len(connections) - 1
 }
 
 // List returns the saved connections, and touches no keychain doing it.
@@ -433,9 +451,22 @@ func (s *ConnectionService) credentials(ctx context.Context, config conn.Config)
 
 // replacing puts the connection in the list, in place of the one it shares an
 // identifier with, or at the end when there is none.
+//
+// The archived flag comes from the entry being replaced rather than from the
+// connection handed in, and that is the whole reason this is not an assignment.
+// ConnectionForm has no field for it: the window never shows it and never sends
+// it, so a form describing an edited host arrives with Archived false whatever
+// the file says. Taking the form's word for it would unarchive a connection
+// every time somebody changed its port — a value lost in a round trip through a
+// screen that never mentioned it.
+//
+// Archiving is therefore something the file records and something a future
+// operation of its own will change. It is not something an edit decides by
+// omission.
 func replacing(saved []conn.Config, config conn.Config) []conn.Config {
 	for index, existing := range saved {
 		if existing.ID == config.ID {
+			config.Archived = existing.Archived
 			saved[index] = config
 
 			return saved

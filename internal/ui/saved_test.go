@@ -718,3 +718,47 @@ func TestSaveRefusesAPasswordSmuggledThroughTheSettings(t *testing.T) {
 		})
 	}
 }
+
+// Archived is a fact the file keeps and the form has no field for. Someone who
+// archives a connection by hand and then edits its host through the window used
+// to lose the flag without being told: the form arrived with it false, because
+// it always does, and the file was written from the form.
+func TestEditingAConnectionKeepsItArchived(t *testing.T) {
+	t.Parallel()
+
+	service, store, _ := saved(t)
+
+	first, err := service.Save(t.Context(), form())
+	if err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	// Archived the way it is archived today: in the file, by hand.
+	store.saved[0].Archived = true
+
+	edited := form()
+	edited.ID, edited.Host = first.ID, "moved.example.com"
+
+	view, err := service.Save(t.Context(), edited)
+	if err != nil {
+		t.Fatalf("the second Save() = %v", err)
+	}
+
+	if !store.saved[0].Archived {
+		t.Error("editing the connection unarchived it in the file")
+	}
+	if !view.Archived {
+		t.Error("Save() answered a view saying the connection is not archived")
+	}
+	if store.saved[0].Host != "moved.example.com" {
+		t.Errorf("the edit did not take: host is %q", store.saved[0].Host)
+	}
+
+	listed, err := service.List()
+	if err != nil {
+		t.Fatalf("List() = %v", err)
+	}
+	if len(listed) != 1 || !listed[0].Archived {
+		t.Errorf("the listed connection is %+v, want it still archived", listed)
+	}
+}
