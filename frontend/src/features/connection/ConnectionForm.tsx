@@ -467,9 +467,19 @@ function SavedConnections(props: {
       <ul>
         {props.connections.map((connection): React.JSX.Element => (
           <li key={connection.id}>
+            {/*
+              Disabled while the window is working, like Forget beside it, and
+              for a sharper reason. Loading replaces the whole form. Do it
+              while a save is in flight and the save answers with the
+              identifier of the connection it wrote, which is then applied to
+              the fields of the one just loaded — so the next save overwrites
+              the first connection with the second one's settings. Stop is the
+              way out of a save that is taking too long.
+            */}
             <button
               type="button"
               className={connection.id === props.current ? "is-selected" : ""}
+              disabled={props.busy}
               onClick={(): void => {
                 props.onLoad(connection);
               }}
