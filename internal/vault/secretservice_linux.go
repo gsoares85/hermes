@@ -5,6 +5,8 @@ package vault
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -59,7 +61,9 @@ type secretService struct {
 	// session is the transport the keyring hands out for carrying values. The
 	// plain algorithm is chosen deliberately: the alternative encrypts the
 	// value over a socket that is already restricted to this user, and buys
-	// nothing the socket permissions do not already give.
+	// nothing the socket permissions do not already give. localBus is what
+	// keeps that argument true — it refuses a bus that is not a socket on this
+	// machine, rather than leaving the reasoning to hold by assumption.
 	session dbus.ObjectPath
 }
 
@@ -73,6 +77,10 @@ type payload struct {
 }
 
 func openSystem(ctx context.Context) (Vault, error) {
+	if err := localBus(os.Getenv(busAddressVariable)); err != nil {
+		return nil, err
+	}
+
 	conn, err := dbus.SessionBusPrivate()
 	if err != nil {
 		return nil, fmt.Errorf("%w: no session bus: %w", secret.ErrUnavailable, err)
@@ -86,6 +94,58 @@ func openSystem(ctx context.Context) (Vault, error) {
 	}
 
 	return vault, nil
+}
+
+// The variable the session bus address is read from, by the library and by the
+// check below. Named once so the two cannot drift.
+const busAddressVariable = "DBUS_SESSION_BUS_ADDRESS"
+
+// Transports of a session bus that stay on this machine.
+//
+// unixexec starts a program and speaks the protocol over its standard input,
+// which never reaches a socket at all.
+var localTransports = map[string]bool{"unix": true, "unixexec": true}
+
+// localBus refuses a session bus this password would leave the machine to
+// reach.
+//
+// The session is opened with the "plain" algorithm, and the reason that is
+// acceptable is written on the field it fills: the value crosses a Unix socket
+// in the runtime directory of this user, which nobody else can open. That
+// argument holds for unix: and for nothing else. A container or a forwarded
+// desktop with DBUS_SESSION_BUS_ADDRESS set to tcp: would send the password
+// across a network in the clear, with the justification quietly gone.
+//
+// An address that is not set is local by construction: the library then looks
+// for the socket of the session, which is a path.
+//
+// Every transport in the list has to be local, not merely the first. The
+// library tries them in order and does not say which one answered, so a list
+// with a remote entry in it is a list that could have used it.
+//
+// Refusing lands in the in-memory fallback, which tells the person in words
+// that their passwords are not being kept. That is the honest outcome: the
+// alternative is a keyring that works and a secret on the wire.
+func localBus(address string) error {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return nil
+	}
+
+	for _, entry := range strings.Split(address, ";") {
+		transport, _, _ := strings.Cut(strings.TrimSpace(entry), ":")
+		if transport == "" {
+			continue
+		}
+
+		if !localTransports[transport] {
+			return fmt.Errorf(
+				"%w: this session bus is reached over %s, and Hermes will not put a password on one in the clear",
+				secret.ErrUnavailable, transport)
+		}
+	}
+
+	return nil
 }
 
 // start finishes the handshake and asks the keyring for a session. It is the
