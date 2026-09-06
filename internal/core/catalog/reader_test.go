@@ -17,39 +17,62 @@ import (
 // Keyed by that rather than by the order the reader asks, so that rearranging
 // the reads is a refactor and not a broken test. What these tests are about is
 // the model that comes out, not the sequence of questions that produced it.
+//
+// A key is the catalog table, and where one table is read by more than one
+// query it carries a fragment of that query as well — "pg_class relkind IN" is
+// the read of the tables and "pg_class relkind =" the read of the views. See
+// reads.
 type answers struct {
 	rows map[string][][]any
 	err  map[string]error
 }
 
 func (a *answers) Query(_ context.Context, sql string, _ ...any) driver.Rows {
-	// Matched on the FROM clause rather than on the query text: every one of
-	// these reads joins pg_class, so a plain substring would answer the column
-	// query with the rows meant for the table one.
-	for table, err := range a.err {
-		if reads(sql, table) {
-			return &fakeRows{err: err}
-		}
+	if key := match(sql, a.err); key != "" {
+		return &fakeRows{err: a.err[key]}
 	}
 
-	for table, rows := range a.rows {
-		if reads(sql, table) {
-			return &fakeRows{rows: rows}
-		}
+	if key := match(sql, a.rows); key != "" {
+		return &fakeRows{rows: a.rows[key]}
 	}
 
 	return &fakeRows{}
 }
 
-// reads reports whether a query is the one that reads this catalog table.
+// match answers the most specific fixture key the query is described by.
 //
-// It compares the first FROM, not any mention. Every one of these joins
-// pg_class, and the index query mentions pg_constraint in the subquery that
-// excludes constraint-backed indexes — so anything looser answers one query
-// with the rows meant for another, which arrives as a scan of the wrong width
-// rather than as anything that reads like the mistake it is.
-func reads(sql, table string) bool {
+// Most specific, because two keys can describe one query: tables and views are
+// both rows of pg_class and only the relkind tells them apart, so "pg_class"
+// alone would answer the view query with the rows meant for the table one. The
+// longest key that matches wins, which leaves the plain name meaning what it
+// always meant.
+func match[T any](sql string, fixtures map[string]T) string {
+	best := ""
+
+	for key := range fixtures {
+		if reads(sql, key) && len(key) > len(best) {
+			best = key
+		}
+	}
+
+	return best
+}
+
+// reads reports whether a query is the one a fixture key describes.
+//
+// The key is the catalog table the query reads from, optionally followed by a
+// fragment of the query that tells it apart from another read of the same
+// table.
+//
+// The table is compared against the first FROM and not against any mention.
+// Every one of these joins pg_class, and the index query mentions pg_constraint
+// in the subquery that excludes constraint-backed indexes — so anything looser
+// answers one query with the rows meant for another, which arrives as a scan of
+// the wrong width rather than as anything that reads like the mistake it is.
+func reads(sql, key string) bool {
 	const marker = "FROM pg_catalog."
+
+	table, fragment, _ := strings.Cut(key, " ")
 
 	start := strings.Index(sql, marker)
 	if start < 0 {
@@ -57,8 +80,11 @@ func reads(sql, table string) bool {
 	}
 
 	rest := sql[start+len(marker):]
+	if !strings.HasPrefix(rest, table) || !ends(rest[len(table):]) {
+		return false
+	}
 
-	return strings.HasPrefix(rest, table) && ends(rest[len(table):])
+	return fragment == "" || strings.Contains(sql, fragment)
 }
 
 // ends reports whether the identifier stopped here rather than continuing —
@@ -116,6 +142,14 @@ func assign(into, value any) error {
 		number, ok := value.(int)
 		if !ok {
 			return fmt.Errorf("%v is not a number", value)
+		}
+		*target = number
+	case *int64:
+		// The shape the parameters of a sequence arrive in: the catalog holds
+		// every one of them as bigint.
+		number, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("%v is not a 64-bit number", value)
 		}
 		*target = number
 	case *bool:
@@ -207,8 +241,8 @@ func TestColumnsLandOnTheirOwnTable(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace": existing(),
-		"pg_class":     {{"orders"}, {"customers"}},
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {{"orders"}, {"customers"}},
 		"pg_attribute": {
 			{"customers", "name", 1, "text", false, nil, "", "", nil},
 			{"orders", "id", 1, "int4", true, nil, "", "", nil},
@@ -243,9 +277,9 @@ func TestAColumnOfAnUnknownTableIsAFault(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace": existing(),
-		"pg_class":     {{"orders"}},
-		"pg_attribute": {{"somewhere_else", "id", 1, "int4", true, nil, "", "", nil}},
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {{"orders"}},
+		"pg_attribute":        {{"somewhere_else", "id", 1, "int4", true, nil, "", "", nil}},
 	}}
 
 	if _, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales")); err == nil {
@@ -259,9 +293,9 @@ func TestAColumnCarriesTheFoldedType(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace": existing(),
-		"pg_class":     {{"orders"}},
-		"pg_attribute": {{"orders", "created", 1, "timestamptz(3)", true, nil, "", "", nil}},
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {{"orders"}},
+		"pg_attribute":        {{"orders", "created", 1, "timestamptz(3)", true, nil, "", "", nil}},
 	}}
 
 	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
@@ -281,8 +315,8 @@ func TestAColumnCarriesWhatTheCatalogSaidAboutIt(t *testing.T) {
 
 	def, collation := "nextval(:seq:)", "en_US.utf8"
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace": existing(),
-		"pg_class":     {{"orders"}},
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {{"orders"}},
 		"pg_attribute": {
 			{"orders", "id", 1, "int4", true, def, "a", "", nil},
 			{"orders", "label", 2, "text", false, nil, "", "", collation},
@@ -319,9 +353,9 @@ func TestAFailedQueryFailsTheRead(t *testing.T) {
 
 			server := &answers{
 				rows: map[string][][]any{
-					"pg_namespace": existing(),
-					"pg_class":     {{"orders"}},
-					"pg_attribute": {},
+					"pg_namespace":        existing(),
+					"pg_class relkind IN": {{"orders"}},
+					"pg_attribute":        {},
 				},
 				err: map[string]error{table: errors.New("the server went away")},
 			}
@@ -418,8 +452,8 @@ func TestAReadSchemaComesOutSorted(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace": existing(),
-		"pg_class":     {{"orders"}, {"customers"}},
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {{"orders"}, {"customers"}},
 		"pg_attribute": {
 			{"orders", "amount", 2, "numeric", false, nil, "", "", nil},
 			{"orders", "id", 1, "int4", true, nil, "", "", nil},
@@ -448,8 +482,8 @@ func TestATypeOfThisSchemaLosesTheSchemaFromItsName(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace": existing(),
-		"pg_class":     {{"orders"}},
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {{"orders"}},
 		"pg_attribute": {
 			{"orders", "own", 1, "sales.mood", false, nil, "", "", nil},
 			{"orders", "own_array", 2, "sales.mood[]", false, nil, "", "", nil},
@@ -487,9 +521,9 @@ func TestAQuotedSchemaIsStrippedFromATypeToo(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace": {{"My Sales"}},
-		"pg_class":     {{"orders"}},
-		"pg_attribute": {{"orders", "own", 1, `"My Sales".mood`, false, nil, "", "", nil}},
+		"pg_namespace":        {{"My Sales"}},
+		"pg_class relkind IN": {{"orders"}},
+		"pg_attribute":        {{"orders", "own", 1, `"My Sales".mood`, false, nil, "", "", nil}},
 	}}
 
 	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("My Sales"))
@@ -508,9 +542,9 @@ func TestConstraintsAreReadWithTheirKindAndTheirKeyOrder(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace": existing(),
-		"pg_class":     {{"orders"}},
-		"pg_attribute": {},
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {{"orders"}},
+		"pg_attribute":        {},
 		"pg_constraint": {
 			{"orders", "orders_pk", "p", "PRIMARY KEY (a, b)", []string{"a", "b"}},
 			{"orders", "orders_fk", "f", "FOREIGN KEY (c) REFERENCES other(id)", []string{"c"}},
@@ -566,10 +600,10 @@ func TestAConstraintKindThisBuildDoesNotKnowIsCarriedThrough(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":  existing(),
-		"pg_class":      {{"orders"}},
-		"pg_attribute":  {},
-		"pg_constraint": {{"orders", "odd", "z", "SOMETHING NEW", []string(nil)}},
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {{"orders"}},
+		"pg_attribute":        {},
+		"pg_constraint":       {{"orders", "odd", "z", "SOMETHING NEW", []string(nil)}},
 	}}
 
 	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
@@ -589,9 +623,9 @@ func TestIndexesAreReadWithWhatDistinguishesThem(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace": existing(),
-		"pg_class":     {{"orders"}},
-		"pg_attribute": {},
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {{"orders"}},
+		"pg_attribute":        {},
 		"pg_index": {
 			{"orders", "by_email", true, false,
 				"CREATE UNIQUE INDEX by_email ON orders USING btree (email)", []string{"email"}},
@@ -626,16 +660,16 @@ func TestAConstraintOrIndexOfAnUnknownTableIsAFault(t *testing.T) {
 
 	for name, rows := range map[string]map[string][][]any{
 		"a constraint": {
-			"pg_namespace":  existing(),
-			"pg_class":      {{"orders"}},
-			"pg_attribute":  {},
-			"pg_constraint": {{"elsewhere", "c", "p", "PRIMARY KEY (a)", []string{"a"}}},
+			"pg_namespace":        existing(),
+			"pg_class relkind IN": {{"orders"}},
+			"pg_attribute":        {},
+			"pg_constraint":       {{"elsewhere", "c", "p", "PRIMARY KEY (a)", []string{"a"}}},
 		},
 		"an index": {
-			"pg_namespace": existing(),
-			"pg_class":     {{"orders"}},
-			"pg_attribute": {},
-			"pg_index":     {{"elsewhere", "i", false, false, "CREATE INDEX", []string{"a"}}},
+			"pg_namespace":        existing(),
+			"pg_class relkind IN": {{"orders"}},
+			"pg_attribute":        {},
+			"pg_index":            {{"elsewhere", "i", false, false, "CREATE INDEX", []string{"a"}}},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -660,15 +694,185 @@ func TestAFailureReadingConstraintsOrIndexesFailsTheRead(t *testing.T) {
 
 			server := &answers{
 				rows: map[string][][]any{
-					"pg_namespace": existing(),
-					"pg_class":     {{"orders"}},
-					"pg_attribute": {},
+					"pg_namespace":        existing(),
+					"pg_class relkind IN": {{"orders"}},
+					"pg_attribute":        {},
 				},
 				err: map[string]error{table: errors.New("the server went away")},
 			}
 
 			if _, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales")); err == nil {
 				t.Errorf("Read() = nil when %s could not be read", table)
+			}
+		})
+	}
+}
+
+// A sequence carries everything that decides what it hands out. A copy made
+// with the default start and step counts differently from the original, which
+// is a data fault produced by a copy of the structure.
+func TestASequenceCarriesTheNumbersItHandsOut(t *testing.T) {
+	t.Parallel()
+
+	server := &answers{rows: map[string][][]any{
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {},
+		"pg_sequence": {{"invoice_number", "bigint",
+			int64(100), int64(5), int64(10), int64(9000), int64(20), true, nil, nil}},
+	}}
+
+	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+	if err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+	if len(schema.Sequences) != 1 {
+		t.Fatalf("the schema reads with %d sequences, want 1", len(schema.Sequences))
+	}
+
+	sequence := schema.Sequences[0]
+	if sequence.Name.String() != "invoice_number" || sequence.Type.String() != "bigint" {
+		t.Errorf("the sequence reads as %s %s", sequence.Name, sequence.Type)
+	}
+	if sequence.Start != 100 || sequence.Increment != 5 {
+		t.Errorf("it starts at %d and steps by %d, want 100 and 5", sequence.Start, sequence.Increment)
+	}
+	if sequence.Min != 10 || sequence.Max != 9000 {
+		t.Errorf("its bounds read as %d..%d, want 10..9000", sequence.Min, sequence.Max)
+	}
+	if sequence.Cache != 20 || !sequence.Cycle {
+		t.Errorf("it caches %d and cycles %v, want 20 and true", sequence.Cache, sequence.Cycle)
+	}
+}
+
+// The column that owns a sequence has to survive the reading. Losing it leaves
+// the copy at the other end with a sequence nothing owns and a column whose
+// default points at it anyway, which is the orphan a sync is supposed to
+// prevent.
+func TestASequenceKeepsTheColumnThatOwnsIt(t *testing.T) {
+	t.Parallel()
+
+	table, column := "orders", "id"
+	server := &answers{rows: map[string][][]any{
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {},
+		"pg_sequence": {
+			{"orders_id_seq", "integer",
+				int64(1), int64(1), int64(1), int64(2147483647), int64(1), false, table, column},
+			{"standalone", "bigint",
+				int64(1), int64(1), int64(1), int64(9223372036854775807), int64(1), false, nil, nil},
+		},
+	}}
+
+	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+	if err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+
+	owned := schema.Sequences[0]
+	if !owned.OwnedBy.Valid() {
+		t.Errorf("the owned sequence reads as owned by nothing: %+v", owned.OwnedBy)
+	}
+	if owned.OwnedBy.Table.String() != table || owned.OwnedBy.Column.String() != column {
+		t.Errorf("it reads as owned by %+v, want %s.%s", owned.OwnedBy, table, column)
+	}
+
+	// A sequence nobody owns is not a fault and not an empty name to be
+	// checked for: it is the ordinary shape of a counter somebody made.
+	if schema.Sequences[1].OwnedBy.Valid() {
+		t.Errorf("a standalone sequence reads as owned by %+v", schema.Sequences[1].OwnedBy)
+	}
+}
+
+// Views come back with the query behind them, and without the punctuation the
+// server wraps it in: what the model holds is what goes after AS, so that a
+// definition read from a server and the same one written by hand compare equal.
+func TestViewsAreReadWithTheQueryBehindThem(t *testing.T) {
+	t.Parallel()
+
+	server := &answers{rows: map[string][][]any{
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {},
+		"pg_class relkind =": {
+			{"active", " SELECT id FROM orders WHERE status = 'active';", nil},
+			{"checked", " SELECT id FROM orders;", "cascaded"},
+		},
+	}}
+
+	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+	if err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+	if len(schema.Views) != 2 {
+		t.Fatalf("the schema reads with %d views, want 2", len(schema.Views))
+	}
+
+	if got := schema.Views[0].Definition; got != "SELECT id FROM orders WHERE status = 'active'" {
+		t.Errorf("the definition reads as %q, want it without the space and the semicolon", got)
+	}
+
+	// WITH CHECK OPTION is not in the query the server renders, and a reader
+	// that only asks for the definition drops the clause that decides whether a
+	// write through the view is refused.
+	if got := schema.Views[1].CheckOption; got != "cascaded" {
+		t.Errorf("the check option reads as %q, want cascaded", got)
+	}
+	if got := schema.Views[0].CheckOption; got != "" {
+		t.Errorf("a view with no check option reads as %q", got)
+	}
+}
+
+// Sequences and views come out in the one order the model has, whatever order
+// the server answered in — the same property the tables have, and for the same
+// reason.
+func TestSequencesAndViewsComeOutSorted(t *testing.T) {
+	t.Parallel()
+
+	server := &answers{rows: map[string][][]any{
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {},
+		"pg_sequence": {
+			{"second", "bigint", int64(1), int64(1), int64(1), int64(2), int64(1), false, nil, nil},
+			{"first", "bigint", int64(1), int64(1), int64(1), int64(2), int64(1), false, nil, nil},
+		},
+		"pg_class relkind =": {
+			{"beta", "SELECT 1", nil},
+			{"alpha", "SELECT 1", nil},
+		},
+	}}
+
+	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+	if err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+
+	if schema.Sequences[0].Name.String() != "first" {
+		t.Errorf("the sequences came back in the order the server answered: %v", schema.Sequences)
+	}
+	if schema.Views[0].Name.String() != "alpha" {
+		t.Errorf("the views came back in the order the server answered: %v", schema.Views)
+	}
+}
+
+// A failure reading sequences or views fails the whole read, like every other
+// query: a schema missing the objects a failed query would have listed is a
+// schema a diff would offer to drop them from.
+func TestAFailureReadingSequencesOrViewsFailsTheRead(t *testing.T) {
+	t.Parallel()
+
+	for _, query := range []string{"pg_sequence", "pg_class relkind ="} {
+		t.Run(query, func(t *testing.T) {
+			t.Parallel()
+
+			server := &answers{
+				rows: map[string][][]any{
+					"pg_namespace":        existing(),
+					"pg_class relkind IN": {},
+				},
+				err: map[string]error{query: errors.New("the server went away")},
+			}
+
+			if _, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales")); err == nil {
+				t.Errorf("Read() = nil when %s could not be read", query)
 			}
 		})
 	}

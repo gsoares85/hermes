@@ -122,8 +122,37 @@ type Index struct {
 }
 
 // Sequence is a sequence, whether it stands alone or belongs to a column.
+//
+// The numbers are not decoration. A sequence recreated with the default start
+// and increment hands out numbers the original never would, and the destination
+// of a sync ends up with a counter that collides with the rows already there —
+// a data fault produced by a copy of the structure.
 type Sequence struct {
 	Name Name
+
+	// Type is the integer type the sequence counts in, which is what decides
+	// where it runs out: a sequence of smallint stops at 32767 whatever its
+	// maximum says.
+	Type TypeName
+
+	// The bounds and the step, as the catalog holds them. They are read rather
+	// than defaulted because every one of them can be declared, and a default
+	// assumed here is a difference the diff cannot see and the sync silently
+	// applies.
+	Start     int64
+	Increment int64
+	Min       int64
+	Max       int64
+
+	// Cache is how many numbers a session claims at once. It changes what the
+	// sequence hands out — a cache of twenty leaves gaps of twenty — so it is
+	// part of the sequence rather than a tuning knob.
+	Cache int64
+
+	// Cycle is whether it starts over instead of failing when it reaches the
+	// end, which is the difference between a counter that wraps and one that
+	// stops the application.
+	Cycle bool
 
 	// OwnedBy is the column this sequence belongs to, empty for one that
 	// stands alone. Losing it turns an identity column at the destination of a
@@ -132,6 +161,10 @@ type Sequence struct {
 }
 
 // ColumnRef names a column of a table in this schema.
+//
+// In this schema and not anywhere: PostgreSQL requires a sequence and the table
+// that owns it to live in the same namespace, so the only reference the model
+// carries today cannot point outside the schema being read.
 type ColumnRef struct {
 	Table  Name
 	Column Name
@@ -149,4 +182,12 @@ type View struct {
 	// the parse tree, so two views written differently and meaning the same
 	// come back the same.
 	Definition string
+
+	// CheckOption is "local", "cascaded" or empty, and it is here because the
+	// definition does not carry it. WITH CHECK OPTION is stored beside the view
+	// rather than inside its query, so a reader that asks only for the
+	// definition drops the one clause that decides whether a write through the
+	// view is refused — and the copy at the other end quietly accepts rows the
+	// original would have rejected.
+	CheckOption string
 }

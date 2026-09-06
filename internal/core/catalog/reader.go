@@ -80,18 +80,29 @@ func (r *Reader) Read(ctx context.Context, schema Name) (Schema, error) {
 	// partial schema would be worse than answering nothing, because a diff
 	// would compare against it and offer to drop whatever the failed query
 	// would have listed.
-	for _, read := range []func(context.Context, Name, map[string]*Table) error{
+	for _, fill := range []func(context.Context, Name, map[string]*Table) error{
 		r.columns,
 		r.constraints,
 		r.indexes,
 	} {
-		if err := read(ctx, schema, tables); err != nil {
+		if err = fill(ctx, schema, tables); err != nil {
 			return Schema{}, err
 		}
 	}
 
 	for _, name := range order {
 		read.Tables = append(read.Tables, *tables[name])
+	}
+
+	// The objects of the schema that hang on nothing. They are read after the
+	// tables rather than beside them only because the queries run one at a time
+	// on one connection; nothing about them depends on what the tables said.
+	if read.Sequences, err = r.sequences(ctx, schema); err != nil {
+		return Schema{}, err
+	}
+
+	if read.Views, err = r.views(ctx, schema); err != nil {
+		return Schema{}, err
 	}
 
 	// Sorted before it is handed over, so that no caller has to know the reader

@@ -238,4 +238,52 @@ var corpusStatements = []string{
 	`CREATE UNIQUE INDEX indexed_unique ON {schema}.indexed (email, status)`,
 	`CREATE INDEX indexed_include ON {schema}.indexed (status) INCLUDE (payload)`,
 	`CREATE INDEX indexed_descending ON {schema}.indexed (created DESC NULLS LAST)`,
+
+	// A sequence nobody owns, with every parameter declared away from its
+	// default. A copy made with the defaults hands out different numbers from
+	// the original, which is a data fault produced by a copy of the structure.
+	`CREATE SEQUENCE {schema}.standalone_counter
+		AS smallint
+		START WITH 100
+		INCREMENT BY 5
+		MINVALUE 10
+		MAXVALUE 30000
+		CACHE 20
+		CYCLE`,
+
+	// A sequence a column owns, declared the long way so that OWNED BY is
+	// explicit rather than something serial arranged behind the scenes — the
+	// serial column of type_aliases already covers that shape, and the identity
+	// columns of column_shapes cover the one the server owns internally.
+	`CREATE TABLE {schema}.counted (id integer, label text)`,
+	`CREATE SEQUENCE {schema}.counted_id_seq OWNED BY {schema}.counted.id`,
+	`ALTER TABLE {schema}.counted
+		ALTER COLUMN id SET DEFAULT nextval('{schema}.counted_id_seq')`,
+
+	// Views, including the shape a dependency order will have to work out for
+	// itself: one view standing on another.
+	`CREATE VIEW {schema}.active_orders AS
+		SELECT id, email, status FROM {schema}.indexed WHERE status = 'active'`,
+	`CREATE VIEW {schema}.active_domains AS
+		SELECT lower(split_part(email, '@', 2)) AS domain FROM {schema}.active_orders`,
+
+	// WITH CHECK OPTION is not part of the query the server renders back — it
+	// is stored beside the view — so a reader that asks only for the definition
+	// loses the clause that decides whether a write through the view is
+	// refused, and the copy at the other end accepts rows the original rejects.
+	`CREATE VIEW {schema}.checked_orders AS
+		SELECT id, email, status FROM {schema}.indexed WHERE status = 'active'
+		WITH CASCADED CHECK OPTION`,
+
+	// A view whose query refers to itself, through a recursive CTE. The
+	// self-reference is legal and resolves inside the query, so a reader that
+	// mistakes it for a dependency on the view finds a cycle that is not there.
+	`CREATE VIEW {schema}.reporting_line AS
+		WITH RECURSIVE reports AS (
+			SELECT id, manager FROM {schema}.employee WHERE manager IS NULL
+			UNION ALL
+			SELECT e.id, e.manager
+			FROM {schema}.employee e JOIN reports r ON e.manager = r.id
+		)
+		SELECT id, manager FROM reports`,
 }

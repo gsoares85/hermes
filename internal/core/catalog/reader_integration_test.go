@@ -101,6 +101,15 @@ func anonymise(schema catalog.Schema) catalog.Schema {
 		anonymised.Tables[i] = table
 	}
 
+	anonymised.Views = make([]catalog.View, len(schema.Views))
+	for i, view := range schema.Views {
+		// A view names the tables it reads, and the server qualifies them
+		// because the corpus schema is not on the search path — so the name the
+		// fixture invented is inside every definition.
+		view.Definition = anonymiseText(view.Definition, name)
+		anonymised.Views[i] = view
+	}
+
 	return anonymised
 }
 
@@ -171,7 +180,7 @@ func TestTheCorpusReadsTheSameOnEveryVersion(t *testing.T) {
 				return
 			}
 
-			if difference := describe(first, read); difference != "" {
+			if difference := describeAcrossVersions(first, read); difference != "" {
 				t.Errorf("PostgreSQL %s reads the corpus differently from %s: %s",
 					version, firstVersion, difference)
 			}
@@ -179,8 +188,44 @@ func TestTheCorpusReadsTheSameOnEveryVersion(t *testing.T) {
 	}
 }
 
+// describeAcrossVersions is describe without the one thing two different
+// servers do not yet agree on: the text of a view definition.
+//
+// PostgreSQL 16 changed how it renders a view back. Up to 15 it qualifies a
+// column with the relation it came from — lower(split_part(active_orders.email,
+// '@', 2)) — and from 16 it leaves the qualification out where nothing is
+// ambiguous. Both are the same query, and neither is wrong; what is wrong is
+// this model holding two spellings for it, because a diff between a server on
+// 15 and its copy on 17 would report every view as changed.
+//
+// Closing that is the canonicalisation phase's work and it is not a substring
+// away: telling a qualification that can be dropped from one that carries
+// meaning is a question about the query, not about its text. Until then the
+// matrix compares everything about a view except the words, and
+// TestAViewDefinitionStillDependsOnTheServerVersion holds the gap in place so
+// that it is a known one rather than a forgotten one.
+func describeAcrossVersions(want, got catalog.Schema) string {
+	return describe(withoutViewDefinitions(want), withoutViewDefinitions(got))
+}
+
+func withoutViewDefinitions(schema catalog.Schema) catalog.Schema {
+	stripped := schema
+	stripped.Views = make([]catalog.View, len(schema.Views))
+
+	for i, view := range schema.Views {
+		view.Definition = ""
+		stripped.Views[i] = view
+	}
+
+	return stripped
+}
+
 // describe answers what differs between two readings, in the first place they
 // differ, so that a failure names the column rather than printing two models.
+//
+// It compares the rendered text as well — the default of a column, the
+// definition of a constraint, of an index and of a view — because two readings
+// of one server have to agree on all of it.
 func describe(want, got catalog.Schema) string {
 	if len(want.Tables) != len(got.Tables) {
 		return report("tables", names(want), names(got))
@@ -192,7 +237,61 @@ func describe(want, got catalog.Schema) string {
 		}
 	}
 
+	if difference := describeSequences(want, got); difference != "" {
+		return difference
+	}
+
+	return describeViews(want, got)
+}
+
+// Sequences and views are compared with ==, which they can be: neither carries
+// a slice. A field added to either without a thought for how it compares breaks
+// here rather than quietly stopping being compared.
+func describeSequences(want, got catalog.Schema) string {
+	if len(want.Sequences) != len(got.Sequences) {
+		return report("sequences", sequenceNames(want), sequenceNames(got))
+	}
+
+	for i := range want.Sequences {
+		if want.Sequences[i] != got.Sequences[i] {
+			return report("the sequence "+want.Sequences[i].Name.String(),
+				want.Sequences[i], got.Sequences[i])
+		}
+	}
+
 	return ""
+}
+
+func describeViews(want, got catalog.Schema) string {
+	if len(want.Views) != len(got.Views) {
+		return report("views", viewNames(want), viewNames(got))
+	}
+
+	for i := range want.Views {
+		if want.Views[i] != got.Views[i] {
+			return report("the view "+want.Views[i].Name.String(), want.Views[i], got.Views[i])
+		}
+	}
+
+	return ""
+}
+
+func sequenceNames(schema catalog.Schema) []string {
+	found := make([]string, 0, len(schema.Sequences))
+	for _, sequence := range schema.Sequences {
+		found = append(found, sequence.Name.String())
+	}
+
+	return found
+}
+
+func viewNames(schema catalog.Schema) []string {
+	found := make([]string, 0, len(schema.Views))
+	for _, view := range schema.Views {
+		found = append(found, view.Name.String())
+	}
+
+	return found
 }
 
 func describeTable(want, got catalog.Table) string {
@@ -673,5 +772,237 @@ func TestNotNullIsNeverReadAsAConstraint(t *testing.T) {
 				t.Errorf("PostgreSQL %s: the column lost its NOT NULL", version)
 			}
 		})
+	}
+}
+
+// sequenceIn finds a sequence by name, failing the test when it is not there.
+func sequenceIn(t *testing.T, schema catalog.Schema, name string) catalog.Sequence {
+	t.Helper()
+
+	for _, sequence := range schema.Sequences {
+		if sequence.Name.String() == name {
+			return sequence
+		}
+	}
+
+	t.Fatalf("the schema has no sequence %q; it has %v", name, sequenceNames(schema))
+
+	return catalog.Sequence{}
+}
+
+// viewIn finds a view by name, failing the test when it is not there.
+func viewIn(t *testing.T, schema catalog.Schema, name string) catalog.View {
+	t.Helper()
+
+	for _, view := range schema.Views {
+		if view.Name.String() == name {
+			return view
+		}
+	}
+
+	t.Fatalf("the schema has no view %q; it has %v", name, viewNames(schema))
+
+	return catalog.View{}
+}
+
+// A sequence is read with every number that decides what it hands out, off a
+// real server. Defaulting any of them here would produce a copy that counts
+// differently from the original — a data fault produced by a copy of the
+// structure, and one nothing in the diff would have shown.
+func TestASequenceIsReadWithWhatItHandsOut(t *testing.T) {
+	t.Parallel()
+
+	schema := readCorpus(t, testsupport.SupportedVersions[0])
+	counter := sequenceIn(t, schema, "standalone_counter")
+
+	if got := counter.Type.String(); got != "smallint" {
+		t.Errorf("the sequence counts in %q, want smallint", got)
+	}
+	if counter.Start != 100 || counter.Increment != 5 {
+		t.Errorf("it starts at %d and steps by %d, want 100 and 5", counter.Start, counter.Increment)
+	}
+	if counter.Min != 10 || counter.Max != 30000 {
+		t.Errorf("its bounds read as %d..%d, want 10..30000", counter.Min, counter.Max)
+	}
+	if counter.Cache != 20 || !counter.Cycle {
+		t.Errorf("it caches %d and cycles %v, want 20 and true", counter.Cache, counter.Cycle)
+	}
+
+	// A sequence nobody owns is the ordinary shape of a counter somebody made,
+	// and it must not acquire an owner from a join that found the wrong row.
+	if counter.OwnedBy.Valid() {
+		t.Errorf("a standalone sequence reads as owned by %+v", counter.OwnedBy)
+	}
+}
+
+// Every way a column can own a sequence, read off a real server. Losing the
+// link leaves the copy at the other end with a sequence nothing owns and a
+// column whose default points at it anyway.
+func TestASequenceIsReadWithTheColumnThatOwnsIt(t *testing.T) {
+	t.Parallel()
+
+	schema := readCorpus(t, testsupport.SupportedVersions[0])
+
+	// Declared with OWNED BY, which is the explicit form.
+	owned := sequenceIn(t, schema, "counted_id_seq").OwnedBy
+	if owned.Table.String() != "counted" || owned.Column.String() != "id" {
+		t.Errorf("the declared sequence reads as owned by %+v, want counted.id", owned)
+	}
+
+	// Made by serial, which arranges the same link behind the scenes.
+	serial := sequenceIn(t, schema, "type_aliases_o_seq").OwnedBy
+	if serial.Table.String() != "type_aliases" || serial.Column.String() != "o" {
+		t.Errorf("the serial sequence reads as owned by %+v, want type_aliases.o", serial)
+	}
+}
+
+// The sequence behind an identity column is read, and it is read as the
+// column's.
+//
+// It is the one object here that could reasonably have been left out — nobody
+// declared it, and the index backing a constraint is left out for what looks
+// like the same reason. It is not the same reason. That index carries nothing
+// the constraint does not already say; this sequence carries its start, its
+// step and its name, and the column says none of them. Dropping the row would
+// lose all of that, and a copy of an identity declared START WITH 5 would count
+// from one.
+func TestTheSequenceBehindAnIdentityColumnIsReadAsTheColumnsOwn(t *testing.T) {
+	t.Parallel()
+
+	schema := readCorpus(t, testsupport.SupportedVersions[0])
+
+	for name, column := range map[string]string{
+		"column_shapes_id_seq":         "id",
+		"column_shapes_by_default_seq": "by_default",
+	} {
+		owned := sequenceIn(t, schema, name).OwnedBy
+		if owned.Table.String() != "column_shapes" || owned.Column.String() != column {
+			t.Errorf("%s reads as owned by %+v, want column_shapes.%s", name, owned, column)
+		}
+	}
+
+	// And the column still says it is an identity column, which is what tells
+	// the DDL writer not to emit a CREATE SEQUENCE beside the clause that
+	// already creates one.
+	if got := columnIn(t, tableIn(t, schema, "column_shapes"), "id").Identity; got != "always" {
+		t.Errorf("the identity column reads as %q", got)
+	}
+}
+
+// Views come back with the query behind them, rendered from the parse tree
+// rather than as anybody typed it.
+func TestTheViewsOfTheCorpusAreReadWithTheirQuery(t *testing.T) {
+	t.Parallel()
+
+	schema := readCorpus(t, testsupport.SupportedVersions[0])
+
+	if got := viewIn(t, schema, "active_orders").Definition; !strings.Contains(got, "indexed") {
+		t.Errorf("the view reads as %q, want the table it selects from", got)
+	}
+
+	// A view standing on another view is the dependency the ordering phase will
+	// have to work out; that both are read at all is what this asserts.
+	standing := viewIn(t, schema, "active_domains").Definition
+	if !strings.Contains(standing, "active_orders") {
+		t.Errorf("the view over a view reads as %q, want the view it selects from", standing)
+	}
+
+	// A query that refers to itself through a recursive CTE resolves inside the
+	// query. A reader that mistook the self-reference for a dependency on the
+	// view would find a cycle that is not there.
+	recursive := viewIn(t, schema, "reporting_line").Definition
+	if !strings.Contains(recursive, "RECURSIVE") {
+		t.Errorf("the recursive view reads as %q, want its WITH RECURSIVE", recursive)
+	}
+
+	// The definition is what goes after AS: no leading space, no terminator.
+	// Keeping them would make the same query read from a server and written by
+	// hand compare unequal.
+	for _, view := range schema.Views {
+		if strings.HasSuffix(view.Definition, ";") || view.Definition != strings.TrimSpace(view.Definition) {
+			t.Errorf("the definition of %s is %q, want it without the punctuation", view.Name, view.Definition)
+		}
+	}
+}
+
+// WITH CHECK OPTION is stored beside the view rather than inside its query, so
+// pg_get_viewdef never mentions it. A reader that asks only for the definition
+// drops the clause that decides whether a write through the view is refused,
+// and the copy at the other end accepts rows the original rejects.
+func TestAViewKeepsItsCheckOption(t *testing.T) {
+	t.Parallel()
+
+	schema := readCorpus(t, testsupport.SupportedVersions[0])
+
+	if got := viewIn(t, schema, "checked_orders").CheckOption; got != "cascaded" {
+		t.Errorf("the checked view reads its check option as %q, want cascaded", got)
+	}
+	if got := viewIn(t, schema, "active_orders").CheckOption; got != "" {
+		t.Errorf("a view with no check option reads as %q", got)
+	}
+}
+
+// A view is not a table and a sequence is not a table. They are all rows of
+// pg_class, and a filter that let one through as another would put an object in
+// the model that no DDL of that kind can create.
+func TestViewsAndSequencesAreNotReadAsTables(t *testing.T) {
+	t.Parallel()
+
+	schema := readCorpus(t, testsupport.SupportedVersions[0])
+
+	elsewhere := map[string]bool{}
+	for _, view := range schema.Views {
+		elsewhere[view.Name.String()] = true
+	}
+	for _, sequence := range schema.Sequences {
+		elsewhere[sequence.Name.String()] = true
+	}
+
+	for _, table := range schema.Tables {
+		if elsewhere[table.Name.String()] {
+			t.Errorf("%s is listed as a table as well", table.Name)
+		}
+	}
+}
+
+// The divergence the matrix found, pinned so that it is a known gap and not a
+// forgotten one.
+//
+// PostgreSQL 16 changed how a view is rendered back. Up to 15 a column is
+// qualified with the relation it came from and from 16 the qualification is
+// left out where nothing is ambiguous, so the same view read on two servers
+// gives this model two spellings of one query — and a diff between a server on
+// 15 and its copy on 17 would report every view as changed.
+//
+// The matrix cannot assert equality of the text until that is canonicalised,
+// and canonicalising it is not a substring away: telling a qualification that
+// can be dropped from one that carries meaning is a question about the query
+// rather than about its characters. So this asserts the difference instead, in
+// the exact shape it has. The day it is closed this test fails, which is the
+// point — it is what makes the matrix comparing everything about a view again a
+// decision somebody makes rather than something nobody remembers to revisit.
+func TestAViewDefinitionStillDependsOnTheServerVersion(t *testing.T) {
+	t.Parallel()
+
+	// Named rather than taken from the ends of the matrix: the change landed
+	// between these two, and pinning them keeps the test about what it found.
+	const (
+		qualifies      = "15"
+		doesNotAnyMore = "16"
+	)
+
+	before := viewIn(t, readCorpus(t, qualifies), "active_domains").Definition
+	after := viewIn(t, readCorpus(t, doesNotAnyMore), "active_domains").Definition
+
+	if before == after {
+		t.Fatalf("PostgreSQL %s and %s now render a view alike (%q); the matrix can compare "+
+			"the text of a definition again", qualifies, doesNotAnyMore, before)
+	}
+	if !strings.Contains(before, "active_orders.email") {
+		t.Errorf("PostgreSQL %s renders %q, want the column qualified", qualifies, before)
+	}
+	if strings.Contains(after, "active_orders.email") {
+		t.Errorf("PostgreSQL %s renders %q, want the qualification left out",
+			doesNotAnyMore, after)
 	}
 }
