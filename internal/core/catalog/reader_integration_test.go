@@ -58,65 +58,6 @@ func readCorpus(t *testing.T, version string) catalog.Schema {
 	return read
 }
 
-// anonymise replaces the name of the corpus schema wherever it appears, so that
-// two readings can be compared for structure.
-//
-// The fixture numbers its schema so that two calls inside one container cannot
-// collide, which means every version reads a schema under a different name.
-// That difference is the test's own doing and has to come out of the
-// comparison; nothing else does.
-//
-// It has to reach inside the default of a column, because a serial declares one
-// that names its sequence — nextval('corpus_8.type_aliases_o_seq'::regclass) —
-// and the schema is in there. That the model still carries a schema-qualified
-// default at all is a real gap, and it is the one the canonicalisation phase
-// exists to close: two structurally identical schemas under different names
-// have defaults that differ only by the name, and a diff would report every
-// serial column as changed. Neutralising exactly the known name here keeps this
-// test about versions, which is what it is for, and leaves that gap to be
-// closed where it belongs rather than papered over by a broad substitution.
-func anonymise(schema catalog.Schema) catalog.Schema {
-	name := schema.Name.String()
-
-	anonymised := schema
-	anonymised.Name = catalog.Name{}
-	anonymised.Tables = make([]catalog.Table, len(schema.Tables))
-
-	for i, table := range schema.Tables {
-		table.Columns = append([]catalog.Column(nil), table.Columns...)
-		for j := range table.Columns {
-			table.Columns[j].Default = anonymiseText(table.Columns[j].Default, name)
-		}
-
-		table.Constraints = append([]catalog.Constraint(nil), table.Constraints...)
-		for j := range table.Constraints {
-			table.Constraints[j].Definition = anonymiseText(table.Constraints[j].Definition, name)
-		}
-
-		table.Indexes = append([]catalog.Index(nil), table.Indexes...)
-		for j := range table.Indexes {
-			table.Indexes[j].Definition = anonymiseText(table.Indexes[j].Definition, name)
-		}
-
-		anonymised.Tables[i] = table
-	}
-
-	anonymised.Views = make([]catalog.View, len(schema.Views))
-	for i, view := range schema.Views {
-		// A view names the tables it reads, and the server qualifies them
-		// because the corpus schema is not on the search path — so the name the
-		// fixture invented is inside every definition.
-		view.Definition = anonymiseText(view.Definition, name)
-		anonymised.Views[i] = view
-	}
-
-	return anonymised
-}
-
-func anonymiseText(text, schema string) string {
-	return strings.ReplaceAll(text, schema+".", "{schema}.")
-}
-
 // tableIn finds a table by name, failing the test when it is not there.
 func tableIn(t *testing.T, schema catalog.Schema, name string) catalog.Table {
 	t.Helper()
@@ -159,10 +100,19 @@ func columnIn(t *testing.T, table catalog.Table, name string) catalog.Column {
 // The corpus is read on every version the product supports, and what comes back
 // has to be the same model on all of them.
 //
-// This is the assertion the whole task is arranged around, at the size this
-// phase can make it: the reader is not allowed to answer differently because
-// the server is older or newer. A difference here is a false positive waiting
-// in the diff, and finding it now costs a test run rather than a user's trust.
+// This is the assertion the whole task is arranged around: the reader is not
+// allowed to answer differently because the server is older or newer. A
+// difference here is a false positive waiting in the diff, and finding it now
+// costs a test run rather than a user's trust.
+//
+// Nothing is neutralised before the comparison any more. The readings used to
+// go through a helper that took the name of the corpus schema out of every
+// rendered default and definition, because the fixture numbers its schema and
+// each version therefore reads one under a different name — and that helper was
+// hiding the very thing it was working around, since a real diff between an
+// environment and its copy is exactly two schemas with different names. The
+// search path the read scopes is what makes the substitution unnecessary, and
+// deleting it is how this test proves it.
 func TestTheCorpusReadsTheSameOnEveryVersion(t *testing.T) {
 	t.Parallel()
 
@@ -172,7 +122,7 @@ func TestTheCorpusReadsTheSameOnEveryVersion(t *testing.T) {
 
 	for _, version := range testsupport.SupportedVersions {
 		t.Run(version, func(t *testing.T) {
-			read := anonymise(readCorpus(t, version))
+			read := readCorpus(t, version)
 
 			if version == firstVersion {
 				first = read
@@ -977,8 +927,11 @@ func TestViewsAndSequencesAreNotReadAsTables(t *testing.T) {
 // The matrix cannot assert equality of the text until that is canonicalised,
 // and canonicalising it is not a substring away: telling a qualification that
 // can be dropped from one that carries meaning is a question about the query
-// rather than about its characters. So this asserts the difference instead, in
-// the exact shape it has. The day it is closed this test fails, which is the
+// rather than about its characters. Dropping every qualification would make
+// SELECT a.note and SELECT b.note the same text, which trades this false
+// positive for a false negative — a real change the sync would stop applying.
+// ADR-0012 records why it is left as it is. So this asserts the difference
+// instead, in the exact shape it has. The day it is closed this test fails, which is the
 // point — it is what makes the matrix comparing everything about a view again a
 // decision somebody makes rather than something nobody remembers to revisit.
 func TestAViewDefinitionStillDependsOnTheServerVersion(t *testing.T) {
@@ -1004,5 +957,191 @@ func TestAViewDefinitionStillDependsOnTheServerVersion(t *testing.T) {
 	if strings.Contains(after, "active_orders.email") {
 		t.Errorf("PostgreSQL %s renders %q, want the qualification left out",
 			doesNotAnyMore, after)
+	}
+}
+
+// Two schemas with the same structure under different names read as the same
+// model.
+//
+// This is the property the diff rests on, and it is the one this package exists
+// to make true: comparing an environment against its copy means reading two
+// schemas that are structurally identical and called different things, and
+// every difference the reader invents there is a change the diff reports that
+// nobody made. The fixture builds a schema of its own per call, so two calls
+// are exactly that pair.
+func TestTwoSchemasWithOneStructureReadTheSame(t *testing.T) {
+	t.Parallel()
+
+	session, instance := openSession(t, testsupport.SupportedVersions[0])
+	reader := catalog.NewReader(session)
+
+	first, second := testsupport.Corpus(t, instance), testsupport.Corpus(t, instance)
+
+	one, err := reader.Read(t.Context(), catalog.NewName(first))
+	if err != nil {
+		t.Fatalf("reading %s: %v", first, err)
+	}
+
+	other, err := reader.Read(t.Context(), catalog.NewName(second))
+	if err != nil {
+		t.Fatalf("reading %s: %v", second, err)
+	}
+
+	// The names are the one thing that legitimately differs, and describe does
+	// not look at them.
+	if difference := describe(one, other); difference != "" {
+		t.Errorf("two copies of one structure read differently: %s", difference)
+	}
+}
+
+// The same schema read over two connections gives the same model. Nothing about
+// a reading may depend on which connection asked — a model that did would make
+// the diff's answer depend on which pool slot it happened to get.
+func TestTheSameSchemaReadOverTwoConnectionsIsTheSameModel(t *testing.T) {
+	t.Parallel()
+
+	session, instance := openSession(t, testsupport.SupportedVersions[0])
+	schema := testsupport.Corpus(t, instance)
+
+	other, _ := openSession(t, testsupport.SupportedVersions[0])
+
+	here, err := catalog.NewReader(session).Read(t.Context(), catalog.NewName(schema))
+	if err != nil {
+		t.Fatalf("reading over the first connection: %v", err)
+	}
+
+	there, err := catalog.NewReader(other).Read(t.Context(), catalog.NewName(schema))
+	if err != nil {
+		t.Fatalf("reading over the second connection: %v", err)
+	}
+
+	if difference := describe(here, there); difference != "" {
+		t.Errorf("two connections read one schema differently: %s", difference)
+	}
+}
+
+// The read leaves the session exactly as it found it.
+//
+// The path it points at the schema is state the reader borrows and does not
+// own. A connection handed back to the pool still pointing at whatever schema
+// the last read wanted resolves the next caller's unqualified names against it,
+// which is a bug that surfaces far away from here and looks like anything but
+// this.
+func TestAReadLeavesTheSearchPathAsItFoundIt(t *testing.T) {
+	t.Parallel()
+
+	session, instance := openSession(t, testsupport.SupportedVersions[0])
+	schema := testsupport.Corpus(t, instance)
+
+	before := searchPath(t, session)
+
+	if _, err := catalog.NewReader(session).Read(t.Context(), catalog.NewName(schema)); err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+
+	if after := searchPath(t, session); after != before {
+		t.Errorf("the session is on %q after the read, was on %q", after, before)
+	}
+
+	// And a read that fails part way through puts it back too, which is the
+	// case a deferred restore exists for.
+	if _, err := catalog.NewReader(session).Read(t.Context(), catalog.NewName("no_such_schema")); err == nil {
+		t.Fatal("reading a schema that is not there = nil")
+	}
+	if after := searchPath(t, session); after != before {
+		t.Errorf("the session is on %q after a failed read, was on %q", after, before)
+	}
+}
+
+func searchPath(t *testing.T, session driver.Session) string {
+	t.Helper()
+
+	rows := session.Query(t.Context(), `SELECT pg_catalog.current_setting('search_path')`)
+	defer rows.Close()
+
+	if !rows.Next() {
+		t.Fatalf("asking for the search path: %v", rows.Err())
+	}
+
+	var path string
+	if err := rows.Scan(&path); err != nil {
+		t.Fatalf("reading the search path: %v", err)
+	}
+
+	return path
+}
+
+// Nothing the model holds as text names the schema it was read from.
+//
+// It is the property the whole canonicalisation rests on, asserted directly
+// rather than only through two readings agreeing: a default, a constraint, an
+// index or a view carrying the schema is a difference between an environment
+// and its copy on every object that has one.
+func TestNothingReadCarriesTheNameOfItsSchema(t *testing.T) {
+	t.Parallel()
+
+	session, instance := openSession(t, testsupport.SupportedVersions[0])
+	schema := testsupport.Corpus(t, instance)
+
+	read, err := catalog.NewReader(session).Read(t.Context(), catalog.NewName(schema))
+	if err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+
+	mentions := func(what, text string) {
+		t.Helper()
+
+		if strings.Contains(text, schema) {
+			t.Errorf("%s names its schema: %q", what, text)
+		}
+	}
+
+	for _, table := range read.Tables {
+		for _, column := range table.Columns {
+			mentions("the default of "+table.Name.String()+"."+column.Name.String(), column.Default)
+			mentions("the type of "+table.Name.String()+"."+column.Name.String(), column.Type.String())
+			mentions("the generated expression of "+column.Name.String(), column.Generated)
+		}
+		for _, constraint := range table.Constraints {
+			mentions("the constraint "+constraint.Name.String(), constraint.Definition)
+		}
+		for _, index := range table.Indexes {
+			mentions("the index "+index.Name.String(), index.Definition)
+		}
+	}
+
+	for _, view := range read.Views {
+		mentions("the view "+view.Name.String(), view.Definition)
+	}
+}
+
+// A column that declares no collation still reads one.
+//
+// A collatable column always has a collation — the database's, named default —
+// and leaving it empty for the common case would make every column that
+// declares one differ from every column that does not, on two schemas that
+// declare exactly the same thing. A column of a type that cannot be collated
+// has none, and inventing one for it would be the same mistake mirrored.
+func TestACollationIsAlwaysExplicit(t *testing.T) {
+	t.Parallel()
+
+	for _, version := range testsupport.SupportedVersions {
+		t.Run(version, func(t *testing.T) {
+			schema := readCorpus(t, version)
+			shapes := tableIn(t, schema, "column_shapes")
+
+			for _, column := range []string{"nullable", "not_nullable", "cast_default"} {
+				if got := columnIn(t, shapes, column).Collation.String(); got != "default" {
+					t.Errorf("%s reads its collation as %q, want default", column, got)
+				}
+			}
+
+			if got := columnIn(t, shapes, "collated").Collation.String(); got != "C" {
+				t.Errorf("the declared collation reads as %q, want C", got)
+			}
+			if got := columnIn(t, shapes, "plain_default").Collation.String(); got != "" {
+				t.Errorf("an integer column reads a collation of %q, want none", got)
+			}
+		})
 	}
 }

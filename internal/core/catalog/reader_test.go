@@ -25,9 +25,21 @@ import (
 type answers struct {
 	rows map[string][][]any
 	err  map[string]error
+
+	// The search path queries, which every read begins and ends with. They are
+	// answered here rather than through the fixtures because they read no
+	// catalog table and no test is about them; the ones that are set these.
+	askingFails, scopingFails, restoringFails error
 }
 
+// The path the session is on before a read scopes it, and what it goes back to.
+const pathBefore = "public"
+
 func (a *answers) Query(_ context.Context, sql string, _ ...any) driver.Rows {
+	if setting, isSetting := a.searchPath(sql); isSetting {
+		return setting
+	}
+
 	if key := match(sql, a.err); key != "" {
 		return &fakeRows{err: a.err[key]}
 	}
@@ -37,6 +49,26 @@ func (a *answers) Query(_ context.Context, sql string, _ ...any) driver.Rows {
 	}
 
 	return &fakeRows{}
+}
+
+// searchPath answers the queries that read and set the path, the way a server
+// answers them: with the value the setting was left at.
+//
+// They are told apart by what they call rather than by the whole text, so that
+// rewording one is a refactor and not a broken double. The scoping call is the
+// one that quotes its argument, which is what separates it from the call that
+// puts the old value back.
+func (a *answers) searchPath(sql string) (driver.Rows, bool) {
+	switch {
+	case strings.Contains(sql, "current_setting"):
+		return &fakeRows{rows: [][]any{{pathBefore}}, err: a.askingFails}, true
+	case strings.Contains(sql, "quote_ident"):
+		return &fakeRows{rows: [][]any{{"scoped"}}, err: a.scopingFails}, true
+	case strings.Contains(sql, "set_config"):
+		return &fakeRows{rows: [][]any{{pathBefore}}, err: a.restoringFails}, true
+	default:
+		return nil, false
+	}
 }
 
 // match answers the most specific fixture key the query is described by.
@@ -875,5 +907,124 @@ func TestAFailureReadingSequencesOrViewsFailsTheRead(t *testing.T) {
 				t.Errorf("Read() = nil when %s could not be read", query)
 			}
 		})
+	}
+}
+
+// The read points the search path at the schema and puts it back.
+//
+// The pointing is what makes every expression the server renders independent of
+// what the schema is called, and the putting back is what keeps a connection
+// handed to the reader from going back to the pool resolving names against
+// somewhere else.
+func TestTheReadScopesTheSearchPathAndPutsItBack(t *testing.T) {
+	t.Parallel()
+
+	recorder := &recordingQuerier{
+		inner: &answers{rows: map[string][][]any{"pg_namespace": existing()}},
+	}
+
+	if _, err := catalog.NewReader(recorder).Read(t.Context(), catalog.NewName("sales")); err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+
+	scoped, restored := -1, -1
+	for i, sql := range recorder.sql {
+		switch {
+		case strings.Contains(sql, "quote_ident"):
+			scoped = i
+		case strings.Contains(sql, "set_config"):
+			restored = i
+		}
+	}
+
+	if scoped < 0 || restored < 0 {
+		t.Fatalf("the read did not scope and restore the path: %v", recorder.sql)
+	}
+	if scoped > restored {
+		t.Errorf("the path was restored at %d and scoped at %d, want the scoping first",
+			restored, scoped)
+	}
+	if restored != len(recorder.sql)-1 {
+		t.Errorf("the path was restored at %d of %d queries, want it last",
+			restored, len(recorder.sql))
+	}
+
+	// It goes back to what it was, read off the session, rather than to a
+	// default this package decided on.
+	if !recorder.carried("sales") || !recorder.carried(pathBefore) {
+		t.Errorf("the schema and the previous path did not both arrive as arguments: %v",
+			recorder.args)
+	}
+
+	// Everything the read asks of the catalog happens between the two.
+	for i, sql := range recorder.sql {
+		if strings.Contains(sql, "FROM pg_catalog.pg_class") && (i < scoped || i > restored) {
+			t.Errorf("a catalog query at %d falls outside the scoped path", i)
+		}
+	}
+}
+
+// A read that cannot scope the path is a read that would answer expressions
+// naming the schema, which is the false positive this is all here to prevent.
+// Better to fail than to answer a model that looks right.
+func TestAFailureScopingTheSearchPathFailsTheRead(t *testing.T) {
+	t.Parallel()
+
+	for name, server := range map[string]*answers{
+		"asking":  {rows: map[string][][]any{"pg_namespace": existing()}, askingFails: errors.New("gone")},
+		"setting": {rows: map[string][][]any{"pg_namespace": existing()}, scopingFails: errors.New("gone")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+			if err == nil {
+				t.Fatal("Read() = nil when the search path could not be scoped")
+			}
+			if !strings.Contains(err.Error(), "gone") {
+				t.Errorf("Read() = %v, want the reason to survive", err)
+			}
+		})
+	}
+}
+
+// A path that could not be put back is reported rather than swallowed, even
+// though the model itself is complete: the connection goes back to the pool
+// pointing at the schema this read happened to want, and the next caller
+// resolves their names against it.
+func TestAFailureRestoringTheSearchPathIsReported(t *testing.T) {
+	t.Parallel()
+
+	server := &answers{
+		rows:           map[string][][]any{"pg_namespace": existing()},
+		restoringFails: errors.New("gone"),
+	}
+
+	_, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+	if err == nil {
+		t.Fatal("Read() = nil when the search path could not be put back")
+	}
+	if !strings.Contains(err.Error(), "gone") {
+		t.Errorf("Read() = %v, want the reason to survive", err)
+	}
+}
+
+// A schema that is not there is answered before the path is touched. Scoping
+// for a read that cannot happen would change the session for nothing.
+func TestNothingIsScopedForASchemaThatIsNotThere(t *testing.T) {
+	t.Parallel()
+
+	recorder := &recordingQuerier{
+		inner: &answers{rows: map[string][][]any{"pg_namespace": {}}},
+	}
+
+	if _, err := catalog.NewReader(recorder).Read(t.Context(), catalog.NewName("missing")); err == nil {
+		t.Fatal("Read() = nil for a schema that is not there")
+	}
+
+	for _, sql := range recorder.sql {
+		if strings.Contains(sql, "set_config") {
+			t.Errorf("the path was changed for a schema that is not there: %s", sql)
+		}
 	}
 }

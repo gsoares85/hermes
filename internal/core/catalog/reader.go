@@ -55,7 +55,13 @@ func NewReader(server Querier) *Reader { return &Reader{server: server} }
 // The name reaches the server as a parameter and never as text spliced into a
 // query. It arrives from a person, and a schema name is exactly the sort of
 // thing that carries a quote.
-func (r *Reader) Read(ctx context.Context, schema Name) (Schema, error) {
+//
+// For the length of the read the session's search path names this schema and
+// nothing else, which is what makes every expression the server renders
+// independent of what the schema is called. See expr.go for why that is the
+// only place it can be decided. The path is put back afterwards, and a failure
+// to put it back is reported alongside whatever the read answered.
+func (r *Reader) Read(ctx context.Context, schema Name) (read Schema, err error) {
 	if !schema.Valid() {
 		return Schema{}, fmt.Errorf("%w: %q cannot name a schema", ErrSchemaNotFound, schema)
 	}
@@ -68,7 +74,14 @@ func (r *Reader) Read(ctx context.Context, schema Name) (Schema, error) {
 		return Schema{}, fmt.Errorf("%w: %s", ErrSchemaNotFound, schema)
 	}
 
-	read := Schema{Name: schema}
+	restore, err := r.scopeTo(ctx, schema)
+	if err != nil {
+		return Schema{}, err
+	}
+
+	defer func() { err = errors.Join(err, restore()) }()
+
+	read = Schema{Name: schema}
 
 	tables, order, err := r.tables(ctx, schema)
 	if err != nil {
@@ -263,6 +276,12 @@ func (r *Reader) columns(ctx context.Context, schema Name, tables map[string]*Ta
 // between an environment and its copy does. Two schemas that are structurally
 // the same would report a type change on every column that uses a type of
 // their own.
+//
+// The read now points the path at the schema, so the server leaves the
+// qualifier out on its own and this rarely has anything to do. It stays as the
+// net under that, the way the alias table is the net under format_type: the
+// type is the most compared field in the model, and six lines are cheap
+// insurance for the one server that answers differently.
 //
 // A qualifier naming a different schema stays. That one is a real reference to
 // somewhere else, and a schema pointing at public.mood is genuinely different

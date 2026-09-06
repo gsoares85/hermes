@@ -23,11 +23,20 @@ import (
 // to nothing and contributes no name. That is why the definition is kept: it is
 // the only place the expression, the WHERE of a partial index and the payload
 // of an INCLUDE survive.
+//
+// pg_get_indexdef is asked for the pretty form, and that is not about layout.
+// It is the one renderer that ignores the search path: asked plainly it writes
+// the table it indexes with the schema in front, whatever the path says,
+// because the statement it produces is meant to stand on its own. The pretty
+// flag is what makes it use the path like every other renderer — so the same
+// index read under two schema names produces one definition instead of two, and
+// the DDL writer supplies the schema it is writing to. The three-argument form
+// is the only way to ask, and column 0 means the whole statement.
 const listIndexes = `SELECT c.relname,
 	       i.relname,
 	       idx.indisunique,
 	       idx.indisprimary,
-	       pg_catalog.pg_get_indexdef(idx.indexrelid),
+	       pg_catalog.pg_get_indexdef(idx.indexrelid, 0, true),
 	       ARRAY(SELECT a.attname
 	             FROM unnest(idx.indkey) WITH ORDINALITY AS k(attnum, ord)
 	             JOIN pg_catalog.pg_attribute a
