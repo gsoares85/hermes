@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -270,7 +271,35 @@ func describeTable(want, got catalog.Table) string {
 		return difference
 	}
 
-	return describeIndexes(want, got)
+	if difference := describeIndexes(want, got); difference != "" {
+		return difference
+	}
+
+	return describeTableItself(want, got)
+}
+
+// describeTableItself compares what a table is rather than what is defined on
+// it: the parents it inherits and whether it takes part in partitioning.
+//
+// Left out of the comparison, these three fields were exempt from the three
+// properties this file exists to hold — that two schemas with one structure read
+// the same, that two connections read the same, and that six versions read the
+// same. The order of the parents comes from an aggregate with an ORDER BY and
+// relispartition is read straight from pg_class: both are exactly the kind of
+// thing that could differ between 12 and 18 and be believed because nothing
+// looked.
+func describeTableItself(want, got catalog.Table) string {
+	if want.Partitioned != got.Partitioned || want.Partition != got.Partition {
+		return report(want.Name.String()+" partitioning",
+			[]bool{want.Partitioned, want.Partition},
+			[]bool{got.Partitioned, got.Partition})
+	}
+
+	if !slices.Equal(want.Inherits, got.Inherits) {
+		return report(want.Name.String()+" inherits", want.Inherits, got.Inherits)
+	}
+
+	return ""
 }
 
 func describeConstraints(want, got catalog.Table) string {
