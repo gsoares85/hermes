@@ -123,30 +123,78 @@ func (s *sorter) seen(object Object) bool {
 	return reached
 }
 
-// visit walks everything reachable from an object and closes the component the
-// object roots.
-func (s *sorter) visit(object Object) {
+// step is one object part way through being walked: which of the things it
+// needs have been looked at, and which object the walk arrived from.
+//
+// It is the state a recursive version would have kept on the goroutine stack.
+type step struct {
+	object Object
+	from   Object
+	next   int
+	rooted bool
+}
+
+// visit walks everything reachable from an object and closes the components it
+// roots.
+//
+// Iterative, over a stack this function owns, and that is not a matter of
+// taste. The depth of the walk is the length of the longest chain of
+// dependencies, which comes from a database: a thousand tables each with a
+// foreign key to the one before is an ordinary shape and the performance
+// fixture builds exactly it. A goroutine stack grows to a gigabyte and would
+// survive that, but the failure when it does not is fatal — a stack overflow
+// cannot be recovered, so a schema deep enough would take the whole application
+// down rather than the one operation, which is the opposite of what the product
+// promises about long operations. An explicit stack grows on the heap and fails
+// like anything else that runs out of memory.
+func (s *sorter) visit(root Object) {
+	s.open(root)
+
+	walk := []step{{object: root, rooted: true}}
+
+	for len(walk) > 0 {
+		top := &walk[len(walk)-1]
+
+		if top.next < len(s.needs[top.object]) {
+			needed := s.needs[top.object][top.next]
+			top.next++
+
+			switch {
+			case !s.seen(needed):
+				s.open(needed)
+				walk = append(walk, step{object: needed, from: top.object})
+			case s.stacked[needed]:
+				// Reached again while still open, which is a way back to where
+				// the walk came from — the definition of a cycle.
+				s.low[top.object] = min(s.low[top.object], s.index[needed])
+			}
+
+			continue
+		}
+
+		// Everything this object needs has been walked, which is where the
+		// recursive version returned: the component is closed if this object
+		// roots one, and what it learned goes back to whoever sent the walk
+		// here.
+		if s.low[top.object] == s.index[top.object] {
+			s.close(top.object)
+		}
+
+		if !top.rooted {
+			s.low[top.from] = min(s.low[top.from], s.low[top.object])
+		}
+
+		walk = walk[:len(walk)-1]
+	}
+}
+
+// open records an object as reached and puts it on the component stack.
+func (s *sorter) open(object Object) {
 	s.index[object] = s.reached
 	s.low[object] = s.reached
 	s.reached++
 	s.stack = append(s.stack, object)
 	s.stacked[object] = true
-
-	for _, needed := range s.needs[object] {
-		switch {
-		case !s.seen(needed):
-			s.visit(needed)
-			s.low[object] = min(s.low[object], s.low[needed])
-		case s.stacked[needed]:
-			// Reached again while still open, which is a way back to where the
-			// walk came from — the definition of a cycle.
-			s.low[object] = min(s.low[object], s.index[needed])
-		}
-	}
-
-	if s.low[object] == s.index[object] {
-		s.close(object)
-	}
 }
 
 // close takes the component rooted at an object off the stack and appends it to

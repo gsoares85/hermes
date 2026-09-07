@@ -1,6 +1,7 @@
 package catalog_test
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -258,3 +259,54 @@ func TestAnEdgeToAnObjectTheSchemaDoesNotHoldIsNotAnOrder(t *testing.T) {
 		t.Errorf("the order reads as %v, want only the objects the schema holds", order.Objects)
 	}
 }
+
+// A chain far longer than anything a recursive walk would survive.
+//
+// The depth of the walk is the length of the longest chain of dependencies, and
+// that comes from a database rather than from this package: a thousand tables
+// each with a key to the one before is an ordinary shape, and the performance
+// fixture builds exactly it. The failure mode is what makes the depth worth a
+// test — a stack overflow in Go cannot be recovered, so a schema deep enough
+// would take the application down rather than the operation.
+//
+// It checks the order as well as the survival. A walk that came back with the
+// wrong answer quickly would be no better than one that crashed.
+func TestALongChainIsOrderedWithoutRecursion(t *testing.T) {
+	t.Parallel()
+
+	const length = 50_000
+
+	schema := catalog.Schema{Name: catalog.NewName("sales")}
+
+	for i := range length {
+		schema.Tables = append(schema.Tables, catalog.Table{Name: catalog.NewName(named(i))})
+
+		if i > 0 {
+			schema.Dependencies = append(schema.Dependencies, catalog.Dependency{
+				Object: table(named(i)),
+				Needs:  table(named(i - 1)),
+				Reason: catalog.ReasonForeignKey,
+			})
+		}
+	}
+
+	schema.Sort()
+	order := schema.Order()
+
+	if len(order.Objects) != length {
+		t.Fatalf("the order holds %d objects, want %d", len(order.Objects), length)
+	}
+	if len(order.Cycles) != 0 {
+		t.Errorf("a chain reports %d cycles", len(order.Cycles))
+	}
+
+	// Every object after the one it needs, which for a chain means the order is
+	// the chain itself.
+	for i := range length {
+		if got := order.Objects[i].Name.String(); got != named(i) {
+			t.Fatalf("position %d holds %s, want %s", i, got, named(i))
+		}
+	}
+}
+
+func named(i int) string { return fmt.Sprintf("t_%06d", i) }
