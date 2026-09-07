@@ -62,15 +62,30 @@ import (
 // their code with the connected role's rights, which on a DBA's connection is
 // every right there is.
 //
-// Operators are left unqualified, and that is a decision rather than an
-// oversight. Every comparison in these queries has an exact operator in
-// pg_catalog for the types it compares — including nspname = $1, where both
-// =(name,name) and =(name,text) exist — so no candidate can beat them, and
-// identical signatures go back to being settled by path order. It was measured
-// rather than assumed: an operator declared to win by type preference over
-// "char" = "char" does not, and neither does one against name = text. What
-// keeps that true as queries change is the corpus, which declares the shadowing
-// functions so that every integration test reads a schema trying to hijack it.
+// Operators are qualified too, and the way that was arrived at is worth keeping
+// because the shorter version of it was wrong.
+//
+// They were left bare at first, on the argument that pg_catalog has an exact
+// operator for every comparison these queries make, so nothing could beat it.
+// That was measured rather than assumed — two shadowing operators were declared
+// and neither won — and the measurement was right. The conclusion was not. Those
+// comparisons are safe because one side is an untyped literal, which the
+// resolver assigns the other side's type; where both sides have a type and
+// pg_catalog has no exact operator, it resolves by coercion, and a coercion
+// loses to an exact match declared anywhere on the path. There is no exact
+// =(oid, regclass) and no exact =(oid, integer), and this reads pg_depend and
+// pg_constraint with both.
+//
+// So the argument had been turned into an invariant — "an exact operator always
+// exists" — that nothing enforces. It was violated by the next query written
+// after it was made. An invariant a codebase has to remember is not one.
+//
+// Everything is named now: every comparison operator, every IN turned into
+// = ANY over an array so the operator can be named at all, and the CASE over
+// classid made searched for the same reason. It is what pg_dump does, and this
+// is why. The corpus declares shadowing operators for all three pairs, so a
+// comparison that loses its qualification empties a list rather than passing
+// quietly.
 
 // searchPathNow asks what the path is before the reader changes it, so that
 // what goes back is what was there rather than a default this package invented.

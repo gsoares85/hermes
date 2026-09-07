@@ -61,41 +61,49 @@ import (
 // stand; carried into the graph they would be cycles reported where there is
 // nothing to order.
 const listDependencies = `WITH edge AS (
-	SELECT CASE d.classid
-	         WHEN 'pg_catalog.pg_class'::regclass      THEN d.objid
-	         WHEN 'pg_catalog.pg_rewrite'::regclass    THEN rw.ev_class
-	         WHEN 'pg_catalog.pg_constraint'::regclass THEN con.conrelid
-	         WHEN 'pg_catalog.pg_attrdef'::regclass    THEN ad.adrelid
+	SELECT CASE
+	         WHEN d.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_class'::regclass
+	           THEN d.objid
+	         WHEN d.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_rewrite'::regclass
+	           THEN rw.ev_class
+	         WHEN d.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_constraint'::regclass
+	           THEN con.conrelid
+	         WHEN d.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_attrdef'::regclass
+	           THEN ad.adrelid
 	       END AS dependent,
-	       CASE d.classid
-	         WHEN 'pg_catalog.pg_class'::regclass      THEN 'inheritance'
-	         WHEN 'pg_catalog.pg_rewrite'::regclass    THEN 'query'
-	         WHEN 'pg_catalog.pg_constraint'::regclass THEN 'foreign key'
-	         WHEN 'pg_catalog.pg_attrdef'::regclass    THEN 'default'
+	       CASE
+	         WHEN d.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_class'::regclass
+	           THEN 'inheritance'
+	         WHEN d.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_rewrite'::regclass
+	           THEN 'query'
+	         WHEN d.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_constraint'::regclass
+	           THEN 'foreign key'
+	         WHEN d.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_attrdef'::regclass
+	           THEN 'default'
 	       END AS reason,
 	       d.refobjid AS needed
 	FROM pg_catalog.pg_depend d
 	LEFT JOIN pg_catalog.pg_rewrite rw
-	       ON d.classid = 'pg_catalog.pg_rewrite'::regclass AND rw.oid = d.objid
+	       ON d.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_rewrite'::regclass AND rw.oid OPERATOR(pg_catalog.=) d.objid
 	LEFT JOIN pg_catalog.pg_constraint con
-	       ON d.classid = 'pg_catalog.pg_constraint'::regclass AND con.oid = d.objid
-	      AND con.contype = 'f'
+	       ON d.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_constraint'::regclass AND con.oid OPERATOR(pg_catalog.=) d.objid
+	      AND con.contype OPERATOR(pg_catalog.=) 'f'
 	LEFT JOIN pg_catalog.pg_attrdef ad
-	       ON d.classid = 'pg_catalog.pg_attrdef'::regclass AND ad.oid = d.objid
-	WHERE d.refclassid = 'pg_catalog.pg_class'::regclass
-	  AND d.deptype IN ('n', 'a')
-	  AND (d.classid <> 'pg_catalog.pg_class'::regclass OR d.refobjsubid = 0))
+	       ON d.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_attrdef'::regclass AND ad.oid OPERATOR(pg_catalog.=) d.objid
+	WHERE d.refclassid OPERATOR(pg_catalog.=) 'pg_catalog.pg_class'::regclass
+	  AND d.deptype OPERATOR(pg_catalog.=) ANY (ARRAY['n', 'a'])
+	  AND (d.classid OPERATOR(pg_catalog.<>) 'pg_catalog.pg_class'::regclass OR d.refobjsubid OPERATOR(pg_catalog.=) 0))
 SELECT DISTINCT o.relkind, o.relname, e.reason, n.relkind, n.relname
 	FROM edge e
-	JOIN pg_catalog.pg_class o ON o.oid = e.dependent
-	JOIN pg_catalog.pg_namespace os ON os.oid = o.relnamespace
-	JOIN pg_catalog.pg_class n ON n.oid = e.needed
-	JOIN pg_catalog.pg_namespace ns ON ns.oid = n.relnamespace
-	WHERE os.nspname = $1
-	  AND ns.nspname = $1
-	  AND o.oid <> n.oid
-	  AND o.relkind IN ('r', 'p', 'v', 'S')
-	  AND n.relkind IN ('r', 'p', 'v', 'S')`
+	JOIN pg_catalog.pg_class o ON o.oid OPERATOR(pg_catalog.=) e.dependent
+	JOIN pg_catalog.pg_namespace os ON os.oid OPERATOR(pg_catalog.=) o.relnamespace
+	JOIN pg_catalog.pg_class n ON n.oid OPERATOR(pg_catalog.=) e.needed
+	JOIN pg_catalog.pg_namespace ns ON ns.oid OPERATOR(pg_catalog.=) n.relnamespace
+	WHERE os.nspname OPERATOR(pg_catalog.=) $1
+	  AND ns.nspname OPERATOR(pg_catalog.=) $1
+	  AND o.oid OPERATOR(pg_catalog.<>) n.oid
+	  AND o.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p', 'v', 'S'])
+	  AND n.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p', 'v', 'S'])`
 
 // dependencies answers the edges of the schema, checked against the objects it
 // was read to hold.

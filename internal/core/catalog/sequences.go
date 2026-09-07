@@ -52,18 +52,18 @@ const listSequences = `SELECT c.relname,
 	       t.relname,
 	       a.attname
 	FROM pg_catalog.pg_sequence s
-	JOIN pg_catalog.pg_class c ON c.oid = s.seqrelid
-	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+	JOIN pg_catalog.pg_class c ON c.oid OPERATOR(pg_catalog.=) s.seqrelid
+	JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
 	LEFT JOIN pg_catalog.pg_depend d
-	       ON d.classid = 'pg_catalog.pg_class'::regclass
-	      AND d.objid = c.oid
-	      AND d.refclassid = 'pg_catalog.pg_class'::regclass
-	      AND d.refobjsubid > 0
-	      AND d.deptype IN ('a', 'i')
-	LEFT JOIN pg_catalog.pg_class t ON t.oid = d.refobjid
+	       ON d.classid OPERATOR(pg_catalog.=) 'pg_catalog.pg_class'::regclass
+	      AND d.objid OPERATOR(pg_catalog.=) c.oid
+	      AND d.refclassid OPERATOR(pg_catalog.=) 'pg_catalog.pg_class'::regclass
+	      AND d.refobjsubid OPERATOR(pg_catalog.>) 0
+	      AND d.deptype OPERATOR(pg_catalog.=) ANY (ARRAY['a', 'i'])
+	LEFT JOIN pg_catalog.pg_class t ON t.oid OPERATOR(pg_catalog.=) d.refobjid
 	LEFT JOIN pg_catalog.pg_attribute a
-	       ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
-	WHERE n.nspname = $1`
+	       ON a.attrelid OPERATOR(pg_catalog.=) d.refobjid AND a.attnum OPERATOR(pg_catalog.=) d.refobjsubid
+	WHERE n.nspname OPERATOR(pg_catalog.=) $1`
 
 func (r *Reader) sequences(ctx context.Context, schema Name) ([]Sequence, error) {
 	rows := r.server.Query(ctx, listSequences, schema.String())

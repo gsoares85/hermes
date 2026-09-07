@@ -66,24 +66,24 @@ const listIndexes = `SELECT c.relname,
 	       pg_catalog.pg_get_indexdef(idx.indexrelid, 0, true),
 	       cols.columns
 	FROM pg_catalog.pg_index idx
-	JOIN pg_catalog.pg_class i ON i.oid = idx.indexrelid
-	JOIN pg_catalog.pg_class c ON c.oid = idx.indrelid
-	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+	JOIN pg_catalog.pg_class i ON i.oid OPERATOR(pg_catalog.=) idx.indexrelid
+	JOIN pg_catalog.pg_class c ON c.oid OPERATOR(pg_catalog.=) idx.indrelid
+	JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
 	LEFT JOIN LATERAL (
 	        SELECT pg_catalog.array_agg(a.attname ORDER BY k.ord) AS columns
 	        FROM pg_catalog.unnest(idx.indkey) WITH ORDINALITY AS k(attnum, ord)
 	        JOIN pg_catalog.pg_attribute a
-	          ON a.attrelid = idx.indrelid AND a.attnum = k.attnum
-	        WHERE k.ord <= idx.indnkeyatts
+	          ON a.attrelid OPERATOR(pg_catalog.=) idx.indrelid AND a.attnum OPERATOR(pg_catalog.=) k.attnum
+	        WHERE k.ord OPERATOR(pg_catalog.<=) idx.indnkeyatts
 	     ) cols ON true
-	WHERE n.nspname = $1
-	  AND c.relkind IN ('r', 'p')
+	WHERE n.nspname OPERATOR(pg_catalog.=) $1
+	  AND c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p'])
 	  AND idx.indisvalid
 	  AND NOT EXISTS (
 	        SELECT 1 FROM pg_catalog.pg_constraint con
-	        WHERE con.conindid = idx.indexrelid
-	          AND con.conrelid = idx.indrelid
-	          AND con.contype IN ('p', 'u', 'x'))`
+	        WHERE con.conindid OPERATOR(pg_catalog.=) idx.indexrelid
+	          AND con.conrelid OPERATOR(pg_catalog.=) idx.indrelid
+	          AND con.contype OPERATOR(pg_catalog.=) ANY (ARRAY['p', 'u', 'x']))`
 
 func (r *Reader) indexes(ctx context.Context, schema Name, tables map[string]*Table) error {
 	rows := r.server.Query(ctx, listIndexes, schema.String())

@@ -139,7 +139,7 @@ func (r *Reader) Read(ctx context.Context, schema Name) (read Schema, err error)
 // the two are different answers and only one of them is a fault.
 const schemaExists = `SELECT n.nspname
 	FROM pg_catalog.pg_namespace n
-	WHERE n.nspname = $1`
+	WHERE n.nspname OPERATOR(pg_catalog.=) $1`
 
 func (r *Reader) exists(ctx context.Context, schema Name) (bool, error) {
 	rows := r.server.Query(ctx, schemaExists, schema.String())
@@ -193,15 +193,15 @@ const listTables = `SELECT c.relname,
 	       c.reloptions,
 	       parents.inherits
 	FROM pg_catalog.pg_class c
-	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+	JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
 	LEFT JOIN LATERAL (
 	        SELECT pg_catalog.array_agg(p.relname ORDER BY i.inhseqno) AS inherits
 	        FROM pg_catalog.pg_inherits i
-	        JOIN pg_catalog.pg_class p ON p.oid = i.inhparent
-	        JOIN pg_catalog.pg_namespace pn ON pn.oid = p.relnamespace
-	        WHERE i.inhrelid = c.oid AND pn.nspname = n.nspname
+	        JOIN pg_catalog.pg_class p ON p.oid OPERATOR(pg_catalog.=) i.inhparent
+	        JOIN pg_catalog.pg_namespace pn ON pn.oid OPERATOR(pg_catalog.=) p.relnamespace
+	        WHERE i.inhrelid OPERATOR(pg_catalog.=) c.oid AND pn.nspname OPERATOR(pg_catalog.=) n.nspname
 	     ) parents ON true
-	WHERE n.nspname = $1 AND c.relkind IN ('r', 'p')`
+	WHERE n.nspname OPERATOR(pg_catalog.=) $1 AND c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p'])`
 
 // tables answers the tables of the schema, and the order the server listed
 // them in — which the caller uses only to build the slice, because Sort decides
@@ -270,13 +270,13 @@ const listColumns = `SELECT c.relname,
 	       a.attgenerated,
 	       co.collname
 	FROM pg_catalog.pg_attribute a
-	JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
-	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-	LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
-	LEFT JOIN pg_catalog.pg_collation co ON co.oid = a.attcollation
-	WHERE n.nspname = $1
-	  AND c.relkind IN ('r', 'p')
-	  AND a.attnum > 0
+	JOIN pg_catalog.pg_class c ON c.oid OPERATOR(pg_catalog.=) a.attrelid
+	JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
+	LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid OPERATOR(pg_catalog.=) a.attrelid AND d.adnum OPERATOR(pg_catalog.=) a.attnum
+	LEFT JOIN pg_catalog.pg_collation co ON co.oid OPERATOR(pg_catalog.=) a.attcollation
+	WHERE n.nspname OPERATOR(pg_catalog.=) $1
+	  AND c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p'])
+	  AND a.attnum OPERATOR(pg_catalog.>) 0
 	  AND NOT a.attisdropped`
 
 func (r *Reader) columns(ctx context.Context, schema Name, tables map[string]*Table) error {

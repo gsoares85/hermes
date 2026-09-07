@@ -39,11 +39,11 @@ const listViews = `SELECT c.relname,
 	       o.option_value,
 	       c.reloptions
 	FROM pg_catalog.pg_class c
-	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+	JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
 	LEFT JOIN LATERAL pg_catalog.pg_options_to_table(c.reloptions) o
-	       ON o.option_name = 'check_option'
-	WHERE n.nspname = $1
-	  AND c.relkind = 'v'`
+	       ON o.option_name OPERATOR(pg_catalog.=) 'check_option'
+	WHERE n.nspname OPERATOR(pg_catalog.=) $1
+	  AND c.relkind OPERATOR(pg_catalog.=) 'v'`
 
 func (r *Reader) views(ctx context.Context, schema Name) ([]View, error) {
 	rows := r.server.Query(ctx, listViews, schema.String())

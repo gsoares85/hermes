@@ -1204,8 +1204,8 @@ func TestACollationIsAlwaysExplicit(t *testing.T) {
 	}
 }
 
-// A schema that shadows the functions the reader calls does not get to choose
-// what the reader reads.
+// A schema that shadows the functions and operators the reader uses does not
+// get to choose what the reader reads.
 //
 // This is CVE-2018-1058 applied to this package. The reader points the search
 // path at the schema it is reading — which it must, because that is what makes
@@ -1220,12 +1220,19 @@ func TestACollationIsAlwaysExplicit(t *testing.T) {
 // unnest(anyarray), and array_agg(name) against array_agg(anynonarray): exact
 // matches against polymorphic ones, which win from anywhere on the path.
 //
-// The values below come from those three calls. A key read through a shadowed
-// unnest comes back as the single column 666 — which is not a column of
-// anything — and a parent list read through a shadowed array_agg comes back as
-// "hijacked". Asserting the real values is asserting that the server ran the
-// catalog's functions.
-func TestASchemaCannotHijackTheFunctionsTheReaderCalls(t *testing.T) {
+// The same holds for operators, and there the exposure is wider than it looks:
+// pg_catalog has an exact operator for a "char" against an untyped literal, and
+// none for an oid against a regclass or an integer. Those two resolve by
+// coercion, and a coercion loses to an exact match. The corpus declares all
+// three, so a comparison that loses its qualification reads a schema with
+// nothing in it.
+//
+// The values below come from those calls. A key read through a shadowed unnest
+// comes back as the single column 666 — which is not a column of anything — and
+// a parent list read through a shadowed array_agg comes back as "hijacked".
+// Asserting the real values is asserting that the server used the catalog's own
+// functions and operators.
+func TestASchemaCannotHijackWhatTheReaderCalls(t *testing.T) {
 	t.Parallel()
 
 	for _, version := range testsupport.SupportedVersions {
@@ -1251,6 +1258,28 @@ func TestASchemaCannotHijackTheFunctionsTheReaderCalls(t *testing.T) {
 			child := tableIn(t, schema, "child")
 			if got := columnNames(child.Inherits); !reflect.DeepEqual(got, []string{"parent"}) {
 				t.Errorf("the parents of the child read as %v, want [parent]", got)
+			}
+
+			// The operators. Each of the three shadowed pairs sits under a
+			// different read, and each answers false, so a hijack empties the
+			// list rather than bending it.
+			//
+			// oid against a regclass literal is what the dependency graph and
+			// the sequences are found by; oid against an integer is what tells
+			// a constraint somebody declared from one the server made; "char"
+			// against an untyped literal is every relkind and contype filter
+			// there is.
+			if len(schema.Dependencies) == 0 {
+				t.Error("the schema reads with no dependencies at all, which is what a hijacked oid = regclass answers")
+			}
+			if len(schema.Sequences) == 0 {
+				t.Error("the schema reads with no sequences at all")
+			}
+			if len(tableIn(t, schema, "constrained").Constraints) == 0 {
+				t.Error("the table reads with no constraints at all, which is what a hijacked oid = integer answers")
+			}
+			if len(schema.Tables) == 0 || len(schema.Views) == 0 {
+				t.Error("the schema reads with no tables or no views, which is what a hijacked \"char\" = text answers")
 			}
 		})
 	}

@@ -50,20 +50,20 @@ const listConstraints = `SELECT c.relname,
 	       cols.columns,
 	       ref.relname
 	FROM pg_catalog.pg_constraint con
-	JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
-	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+	JOIN pg_catalog.pg_class c ON c.oid OPERATOR(pg_catalog.=) con.conrelid
+	JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
 	LEFT JOIN pg_catalog.pg_class ref
-	       ON ref.oid = con.confrelid AND ref.relnamespace = c.relnamespace
+	       ON ref.oid OPERATOR(pg_catalog.=) con.confrelid AND ref.relnamespace OPERATOR(pg_catalog.=) c.relnamespace
 	LEFT JOIN LATERAL (
 	        SELECT pg_catalog.array_agg(a.attname ORDER BY k.ord) AS columns
 	        FROM pg_catalog.unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
 	        JOIN pg_catalog.pg_attribute a
-	          ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+	          ON a.attrelid OPERATOR(pg_catalog.=) con.conrelid AND a.attnum OPERATOR(pg_catalog.=) k.attnum
 	     ) cols ON true
-	WHERE n.nspname = $1
-	  AND c.relkind IN ('r', 'p')
-	  AND con.contype IN ('p', 'f', 'u', 'c', 'x')
-	  AND con.conparentid = 0`
+	WHERE n.nspname OPERATOR(pg_catalog.=) $1
+	  AND c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p'])
+	  AND con.contype OPERATOR(pg_catalog.=) ANY (ARRAY['p', 'f', 'u', 'c', 'x'])
+	  AND con.conparentid OPERATOR(pg_catalog.=) 0`
 
 func (r *Reader) constraints(ctx context.Context, schema Name, tables map[string]*Table) error {
 	rows := r.server.Query(ctx, listConstraints, schema.String())

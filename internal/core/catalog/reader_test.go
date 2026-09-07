@@ -20,8 +20,8 @@ import (
 // the model that comes out, not the sequence of questions that produced it.
 //
 // A key is the catalog table, and where one table is read by more than one
-// query it carries a fragment of that query as well — "pg_class relkind IN" is
-// the read of the tables and "pg_class relkind =" the read of the views. See
+// query it carries a fragment of that query as well — "pg_class ARRAY['r', 'p']" is
+// the read of the tables and "pg_class relkind OPERATOR(pg_catalog.=) 'v'" the read of the views. See
 // reads.
 type answers struct {
 	rows map[string][][]any
@@ -297,8 +297,8 @@ func TestColumnsLandOnTheirOwnTable(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}, {"customers", "r", false, "p", nil, nil}},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}, {"customers", "r", false, "p", nil, nil}},
 		"pg_attribute": {
 			{"customers", "name", 1, "text", false, nil, "", "", nil},
 			{"orders", "id", 1, "int4", true, nil, "", "", nil},
@@ -333,9 +333,9 @@ func TestAColumnOfAnUnknownTableIsAFault(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
-		"pg_attribute":        {{"somewhere_else", "id", 1, "int4", true, nil, "", "", nil}},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_attribute":             {{"somewhere_else", "id", 1, "int4", true, nil, "", "", nil}},
 	}}
 
 	if _, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales")); err == nil {
@@ -349,9 +349,9 @@ func TestAColumnCarriesTheFoldedType(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
-		"pg_attribute":        {{"orders", "created", 1, "timestamptz(3)", true, nil, "", "", nil}},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_attribute":             {{"orders", "created", 1, "timestamptz(3)", true, nil, "", "", nil}},
 	}}
 
 	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
@@ -371,8 +371,8 @@ func TestAColumnCarriesWhatTheCatalogSaidAboutIt(t *testing.T) {
 
 	def, collation := "nextval(:seq:)", "en_US.utf8"
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
 		"pg_attribute": {
 			{"orders", "id", 1, "int4", true, def, "a", "", nil},
 			{"orders", "label", 2, "text", false, nil, "", "", collation},
@@ -409,9 +409,9 @@ func TestAFailedQueryFailsTheRead(t *testing.T) {
 
 			server := &answers{
 				rows: map[string][][]any{
-					"pg_namespace":        existing(),
-					"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
-					"pg_attribute":        {},
+					"pg_namespace":             existing(),
+					"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+					"pg_attribute":             {},
 				},
 				err: map[string]error{table: errors.New("the server went away")},
 			}
@@ -508,8 +508,8 @@ func TestAReadSchemaComesOutSorted(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}, {"customers", "r", false, "p", nil, nil}},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}, {"customers", "r", false, "p", nil, nil}},
 		"pg_attribute": {
 			{"orders", "amount", 2, "numeric", false, nil, "", "", nil},
 			{"orders", "id", 1, "int4", true, nil, "", "", nil},
@@ -538,8 +538,8 @@ func TestATypeOfThisSchemaLosesTheSchemaFromItsName(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
 		"pg_attribute": {
 			{"orders", "own", 1, "sales.mood", false, nil, "", "", nil},
 			{"orders", "own_array", 2, "sales.mood[]", false, nil, "", "", nil},
@@ -577,9 +577,9 @@ func TestAQuotedSchemaIsStrippedFromATypeToo(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        {{"My Sales"}},
-		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
-		"pg_attribute":        {{"orders", "own", 1, `"My Sales".mood`, false, nil, "", "", nil}},
+		"pg_namespace":             {{"My Sales"}},
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_attribute":             {{"orders", "own", 1, `"My Sales".mood`, false, nil, "", "", nil}},
 	}}
 
 	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("My Sales"))
@@ -598,9 +598,9 @@ func TestConstraintsAreReadWithTheirKindAndTheirKeyOrder(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
-		"pg_attribute":        {},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_attribute":             {},
 		"pg_constraint": {
 			{"orders", "orders_pk", "p", "PRIMARY KEY (a, b)", []string{"a", "b"}, nil},
 			{"orders", "orders_fk", "f", "FOREIGN KEY (c) REFERENCES other(id)", []string{"c"}, "other"},
@@ -656,10 +656,10 @@ func TestAConstraintKindThisBuildDoesNotKnowIsCarriedThrough(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
-		"pg_attribute":        {},
-		"pg_constraint":       {{"orders", "odd", "z", "SOMETHING NEW", []string(nil), nil}},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_attribute":             {},
+		"pg_constraint":            {{"orders", "odd", "z", "SOMETHING NEW", []string(nil), nil}},
 	}}
 
 	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
@@ -679,9 +679,9 @@ func TestIndexesAreReadWithWhatDistinguishesThem(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
-		"pg_attribute":        {},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_attribute":             {},
 		"pg_index": {
 			{"orders", "by_email", true, false,
 				"CREATE UNIQUE INDEX by_email ON orders USING btree (email)", []string{"email"}},
@@ -716,16 +716,16 @@ func TestAConstraintOrIndexOfAnUnknownTableIsAFault(t *testing.T) {
 
 	for name, rows := range map[string]map[string][][]any{
 		"a constraint": {
-			"pg_namespace":        existing(),
-			"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
-			"pg_attribute":        {},
-			"pg_constraint":       {{"elsewhere", "c", "p", "PRIMARY KEY (a)", []string{"a"}, nil}},
+			"pg_namespace":             existing(),
+			"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+			"pg_attribute":             {},
+			"pg_constraint":            {{"elsewhere", "c", "p", "PRIMARY KEY (a)", []string{"a"}, nil}},
 		},
 		"an index": {
-			"pg_namespace":        existing(),
-			"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
-			"pg_attribute":        {},
-			"pg_index":            {{"elsewhere", "i", false, false, "CREATE INDEX", []string{"a"}}},
+			"pg_namespace":             existing(),
+			"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+			"pg_attribute":             {},
+			"pg_index":                 {{"elsewhere", "i", false, false, "CREATE INDEX", []string{"a"}}},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -750,9 +750,9 @@ func TestAFailureReadingConstraintsOrIndexesFailsTheRead(t *testing.T) {
 
 			server := &answers{
 				rows: map[string][][]any{
-					"pg_namespace":        existing(),
-					"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
-					"pg_attribute":        {},
+					"pg_namespace":             existing(),
+					"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+					"pg_attribute":             {},
 				},
 				err: map[string]error{table: errors.New("the server went away")},
 			}
@@ -771,8 +771,8 @@ func TestASequenceCarriesTheNumbersItHandsOut(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {},
 		"pg_sequence": {{"invoice_number", "bigint",
 			int64(100), int64(5), int64(10), int64(9000), int64(20), true, nil, nil}},
 	}}
@@ -809,8 +809,8 @@ func TestASequenceKeepsTheColumnThatOwnsIt(t *testing.T) {
 
 	table, column := "orders", "id"
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {},
 		"pg_sequence": {
 			{"orders_id_seq", "integer",
 				int64(1), int64(1), int64(1), int64(2147483647), int64(1), false, table, column},
@@ -846,9 +846,9 @@ func TestViewsAreReadWithTheQueryBehindThem(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {},
-		"pg_class relkind =": {
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {},
+		"pg_class relkind OPERATOR(pg_catalog.=) 'v'": {
 			{"active", " SELECT id FROM orders WHERE status = 'active';", nil, nil},
 			{"checked", " SELECT id FROM orders;", "cascaded", nil},
 		},
@@ -884,13 +884,13 @@ func TestSequencesAndViewsComeOutSorted(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {},
 		"pg_sequence": {
 			{"second", "bigint", int64(1), int64(1), int64(1), int64(2), int64(1), false, nil, nil},
 			{"first", "bigint", int64(1), int64(1), int64(1), int64(2), int64(1), false, nil, nil},
 		},
-		"pg_class relkind =": {
+		"pg_class relkind OPERATOR(pg_catalog.=) 'v'": {
 			{"beta", "SELECT 1", nil, nil},
 			{"alpha", "SELECT 1", nil, nil},
 		},
@@ -915,14 +915,14 @@ func TestSequencesAndViewsComeOutSorted(t *testing.T) {
 func TestAFailureReadingSequencesOrViewsFailsTheRead(t *testing.T) {
 	t.Parallel()
 
-	for _, query := range []string{"pg_sequence", "pg_class relkind ="} {
+	for _, query := range []string{"pg_sequence", "pg_class relkind OPERATOR(pg_catalog.=) 'v'"} {
 		t.Run(query, func(t *testing.T) {
 			t.Parallel()
 
 			server := &answers{
 				rows: map[string][][]any{
-					"pg_namespace":        existing(),
-					"pg_class relkind IN": {},
+					"pg_namespace":             existing(),
+					"pg_class ARRAY['r', 'p']": {},
 				},
 				err: map[string]error{query: errors.New("the server went away")},
 			}
@@ -1062,8 +1062,8 @@ func TestATableIsReadWithWhatItInherits(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"child", "r", false, "p", nil, []string{"second", "first"}}},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {{"child", "r", false, "p", nil, []string{"second", "first"}}},
 	}}
 
 	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
@@ -1089,7 +1089,7 @@ func TestATableSaysWhetherItTakesPartInPartitioning(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace": existing(),
-		"pg_class relkind IN": {
+		"pg_class ARRAY['r', 'p']": {
 			{"measurements", "p", false, "p", nil, nil},
 			{"measurements_2026", "r", true, "p", nil, []string{"measurements"}},
 			{"ordinary", "r", false, "p", nil, nil},
@@ -1145,9 +1145,9 @@ func TestAColumnThatIsNeitherGeneratedNorAnIdentitySaysSo(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
-		"pg_attribute":        {{"orders", "label", 1, "text", false, nil, "\x00", "\x00", nil}},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_attribute":             {{"orders", "label", 1, "text", false, nil, "\x00", "\x00", nil}},
 	}}
 
 	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
@@ -1187,8 +1187,8 @@ func TestACancelledReadStillPutsTheSearchPathBack(t *testing.T) {
 
 	server := &answers{
 		rows: map[string][][]any{
-			"pg_namespace":        existing(),
-			"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
+			"pg_namespace":             existing(),
+			"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
 		},
 		// Cancelled while the columns are being read, which is after the path
 		// has been pointed at the schema and before the read could finish.
@@ -1217,8 +1217,8 @@ func TestAForeignKeySaysWhatItPointsAt(t *testing.T) {
 	t.Parallel()
 
 	server := &answers{rows: map[string][][]any{
-		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
 		"pg_constraint": {
 			{"orders", "orders_fk", "f", "FOREIGN KEY (c) REFERENCES other(id)", []string{"c"}, "other"},
 			{"orders", "orders_pk", "p", "PRIMARY KEY (a)", []string{"a"}, nil},
@@ -1265,9 +1265,9 @@ func TestReadingCostsTheSameNumberOfQueriesWhateverTheSchemaHolds(t *testing.T) 
 		}
 
 		recorder := &recordingQuerier{inner: &answers{rows: map[string][][]any{
-			"pg_namespace":        existing(),
-			"pg_class relkind IN": listed,
-			"pg_attribute":        columns,
+			"pg_namespace":             existing(),
+			"pg_class ARRAY['r', 'p']": listed,
+			"pg_attribute":             columns,
 		}}}
 
 		if _, err := catalog.NewReader(recorder).Read(t.Context(), catalog.NewName("sales")); err != nil {

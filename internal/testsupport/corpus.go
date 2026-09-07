@@ -175,6 +175,33 @@ var corpusStatements = []string{
 	`CREATE AGGREGATE {schema}.array_agg(name) (
 		SFUNC = {schema}.hijack, STYPE = name[], INITCOND = '{}')`,
 
+	// Operators that shadow the ones the reader compares with, which is the
+	// half of the same attack the function sombras do not reach.
+	//
+	// An operator is hijacked when pg_catalog has no exact one for the types
+	// being compared and resolves by coercion instead: a coercion loses to an
+	// exact match declared anywhere on the path. These three are the pairs the
+	// reader actually compares — an oid against a regclass literal, an oid
+	// against an integer literal, and a "char" against an untyped one — and
+	// pg_catalog has an exact operator for only the last of them.
+	//
+	// They answer wrongly rather than doing damage, and wrongly in the
+	// direction that is loud: false where the reader expects a match, so a
+	// hijacked comparison reads a schema with nothing in it rather than one
+	// subtly off.
+	`CREATE FUNCTION {schema}.hijack_regclass(oid, regclass) RETURNS boolean
+		LANGUAGE sql IMMUTABLE AS $$ SELECT false $$`,
+	`CREATE OPERATOR {schema}.= (
+		LEFTARG = oid, RIGHTARG = regclass, PROCEDURE = {schema}.hijack_regclass)`,
+	`CREATE FUNCTION {schema}.hijack_integer(oid, integer) RETURNS boolean
+		LANGUAGE sql IMMUTABLE AS $$ SELECT false $$`,
+	`CREATE OPERATOR {schema}.= (
+		LEFTARG = oid, RIGHTARG = integer, PROCEDURE = {schema}.hijack_integer)`,
+	`CREATE FUNCTION {schema}.hijack_char("char", text) RETURNS boolean
+		LANGUAGE sql IMMUTABLE AS $$ SELECT false $$`,
+	`CREATE OPERATOR {schema}.= (
+		LEFTARG = "char", RIGHTARG = text, PROCEDURE = {schema}.hijack_char)`,
+
 	// Names that need quoting, in three ways that each broke something once:
 	// upper case, which folds if it is not quoted; a space, which ends the
 	// identifier; and an accent, which is more than one byte and sorts
