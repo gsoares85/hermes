@@ -24,6 +24,13 @@ type Schema struct {
 	Tables    []Table
 	Sequences []Sequence
 	Views     []View
+
+	// Dependencies is what each object of the schema needs to already exist.
+	// It is what Order turns into the sequence the DDL is written in, and it
+	// is read rather than worked out from the text the model already holds:
+	// telling which table a foreign key points at by reading its definition
+	// means parsing SQL, and the server has already done that.
+	Dependencies []Dependency
 }
 
 // Table is a table and everything defined on it.
@@ -190,4 +197,75 @@ type View struct {
 	// view is refused — and the copy at the other end quietly accepts rows the
 	// original would have rejected.
 	CheckOption string
+}
+
+// ObjectKind is what sort of object a dependency names.
+//
+// Three kinds and not more, because the graph only relates the objects this
+// model holds: a constraint and an index belong to a table and are created with
+// it, and a column belongs to a table too — none of them is a thing that can be
+// ordered independently of the table it is part of.
+type ObjectKind string
+
+// The kinds, spelled as the word rather than as the single character the
+// catalog stores, so that an object rendered into a message reads.
+const (
+	ObjectTable    ObjectKind = "table"
+	ObjectView     ObjectKind = "view"
+	ObjectSequence ObjectKind = "sequence"
+)
+
+// Object names one object of the schema.
+//
+// The kind is carried alongside the name even though PostgreSQL would not let
+// two of these share one: a table, a view and a sequence are all rows of
+// pg_class and the name is unique across them. It is here because the order
+// this feeds is read by the DDL writer, and "create sales.counter" is not a
+// statement until something says which kind of thing it is.
+type Object struct {
+	Kind ObjectKind
+	Name Name
+}
+
+// DependencyReason is why one object needs another to exist first.
+//
+// It is part of the edge rather than an annotation on it, because the writer
+// acts on it: a circle of foreign keys is broken by creating the tables first
+// and adding the keys afterwards, in ALTER TABLE statements of their own, and
+// a writer holding edges with no reason cannot tell which ones it is allowed
+// to defer. A circle of views has no such escape and must be reported instead.
+type DependencyReason string
+
+// The reasons, one per catalog table the dependency was recorded against.
+const (
+	// ReasonInheritance is a child table needing its parent, which covers
+	// declarative partitioning as well: a partition is recorded the same way,
+	// and the parent has to exist before either can be attached to it.
+	ReasonInheritance DependencyReason = "inheritance"
+
+	// ReasonForeignKey is a table needing the table its key points at.
+	ReasonForeignKey DependencyReason = "foreign key"
+
+	// ReasonQuery is a view needing what it selects from, whether that is a
+	// table or another view.
+	ReasonQuery DependencyReason = "query"
+
+	// ReasonDefault is a table needing the sequence a column default calls.
+	// It is the edge that puts CREATE SEQUENCE before CREATE TABLE, and the
+	// reason the ownership recorded in Sequence.OwnedBy is not an edge at all:
+	// OWNED BY needs the table, so it is written afterwards rather than
+	// ordered before.
+	ReasonDefault DependencyReason = "default"
+)
+
+// Dependency is one object of the schema needing another to exist first.
+//
+// It never names an object twice. A table whose foreign key points at itself
+// and a view whose query refers to itself through a recursive CTE are both
+// legal and both resolve where they stand, so an edge from an object to itself
+// would be a cycle reported where there is nothing to order.
+type Dependency struct {
+	Object Object
+	Needs  Object
+	Reason DependencyReason
 }

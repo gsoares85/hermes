@@ -26,6 +26,39 @@ func (s *Schema) Sort() {
 	byName(s.Tables, func(t Table) Name { return t.Name })
 	byName(s.Sequences, func(q Sequence) Name { return q.Name })
 	byName(s.Views, func(v View) Name { return v.Name })
+
+	slices.SortStableFunc(s.Dependencies, compareDependencies)
+}
+
+// compareDependencies orders the edges of the graph.
+//
+// By all three fields, because all three are what an edge is: two objects can
+// be related for more than one reason at once — a child table with a foreign
+// key back to its parent — and ordering by less than the whole would leave two
+// distinct edges in whichever order the assembly produced.
+func compareDependencies(a, b Dependency) int {
+	if order := compareObjects(a.Object, b.Object); order != 0 {
+		return order
+	}
+
+	if order := compareObjects(a.Needs, b.Needs); order != 0 {
+		return order
+	}
+
+	return strings.Compare(string(a.Reason), string(b.Reason))
+}
+
+// compareObjects orders two objects of a schema, by kind and then by name.
+//
+// The kind comes first so that a list of objects reads in groups rather than
+// interleaved, and it is compared at all because it is part of what an object
+// is here — the DDL writer needs to be told which kind of thing to create.
+func compareObjects(a, b Object) int {
+	if order := strings.Compare(string(a.Kind), string(b.Kind)); order != 0 {
+		return order
+	}
+
+	return strings.Compare(a.Name.String(), b.Name.String())
 }
 
 // Sort orders everything defined on the table.

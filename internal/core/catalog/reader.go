@@ -118,6 +118,14 @@ func (r *Reader) Read(ctx context.Context, schema Name) (read Schema, err error)
 		return Schema{}, err
 	}
 
+	// Last, because it is the only read that is about the objects rather than
+	// about one of them: an edge may only name something the reads above
+	// listed, and checking that is what keeps a hole in the order from
+	// reaching the DDL writer.
+	if read.Dependencies, err = r.dependencies(ctx, schema, objectsOf(read)); err != nil {
+		return Schema{}, err
+	}
+
 	// Sorted before it is handed over, so that no caller has to know the reader
 	// assembled it out of maps. See Sort.
 	read.Sort()

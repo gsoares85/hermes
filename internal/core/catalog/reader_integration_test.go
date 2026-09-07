@@ -191,7 +191,32 @@ func describe(want, got catalog.Schema) string {
 		return difference
 	}
 
-	return describeViews(want, got)
+	if difference := describeViews(want, got); difference != "" {
+		return difference
+	}
+
+	return describeDependencies(want, got)
+}
+
+// The graph is compared like everything else, and for the same reason: it is
+// part of the model the diff will compare, so two readings that disagree about
+// it are two readings that disagree.
+//
+// Edges are compared with ==, which they can be: an edge is two objects and a
+// reason, and none of them carries a slice.
+func describeDependencies(want, got catalog.Schema) string {
+	if len(want.Dependencies) != len(got.Dependencies) {
+		return report("dependencies", want.Dependencies, got.Dependencies)
+	}
+
+	for i := range want.Dependencies {
+		if want.Dependencies[i] != got.Dependencies[i] {
+			return report("the dependency of "+want.Dependencies[i].Object.Name.String(),
+				want.Dependencies[i], got.Dependencies[i])
+		}
+	}
+
+	return ""
 }
 
 // Sequences and views are compared with ==, which they can be: neither carries

@@ -275,6 +275,14 @@ var corpusStatements = []string{
 		SELECT id, email, status FROM {schema}.indexed WHERE status = 'active'
 		WITH CASCADED CHECK OPTION`,
 
+	// A view standing on something outside the schema. The model is of one
+	// schema and cannot order an object it does not hold, so the dependency is
+	// left out of the graph — and leaving it out has to be that and not a
+	// reader deciding the catalog contradicted itself, which is what a schema
+	// with a foot in another one would otherwise look like.
+	`CREATE VIEW {schema}.catalog_peek AS
+		SELECT oid, relname FROM pg_catalog.pg_class`,
+
 	// A view whose query refers to itself, through a recursive CTE. The
 	// self-reference is legal and resolves inside the query, so a reader that
 	// mistakes it for a dependency on the view finds a cycle that is not there.
