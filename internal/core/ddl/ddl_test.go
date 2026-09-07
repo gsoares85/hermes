@@ -627,3 +627,41 @@ func TestAConstraintDeclaredNotValidIsAddedAfterwards(t *testing.T) {
 		t.Errorf("the unvalidated check is added as %q, want %q", script.Statements[1], want)
 	}
 }
+
+// The script says where it applies, and says it as a statement.
+//
+// Every identifier in it is bare, so it builds into whichever schema the
+// session's path names. A file that did not say which would apply itself to the
+// first schema on whatever path the person running it happened to have — public,
+// usually, and never what they meant. For a product whose first rule is that
+// nothing destructive happens without a preview, the target of the operation
+// cannot be the one thing the preview leaves out.
+func TestTheScriptSaysWhichSchemaItBuildsInto(t *testing.T) {
+	t.Parallel()
+
+	script := ddl.Of(catalog.Schema{
+		Name:   name("My Sales"),
+		Tables: []catalog.Table{{Name: name("orders")}},
+	})
+
+	// Quoted like every other identifier, because a schema name is one.
+	mustWrite(t, script, `SET search_path TO "My Sales";`)
+
+	// And not among the statements: a caller sending them one at a time has
+	// scoped the session itself and knows where it is writing.
+	for _, statement := range script.Statements {
+		if strings.Contains(statement, "search_path") {
+			t.Errorf("the path is among the statements: %q", statement)
+		}
+	}
+}
+
+// An empty schema is still written as nothing, path included: there is no point
+// pointing a session at a schema in order to do nothing to it.
+func TestAnEmptySchemaIsWrittenWithoutAPath(t *testing.T) {
+	t.Parallel()
+
+	if got := ddl.Of(catalog.Schema{Name: name("sales")}).String(); got != "" {
+		t.Errorf("an empty schema is written as %q", got)
+	}
+}

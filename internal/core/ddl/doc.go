@@ -17,6 +17,26 @@
 // scoped to one schema and half to another. The catalog reads the same way,
 // for the same reason.
 //
+// # What is taken on trust
+//
+// Some of what this package writes it did not compose. The definition of a
+// constraint, of an index and of a view, and the default of a column, are text
+// the server rendered and this writes back word for word — because rebuilding
+// them would be a second implementation of a renderer that already exists, and
+// a worse one. It is the choice pg_dump makes for the same reason.
+//
+// It is worth naming as a trust boundary rather than leaving as a technique. A
+// desktop client connects wherever it is pointed, and a server that is not what
+// it claims to be — or something on the wire pretending to be one — can answer
+// anything at all to pg_get_constraintdef. What comes back is not escaped here
+// and cannot be: it is SQL, and the whole point of keeping it is that it is SQL.
+//
+// So the guard is not in this package. It is that a script is read before it is
+// run: the product's first rule is that nothing destructive happens without a
+// preview, and this is one of the things that rule is protecting. Whatever
+// applies a script should send it a statement at a time rather than as one
+// block, so that what ran and what did not is known.
+//
 // What the model does not carry is not written and not guessed. A partitioned
 // table written without its PARTITION BY is an ordinary table and a partition
 // written without its bounds is a copy that holds the wrong rows, so both are

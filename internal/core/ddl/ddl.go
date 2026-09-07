@@ -17,9 +17,22 @@ import (
 // running it has no way to know — so what could not be written is carried
 // beside the statements and printed above them.
 type Script struct {
+	// Schema is the schema the statements were written from, and the one String
+	// points a session at. The statements themselves name no schema at all, so
+	// this is the only place the target appears — which is what lets the same
+	// script build the same structure under another name, and why a script that
+	// did not say so would apply itself to whatever the reader's path happened
+	// to name.
+	Schema catalog.Name
+
 	// Statements are terminated by whoever runs them, not here: a caller that
 	// sends them one at a time wants them without a semicolon, and String adds
 	// one when it writes them out as a file.
+	//
+	// They do not include the statement that points the search path. A caller
+	// running them one at a time has scoped the session itself and knows where
+	// it is writing; String is for the other case, a file somebody opens later,
+	// and that one has to carry its target.
 	Statements []string
 
 	// Omitted is what the model does not carry enough of to write, each with
@@ -43,10 +56,24 @@ type Omission struct {
 	Reason string
 }
 
-// String writes the script out as a file: the omissions as comments at the top,
-// then the statements, each terminated.
+// String writes the script out as a file: where it applies, what was left out,
+// and then the statements, each terminated.
+//
+// The target comes first and as a statement rather than a comment. Every
+// identifier below it is bare, so the script builds into whichever schema the
+// session's path names — and a file that did not say which would quietly apply
+// itself to the first schema on whatever path the person running it happened to
+// have, which is usually public and never what they meant. For a product whose
+// first rule is that nothing destructive happens without a preview, the target
+// of the operation cannot be the one thing the preview does not show.
 func (s Script) String() string {
 	var text strings.Builder
+
+	if s.Schema.Valid() && len(s.Statements) > 0 {
+		fmt.Fprintf(&text, "-- Every name below is written bare, so this builds into whatever\n"+
+			"-- schema the search path names. Change the line below to build elsewhere.\n"+
+			"SET search_path TO %s;\n\n", Ident(s.Schema))
+	}
 
 	for _, omission := range s.Omitted {
 		// The name goes through %q rather than raw, because an identifier may
@@ -139,7 +166,7 @@ func newWriter(schema catalog.Schema) *writer {
 // reach and nobody can test.
 func (w *writer) script() Script {
 	creates, follows := w.statements()
-	script := Script{Omitted: w.omissions()}
+	script := Script{Schema: w.schema.Name, Omitted: w.omissions()}
 
 	for _, object := range w.order.Objects {
 		script.Statements = append(script.Statements, creates[object]...)
