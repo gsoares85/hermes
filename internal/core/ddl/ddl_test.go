@@ -580,3 +580,50 @@ func TestAnIdentityColumnWithNoSequenceInTheModelIsStillWritten(t *testing.T) {
 		t.Errorf("the column is written as %q, want it to contain %q", got, want)
 	}
 }
+
+// A constraint declared NOT VALID is added afterwards, not written inside the
+// table.
+//
+// CREATE TABLE parses the words and ignores them: the constraint is created
+// validated. Two things go wrong at once. The copy renders back without them,
+// so it compares unequal to what it was copied from — a change nobody made. And
+// the server scans the whole table to validate a constraint somebody
+// deliberately declared without validating, taking a lock on exactly the tables
+// big enough for NOT VALID to have been worth writing.
+func TestAConstraintDeclaredNotValidIsAddedAfterwards(t *testing.T) {
+	t.Parallel()
+
+	schema := catalog.Schema{
+		Name: name("sales"),
+		Tables: []catalog.Table{{
+			Name:    name("orders"),
+			Columns: []catalog.Column{{Name: name("amount"), Position: 1, Type: catalog.NewTypeName("numeric")}},
+			Constraints: []catalog.Constraint{
+				{Name: name("orders_positive"), Kind: catalog.ConstraintCheck,
+					Definition: "CHECK ((amount > 0)) NOT VALID"},
+				{Name: name("orders_sane"), Kind: catalog.ConstraintCheck,
+					Definition: "CHECK ((amount < 1000))"},
+			},
+		}},
+	}
+
+	script := ddl.Of(schema)
+
+	if len(script.Statements) != 2 {
+		t.Fatalf("the script holds %v, want the table and the deferred check", script.Statements)
+	}
+
+	// The validated one goes inside the table; the other cannot.
+	if !strings.Contains(script.Statements[0], `CONSTRAINT "orders_sane" CHECK ((amount < 1000))`) {
+		t.Errorf("the ordinary check is not inside the table:\n%s", script.Statements[0])
+	}
+	if strings.Contains(script.Statements[0], "NOT VALID") {
+		t.Errorf("the unvalidated check is inside the table, where it would be validated:\n%s",
+			script.Statements[0])
+	}
+
+	want := "ALTER TABLE \"orders\"\n    ADD CONSTRAINT \"orders_positive\" CHECK ((amount > 0)) NOT VALID"
+	if script.Statements[1] != want {
+		t.Errorf("the unvalidated check is added as %q, want %q", script.Statements[1], want)
+	}
+}

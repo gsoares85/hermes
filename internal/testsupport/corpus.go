@@ -278,6 +278,15 @@ var corpusStatements = []string{
 		CONSTRAINT constrained_check CHECK (char_length(label) < 100)
 	)`,
 
+	// A constraint the owner deliberately left unvalidated, which is how a
+	// check is added to a large table without scanning it. CREATE TABLE accepts
+	// the words NOT VALID and validates it anyway, so a writer that puts this
+	// inline produces a copy that differs from the original and takes a lock
+	// nobody asked for on the way.
+	`CREATE TABLE {schema}.unvalidated (amount numeric(10,2))`,
+	`ALTER TABLE {schema}.unvalidated
+		ADD CONSTRAINT unvalidated_positive CHECK (amount > 0) NOT VALID`,
+
 	// A foreign key that points at itself, which is legal and which a
 	// topological order has to survive.
 	`CREATE TABLE {schema}.employee (

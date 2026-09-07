@@ -141,10 +141,12 @@ func (w *writer) script() Script {
 // statements answers what creates each object and what has to follow every
 // creation, both keyed by the object they belong to.
 //
-// The two are separated because neither of the followers can go where the
-// object is created. A foreign key cannot, because a circle of them is not
-// creatable in any order; the ownership of a sequence cannot, because the table
-// needs the sequence — its default calls it — and OWNED BY needs the table.
+// The two are separated because none of the followers can go where the object
+// is created. A foreign key cannot, because a circle of them is not creatable in
+// any order; a constraint declared NOT VALID cannot, because CREATE TABLE
+// accepts the words and validates it anyway; the ownership of a sequence cannot,
+// because the table needs the sequence — its default calls it — and OWNED BY
+// needs the table.
 func (w *writer) statements() (creates, follows map[catalog.Object][]string) {
 	creates = map[catalog.Object][]string{}
 	follows = map[catalog.Object][]string{}
@@ -169,7 +171,7 @@ func (w *writer) statements() (creates, follows map[catalog.Object][]string) {
 		}
 
 		creates[object] = w.table(table)
-		follows[object] = w.foreignKeys(table)
+		follows[object] = w.afterTheTable(table)
 	}
 
 	for _, view := range w.schema.Views {
@@ -340,10 +342,11 @@ func (w *writer) table(table catalog.Table) []string {
 
 // contents are the columns and the constraints that go inside the parentheses.
 //
-// Every constraint but a foreign key. Those are added afterwards, in statements
-// of their own, because a circle of them cannot be written any other way — and
-// once one of them has to be deferred, deferring all of them is what keeps the
-// script from depending on which foreign key happened to be in a circle.
+// Every constraint but the two kinds that cannot go there. Foreign keys are
+// added afterwards because a circle of them cannot be written any other way —
+// and once one has to be deferred, deferring all of them keeps the script from
+// depending on which key happened to be in a circle. A constraint declared NOT
+// VALID is the other: CREATE TABLE accepts the words and ignores them.
 func (w *writer) contents(table catalog.Table) []string {
 	contents := make([]string, 0, len(table.Columns)+len(table.Constraints))
 
@@ -352,7 +355,7 @@ func (w *writer) contents(table catalog.Table) []string {
 	}
 
 	for _, constraint := range table.Constraints {
-		if constraint.Kind != catalog.ConstraintForeignKey {
+		if constraint.Kind != catalog.ConstraintForeignKey && !deferred(constraint) {
 			contents = append(contents, constraintClause(constraint))
 		}
 	}
@@ -445,12 +448,17 @@ func constraintClause(constraint catalog.Constraint) string {
 	return "CONSTRAINT " + Ident(constraint.Name) + " " + constraint.Definition
 }
 
-// foreignKeys writes the keys of a table, after every table exists.
-func (w *writer) foreignKeys(table catalog.Table) []string {
+// afterTheTable writes the constraints that could not go inside it: every
+// foreign key, and anything declared NOT VALID.
+func (w *writer) afterTheTable(table catalog.Table) []string {
 	var statements []string
 
 	for _, constraint := range table.Constraints {
-		if constraint.Kind != catalog.ConstraintForeignKey || w.declinedKey(table, constraint) {
+		if constraint.Kind == catalog.ConstraintForeignKey && w.declinedKey(table, constraint) {
+			continue
+		}
+
+		if constraint.Kind != catalog.ConstraintForeignKey && !deferred(constraint) {
 			continue
 		}
 
@@ -461,6 +469,24 @@ func (w *writer) foreignKeys(table catalog.Table) []string {
 	}
 
 	return statements
+}
+
+// deferred reports whether a constraint has to be added by ALTER TABLE because
+// CREATE TABLE cannot express it.
+//
+// NOT VALID is that case, and it fails quietly: CREATE TABLE parses the words
+// and creates the constraint validated anyway. Two things go wrong at once. The
+// copy renders back without them, so the model of the copy differs from the
+// model it came from and the diff reports a change nobody made. And the server
+// scans the whole table to validate a constraint somebody deliberately declared
+// without validating — a scan and a lock nobody asked for, on the tables large
+// enough that NOT VALID was worth writing in the first place.
+//
+// It is read off the rendered definition rather than from a field of its own
+// because that is where the server puts it, at the end and after everything
+// else the definition holds.
+func deferred(constraint catalog.Constraint) bool {
+	return strings.HasSuffix(constraint.Definition, " NOT VALID")
 }
 
 // declinedKey reports whether a foreign key points at something the script did
