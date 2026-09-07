@@ -60,9 +60,32 @@ lint-frontend: ## Run the frontend linters
 test: ## Run the unit tests
 	$(GO) test $(RACE) ./...
 
+# How many test binaries may talk to Docker at once. Unset means one per core,
+# which is what go test does on its own, and is the normal way to run this.
+#
+# It exists because of one failure worth recognising rather than debugging
+# again. Five packages need containers — internal/core/catalog,
+# internal/core/ddl, internal/core/conn, internal/driver/postgres and
+# internal/testsupport — and each opens a Docker client the moment it starts. If
+# the daemon refuses one of those connections, testcontainers walks its list of
+# ways to find a Docker host, fails at all of them, and reports the error of the
+# last one it tried: on Windows that is "rootless Docker is not supported on
+# Windows", which has nothing to do with what happened. It then caches the
+# failure for the life of the process, so a single refused connection at startup
+# fails every test in that binary while the other packages pass.
+#
+# The message names the wrong thing, so read it as "the Docker daemon did not
+# answer" and check that Docker is up and settled. If it keeps happening,
+# `make test-integration INTEGRATION_PARALLEL=2` starts fewer binaries at once.
+# It is not the default because the cause has not been pinned to concurrency —
+# six consecutive full runs at one binary per core were clean — and bounding it
+# costs about sixty per cent more wall clock for a guess.
+INTEGRATION_PARALLEL ?=
+
 .PHONY: test-integration
 test-integration: ## Run the integration tests (requires Docker)
-	$(GO) test $(RACE) -tags=$(INTEGRATION_TAGS) -timeout=20m ./...
+	$(GO) test $(RACE) -tags=$(INTEGRATION_TAGS) \
+		$(if $(INTEGRATION_PARALLEL),-p $(INTEGRATION_PARALLEL)) -timeout=20m ./...
 
 .PHONY: cover
 cover: ## Run the unit tests and enforce the coverage floor

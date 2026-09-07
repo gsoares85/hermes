@@ -362,5 +362,10 @@ jobs:
       # Starts PostgreSQL 12, 13, 15, 16, 17 and 18 with testcontainers. 12 is
       # the announced minimum, so it is in the matrix rather than trusted.
       # Everything that reads the catalog or generates DDL passes on all six.
+      #
+      # Through the Makefile rather than spelled out again, so that the command
+      # here and the one a person runs locally cannot drift apart. They had
+      # already been written out twice, which is how "green here" and "green
+      # there" stop meaning the same thing.
       - name: Run integration tests
-        run: go test -race -tags=integration -timeout=20m ./...
+        run: make test-integration
