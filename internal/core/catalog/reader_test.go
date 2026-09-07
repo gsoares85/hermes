@@ -1238,3 +1238,48 @@ func TestAForeignKeySaysWhatItPointsAt(t *testing.T) {
 		t.Errorf("the primary key points at %q, want nothing", got)
 	}
 }
+
+// The cost of reading a schema does not grow with what is in it.
+//
+// This is the decision the performance budget rests on, and until now only the
+// budget guarded it — badly, because a benchmark measures wall clock. A
+// thousand round trips against a container on the same machine cost a fraction
+// of a second and would have passed the five-second budget without anybody
+// learning that the reader had started asking per object.
+//
+// So it is counted instead of timed. The same reader over a schema of one table
+// and a schema of fifty asks exactly the same questions: a fixed number for the
+// whole schema, whatever it holds. That is what ADR-0007 records as reading by
+// whole schema, and what makes a thousand tables comfortable rather than tight.
+func TestReadingCostsTheSameNumberOfQueriesWhateverTheSchemaHolds(t *testing.T) {
+	t.Parallel()
+
+	asked := func(tables int) int {
+		listed := make([][]any, 0, tables)
+		columns := make([][]any, 0, tables)
+
+		for i := range tables {
+			named := fmt.Sprintf("table_%03d", i)
+			listed = append(listed, []any{named, "r", false, nil})
+			columns = append(columns, []any{named, "id", 1, "int4", true, nil, "", "", nil})
+		}
+
+		recorder := &recordingQuerier{inner: &answers{rows: map[string][][]any{
+			"pg_namespace":        existing(),
+			"pg_class relkind IN": listed,
+			"pg_attribute":        columns,
+		}}}
+
+		if _, err := catalog.NewReader(recorder).Read(t.Context(), catalog.NewName("sales")); err != nil {
+			t.Fatalf("Read() = %v", err)
+		}
+
+		return len(recorder.sql)
+	}
+
+	one, fifty := asked(1), asked(50)
+	if one != fifty {
+		t.Errorf("a schema of one table costs %d queries and one of fifty costs %d;"+
+			" the reader is asking per object", one, fifty)
+	}
+}

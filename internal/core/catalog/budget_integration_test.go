@@ -19,11 +19,16 @@ import (
 // the time somebody notices, the change that caused it is twenty commits back.
 //
 // What makes the budget reachable is the shape of the reading rather than any
-// tuning: a fixed number of queries for the whole schema, seven of them,
-// whatever it holds. Asking per object would be a thousand round trips before
-// anything was assembled, and no amount of care afterwards would win that back.
-// So what this really guards is that decision — the day somebody adds a query
-// inside a loop, this is what says so.
+// tuning: a fixed number of queries for the whole schema whatever it holds.
+// Asking per object would be a thousand round trips before anything was
+// assembled, and no amount of care afterwards would win that back.
+//
+// This does not guard that decision, and it used to claim it did. A thousand
+// round trips against a container on the same machine cost a fraction of a
+// second and would pass here without anybody learning that the reader had
+// started asking per object. What guards it is
+// TestReadingCostsTheSameNumberOfQueriesWhateverTheSchemaHolds, which counts
+// the questions instead of timing them. This is the time, and only the time.
 //
 // Measured on the oldest server in the matrix, which is the slowest and the one
 // a user is least likely to be able to upgrade.
