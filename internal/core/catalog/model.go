@@ -1,5 +1,7 @@
 package catalog
 
+import "slices"
+
 // The model of a schema.
 //
 // It is the spine the reading phases fill in, and it grows with them: this
@@ -296,4 +298,54 @@ type Dependency struct {
 	Object Object
 	Needs  Object
 	Reason DependencyReason
+}
+
+// Clone answers a copy of the schema that nobody else holds.
+//
+// A plain assignment almost does this, and that "almost" is the bug: the two
+// values would share every slice, so appending a table to a copy would append
+// it to the original — or worse, would not, depending on whether the slice had
+// room, which is the shape of bug that reproduces on one machine and not on
+// another.
+//
+// It exists because what a cache answers is shared and must not be modified.
+// Nothing in this model has a method that alters it, so an ordinary reader
+// needs no copy; this is for the caller that has one to edit, and it pays the
+// whole allocation exactly once, where the editing is, instead of on every read
+// for everyone. See ADR-0011 and Cache.
+func (s Schema) Clone() Schema {
+	copied := s
+
+	copied.Tables = make([]Table, len(s.Tables))
+	for i, table := range s.Tables {
+		copied.Tables[i] = table.Clone()
+	}
+
+	copied.Sequences = slices.Clone(s.Sequences)
+	copied.Views = slices.Clone(s.Views)
+	copied.Dependencies = slices.Clone(s.Dependencies)
+
+	return copied
+}
+
+// Clone answers a copy of the table that nobody else holds.
+func (t Table) Clone() Table {
+	copied := t
+
+	copied.Columns = slices.Clone(t.Columns)
+	copied.Inherits = slices.Clone(t.Inherits)
+
+	copied.Constraints = make([]Constraint, len(t.Constraints))
+	for i, constraint := range t.Constraints {
+		copied.Constraints[i] = constraint
+		copied.Constraints[i].Columns = slices.Clone(constraint.Columns)
+	}
+
+	copied.Indexes = make([]Index, len(t.Indexes))
+	for i, index := range t.Indexes {
+		copied.Indexes[i] = index
+		copied.Indexes[i].Columns = slices.Clone(index.Columns)
+	}
+
+	return copied
 }
