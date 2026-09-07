@@ -357,8 +357,13 @@ func (s Schema) Clone() Schema {
 	}
 
 	copied.Sequences = slices.Clone(s.Sequences)
-	copied.Views = slices.Clone(s.Views)
 	copied.Dependencies = slices.Clone(s.Dependencies)
+
+	copied.Views = make([]View, len(s.Views))
+	for i, view := range s.Views {
+		copied.Views[i] = view
+		copied.Views[i].Options = slices.Clone(view.Options)
+	}
 
 	return copied
 }
@@ -369,6 +374,7 @@ func (t Table) Clone() Table {
 
 	copied.Columns = slices.Clone(t.Columns)
 	copied.Inherits = slices.Clone(t.Inherits)
+	copied.Options = slices.Clone(t.Options)
 
 	copied.Constraints = make([]Constraint, len(t.Constraints))
 	for i, constraint := range t.Constraints {

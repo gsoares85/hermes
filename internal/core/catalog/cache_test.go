@@ -409,38 +409,82 @@ func TestACloneIsTheSameSchema(t *testing.T) {
 	}
 }
 
-// Every slice in the model is cloned, not shared.
+// Every slice in the model is cloned, not shared — found by walking the model
+// rather than by listing the slices.
 //
-// One test per level, because the failure is silent: a slice that was shared
-// looks right until somebody edits it, and then it changes a value nobody
-// wrote to.
+// The list was written by hand and went stale the moment the model grew: two
+// fields of storage parameters arrived, Clone did not learn about them, and this
+// test went on passing because the fixture that feeds it never filled them in.
+// A test whose thoroughness depends on somebody remembering to extend it is a
+// test that will be wrong exactly when the model changes, which is the only time
+// it matters.
+//
+// So it walks. Every slice reachable from a clone must have a different backing
+// array from the one in the original, and the walk reports the path it found —
+// Tables[0].Options rather than "a slice somewhere".
 func TestNoSliceOfTheModelSurvivesACloneShared(t *testing.T) {
 	t.Parallel()
 
 	original := crowded(2)
 	clone := original.Clone()
 
-	clone.Tables[0].Columns[0].Name = catalog.NewName("edited")
-	clone.Tables[0].Constraints[0].Columns[0] = catalog.NewName("edited")
-	clone.Tables[0].Indexes[0].Columns[0] = catalog.NewName("edited")
-	clone.Tables[0].Inherits[0] = catalog.NewName("edited")
-	clone.Sequences[0].Name = catalog.NewName("edited")
-	clone.Views[0].Name = catalog.NewName("edited")
-	clone.Dependencies[0].Reason = "edited"
-
-	for what, edited := range map[string]bool{
-		"a column":     original.Tables[0].Columns[0].Name.String() == "edited",
-		"a key":        original.Tables[0].Constraints[0].Columns[0].String() == "edited",
-		"an index":     original.Tables[0].Indexes[0].Columns[0].String() == "edited",
-		"a parent":     original.Tables[0].Inherits[0].String() == "edited",
-		"a sequence":   original.Sequences[0].Name.String() == "edited",
-		"a view":       original.Views[0].Name.String() == "edited",
-		"a dependency": original.Dependencies[0].Reason == "edited",
-	} {
-		if edited {
-			t.Errorf("editing %s of the clone changed the original", what)
-		}
+	// The fixture has to reach everywhere, or the walk proves nothing about the
+	// places it does not reach.
+	if empty := emptySlices(reflect.ValueOf(original), "Schema"); len(empty) != 0 {
+		t.Fatalf("the fixture leaves %v empty, so the walk cannot see them", empty)
 	}
+
+	if shared := sharedSlices(reflect.ValueOf(original), reflect.ValueOf(clone), "Schema"); len(shared) != 0 {
+		t.Errorf("the clone shares %v with the original", shared)
+	}
+}
+
+// sharedSlices answers the paths at which two values point at one array.
+func sharedSlices(a, b reflect.Value, path string) []string {
+	var shared []string
+
+	switch a.Kind() {
+	case reflect.Slice:
+		if a.Len() > 0 && b.Len() > 0 && a.Index(0).UnsafeAddr() == b.Index(0).UnsafeAddr() {
+			return []string{path}
+		}
+
+		for i := range min(a.Len(), b.Len()) {
+			shared = append(shared, sharedSlices(a.Index(i), b.Index(i), fmt.Sprintf("%s[%d]", path, i))...)
+		}
+	case reflect.Struct:
+		for i := range a.NumField() {
+			shared = append(shared, sharedSlices(a.Field(i), b.Field(i),
+				path+"."+a.Type().Field(i).Name)...)
+		}
+	default:
+	}
+
+	return shared
+}
+
+// emptySlices answers the paths at which a value holds no elements, so that a
+// fixture with a gap in it fails loudly instead of narrowing the walk.
+func emptySlices(v reflect.Value, path string) []string {
+	var empty []string
+
+	switch v.Kind() {
+	case reflect.Slice:
+		if v.Len() == 0 {
+			return []string{path}
+		}
+
+		for i := range v.Len() {
+			empty = append(empty, emptySlices(v.Index(i), fmt.Sprintf("%s[%d]", path, i))...)
+		}
+	case reflect.Struct:
+		for i := range v.NumField() {
+			empty = append(empty, emptySlices(v.Field(i), path+"."+v.Type().Field(i).Name)...)
+		}
+	default:
+	}
+
+	return empty
 }
 
 // crowded builds a schema with something at every level, so that a clone has
@@ -454,6 +498,7 @@ func crowded(tables int) catalog.Schema {
 		schema.Tables = append(schema.Tables, catalog.Table{
 			Name:     catalog.NewName(named),
 			Inherits: []catalog.Name{catalog.NewName("parent")},
+			Options:  []string{"fillfactor=70"},
 			Columns: []catalog.Column{
 				{Name: catalog.NewName("id"), Position: 1, Type: catalog.NewTypeName("integer"), NotNull: true},
 				{Name: catalog.NewName("label"), Position: 2, Type: catalog.NewTypeName("text")},
@@ -474,6 +519,7 @@ func crowded(tables int) catalog.Schema {
 
 		schema.Views = append(schema.Views, catalog.View{
 			Name: catalog.NewName("view_" + named), Definition: "SELECT id FROM " + named,
+			Options: []string{"security_barrier=true"},
 		})
 
 		schema.Dependencies = append(schema.Dependencies, catalog.Dependency{
