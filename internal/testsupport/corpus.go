@@ -269,6 +269,7 @@ var corpusStatements = []string{
 	`CREATE TABLE {schema}.measurements_2026 PARTITION OF {schema}.measurements
 		FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')`,
 	`ALTER TABLE {schema}.measurements ADD PRIMARY KEY (id, taken)`,
+	`CREATE INDEX measurements_taken ON {schema}.measurements (taken)`,
 
 	// A table with one key pointing at a partitioned table and another pointing
 	// at an ordinary one. Referencing a partitioned table is legal from

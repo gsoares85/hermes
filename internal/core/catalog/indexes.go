@@ -37,6 +37,19 @@ import (
 // the only place the expression, the WHERE of a partial index and the payload
 // of an INCLUDE survive.
 //
+// relispartition keeps out the copies the server makes rather than the indexes
+// anybody declared. An index on a partitioned table is cloned onto every
+// partition, so reading them puts one index in the model per partition for an
+// index somebody wrote once — and the writer would emit each of them against a
+// table whose own DDL already creates it.
+//
+// What that leaves unnamed is the primary key of a partition, which goes the
+// same way: the constraint is filtered as a child and the index as a clone.
+// Nothing is lost today, because a partition is not written at all — but this
+// is the second half of "not compared has to be named", and when partitioning
+// arrives it is these two lines that have to grow a reason rather than be
+// discovered.
+//
 // indisvalid keeps out an index that does not work. A CREATE INDEX
 // CONCURRENTLY that fails leaves one behind: it is in the catalog, it is not
 // used by the planner, and it exists only to be dropped or rebuilt. Reading it
@@ -79,6 +92,7 @@ const listIndexes = `SELECT c.relname,
 	WHERE n.nspname OPERATOR(pg_catalog.=) $1
 	  AND c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p'])
 	  AND idx.indisvalid
+	  AND i.relispartition OPERATOR(pg_catalog.=) false
 	  AND NOT EXISTS (
 	        SELECT 1 FROM pg_catalog.pg_constraint con
 	        WHERE con.conindid OPERATOR(pg_catalog.=) idx.indexrelid

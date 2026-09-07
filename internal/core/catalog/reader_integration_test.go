@@ -1419,3 +1419,33 @@ func TestAViewKeepsItsSecurityBarrier(t *testing.T) {
 		})
 	}
 }
+
+// An index declared once on a partitioned table is read once.
+//
+// PostgreSQL clones such an index onto every partition, so a reader that takes
+// pg_index at face value finds one index per partition for an index somebody
+// wrote a single time — and the writer would emit each of them against a table
+// whose own DDL already creates it.
+//
+// The clone is told from the declaration by relispartition on the index itself,
+// not on the table it is on: both live in the schema and both look like indexes
+// of a table this reader lists.
+func TestAnIndexOnAPartitionedTableIsReadOnce(t *testing.T) {
+	t.Parallel()
+
+	for _, version := range testsupport.SupportedVersions {
+		t.Run(version, func(t *testing.T) {
+			schema := readCorpus(t, version)
+
+			// Declared on the parent, so it belongs to the parent and nowhere
+			// else.
+			indexIn(t, tableIn(t, schema, "measurements"), "measurements_taken")
+
+			partition := tableIn(t, schema, "measurements_2026")
+			if len(partition.Indexes) != 0 {
+				t.Errorf("the partition reads with the indexes %v, want the clones left out",
+					indexNames(partition))
+			}
+		})
+	}
+}
