@@ -114,6 +114,12 @@ func (c *Cache) Read(ctx context.Context, schema Name) (Schema, error) {
 	reading, mine := c.reading(schema)
 	if mine {
 		c.fill(ctx, schema, reading)
+
+		// Answered directly rather than through the select below. The reading
+		// is finished, so both of its cases are ready — and a select with two
+		// ready cases picks one at random, which would hand back a
+		// cancellation for a schema that had just been read and cached.
+		return reading.schema, reading.err
 	}
 
 	select {

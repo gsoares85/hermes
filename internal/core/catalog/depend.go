@@ -142,9 +142,13 @@ func (r *Reader) dependencies(ctx context.Context, schema Name, known map[Object
 func checkKnown(schema Name, known map[Object]bool, edge Dependency) error {
 	for _, object := range []Object{edge.Object, edge.Needs} {
 		if !known[object] {
-			return fmt.Errorf("%w: %s.%s depends on %s, and the %s %s was not listed",
-				ErrInconsistentCatalog, schema, edge.Object.Name, edge.Needs.Name,
-				object.Kind, object.Name)
+			// The unknown one leads, because it is what the reader is
+			// complaining about; the edge follows as the context that makes the
+			// complaint traceable. Naming the pair first read as though either
+			// end might be the culprit.
+			return fmt.Errorf("%w: the %s %s.%s was not listed, and %s depends on %s",
+				ErrInconsistentCatalog, object.Kind, schema, object.Name,
+				edge.Object.Name, edge.Needs.Name)
 		}
 	}
 

@@ -84,6 +84,13 @@ func run(tb testing.TB, instance *Instance, schema string, statements []string) 
 // Extensions belong to the database rather than to a schema, so they are
 // installed once per container instead of once per corpus.
 //
+// Keyed by the connection string and not by the version, because the version is
+// not the container. A test that wants a server of its own calls StartPostgres
+// and gets one; if the shared instance of that version had already been through
+// here, the new container would be recorded as done and never get the
+// extension, and the corpus would fail to build on the exclusion constraint —
+// a failure in a fixture, reported as a failure of whatever was being tested.
+//
 // It has to be serialised, and IF NOT EXISTS is not enough: two tests building
 // their own corpus at the same time both find it missing and both try to create
 // it, and the second one fails on the unique index over the extension name.
@@ -100,7 +107,7 @@ func installExtensions(tb testing.TB, instance *Instance) {
 	extensionsOnce.Lock()
 	defer extensionsOnce.Unlock()
 
-	if extensionsBuilt[instance.Version] {
+	if extensionsBuilt[instance.DSN] {
 		return
 	}
 
@@ -109,7 +116,7 @@ func installExtensions(tb testing.TB, instance *Instance) {
 	// and the one information_schema cannot see at all.
 	instance.Exec(tb, "CREATE EXTENSION IF NOT EXISTS btree_gist")
 
-	extensionsBuilt[instance.Version] = true
+	extensionsBuilt[instance.DSN] = true
 }
 
 // schemaToken is what stands in for the schema in the statements below.

@@ -31,6 +31,11 @@ type counted struct {
 	// not the reads are serialised.
 	hold time.Duration
 
+	// after runs as the reading finishes, which is how a test puts something
+	// exactly at the moment between the answer being ready and the caller
+	// looking at it.
+	after func()
+
 	// held, when set, blocks every read until it is closed. It is what turns
 	// "two callers might overlap" into "two callers do overlap": without it the
 	// first read finishes before the second starts on any machine that is not
@@ -53,6 +58,10 @@ func (c *counted) Read(_ context.Context, schema catalog.Name) (catalog.Schema, 
 	defer c.inside.Add(-1)
 
 	time.Sleep(c.hold)
+
+	if c.after != nil {
+		c.after()
+	}
 
 	if c.held != nil {
 		c.once.Do(func() { close(c.arrived) })
@@ -591,5 +600,33 @@ func TestTwoSchemasAreReadOneAtATime(t *testing.T) {
 	}
 	if source.reads.Load() != 2 {
 		t.Errorf("the server was read %d times, want once per schema", source.reads.Load())
+	}
+}
+
+// The caller that performed the reading is told what it read, even if its
+// context expired while it was reading.
+//
+// It read the schema; the schema is in the cache; answering a cancellation
+// would throw away work already done and paid for. The bug it guards against is
+// quiet: the reading is synchronous, so by the time the caller waits both the
+// answer and the cancellation are ready, and a select with two ready cases
+// picks between them at random.
+func TestTheCallerThatDidTheReadingIsToldWhatItRead(t *testing.T) {
+	t.Parallel()
+
+	source := &counted{}
+	cache := catalog.NewCache(source)
+
+	// Cancelled the instant the reading finishes, which is the race stated
+	// deterministically: by the time Read looks, both cases are ready.
+	ctx, cancel := context.WithCancel(context.Background())
+	source.after = cancel
+
+	read, err := cache.Read(ctx, catalog.NewName("sales"))
+	if err != nil {
+		t.Fatalf("Read() = %v, want the schema it had just read", err)
+	}
+	if len(read.Tables) != 1 {
+		t.Errorf("the schema came back with %d tables", len(read.Tables))
 	}
 }

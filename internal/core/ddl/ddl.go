@@ -91,6 +91,13 @@ type writer struct {
 	// with a default that calls it.
 	tables map[catalog.Name]catalog.Table
 
+	// owned is the sequence each column owns, which the identity clause needs
+	// by column. It is a map rather than a search because it is asked once per
+	// identity column: over a schema of a thousand tables the search was a
+	// thousand walks of a thousand sequences, which is the kind of quadratic
+	// that hides until the day somebody has a large schema.
+	owned map[catalog.ColumnRef]catalog.Sequence
+
 	// omitted is every object not written, by the reason it was not.
 	omitted map[catalog.Object]string
 
@@ -104,11 +111,18 @@ func newWriter(schema catalog.Schema) *writer {
 		schema:  schema,
 		order:   schema.Order(),
 		tables:  make(map[catalog.Name]catalog.Table, len(schema.Tables)),
+		owned:   make(map[catalog.ColumnRef]catalog.Sequence, len(schema.Sequences)),
 		omitted: map[catalog.Object]string{},
 	}
 
 	for _, table := range schema.Tables {
 		writer.tables[table.Name] = table
+	}
+
+	for _, sequence := range schema.Sequences {
+		if sequence.OwnedBy.Valid() {
+			writer.owned[sequence.OwnedBy] = sequence
+		}
 	}
 
 	writer.findOmissions()
@@ -451,7 +465,7 @@ func (w *writer) generation(table catalog.Table, column catalog.Column) string {
 func (w *writer) identity(table catalog.Table, column catalog.Column) string {
 	clause := "GENERATED " + strings.ToUpper(column.Identity) + " AS IDENTITY"
 
-	counter, known := w.sequenceOwnedBy(table.Name, column.Name)
+	counter, known := w.owned[catalog.ColumnRef{Table: table.Name, Column: column.Name}]
 	if !known {
 		return clause
 	}
@@ -570,18 +584,6 @@ func writeView(view catalog.View) string {
 
 	return options(clauses("CREATE VIEW "+Ident(view.Name), storage(view.Options), "AS"),
 		view.Definition, check)
-}
-
-func (w *writer) sequenceOwnedBy(table, column catalog.Name) (catalog.Sequence, bool) {
-	owner := catalog.ColumnRef{Table: table, Column: column}
-
-	for _, sequence := range w.schema.Sequences {
-		if sequence.OwnedBy == owner {
-			return sequence, true
-		}
-	}
-
-	return catalog.Sequence{}, false
 }
 
 // identityOwned reports whether the column that owns this sequence is an
