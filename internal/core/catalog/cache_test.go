@@ -676,3 +676,49 @@ func TestTheCallerThatDidTheReadingIsToldWhatItRead(t *testing.T) {
 		t.Errorf("the schema came back with %d tables", len(read.Tables))
 	}
 }
+
+// A caller that gives up while waiting for its turn to read stops waiting.
+//
+// Readings are serialised because they share one connection, so a caller can be
+// queued behind somebody else's read of a large schema — which is exactly the
+// long operation the product requires to be cancellable. Waiting on a mutex
+// cannot be given up on; waiting on a channel can, and that is why the turn is a
+// token rather than a lock.
+//
+// The read that is holding the turn is left alone. It was not cancelled, and
+// taking it down because a second caller lost patience would punish the one that
+// arrived first.
+func TestACallerWaitingForItsTurnCanGiveUp(t *testing.T) {
+	t.Parallel()
+
+	source := blocking()
+	cache := catalog.NewCache(source)
+
+	// The first caller takes the turn and stays in the source.
+	holding := make(chan struct{})
+
+	go func() {
+		defer close(holding)
+
+		if _, err := cache.Read(context.Background(), catalog.NewName("first")); err != nil {
+			t.Errorf("the caller holding the turn got %v", err)
+		}
+	}()
+
+	<-source.arrived
+
+	// The second wants a different schema, so it is not waiting on the first
+	// reading — it is waiting on the turn.
+	giveUp, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := cache.Read(giveUp, catalog.NewName("second")); !errors.Is(err, context.Canceled) {
+		t.Errorf("the caller that gave up got %v, want the cancellation", err)
+	}
+
+	close(source.held)
+	<-holding
+
+	// And giving up left nothing behind: the schema it never read is read now.
+	mustRead(t, cache, "second")
+}

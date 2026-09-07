@@ -47,7 +47,11 @@ type Cache struct {
 	schemas map[Name]*pending
 
 	// serialised is held for the length of a read, which is what keeps two of
-	// them from overlapping.
+	// them from overlapping. It is a channel rather than a mutex so that
+	// waiting for it can be given up on: a caller that has been cancelled must
+	// not be kept until somebody else's read of a large schema finishes, which
+	// is the whole of what the product means by a long operation being
+	// cancellable.
 	//
 	// A cache belongs to one connection and the source reads through it. Two
 	// readings at once would be two conversations on one connection, which no
@@ -62,7 +66,7 @@ type Cache struct {
 	// that knows a connection is being shared. A reader handed to one caller at
 	// a time needs no lock, and paying for one there would charge every use for
 	// a problem only this one has.
-	serialised sync.Mutex
+	serialised chan struct{}
 }
 
 // Source is where a cache gets a schema it does not have.
@@ -98,7 +102,12 @@ type pending struct {
 
 // NewCache builds a cache over whatever reads schemas.
 func NewCache(source Source) *Cache {
-	return &Cache{source: source, schemas: map[Name]*pending{}}
+	return &Cache{
+		source:  source,
+		schemas: map[Name]*pending{},
+		// Buffered by one, and holding the token is the right to read.
+		serialised: make(chan struct{}, 1),
+	}
 }
 
 // Read answers the schema, from the cache when it is there and from the server
@@ -180,9 +189,17 @@ func (c *Cache) reading(schema Name) (*pending, bool) {
 // moment's trouble permanent until somebody thought to invalidate a schema that
 // never loaded.
 func (c *Cache) fill(ctx context.Context, schema Name, reading *pending) {
-	c.serialised.Lock()
-	reading.schema, reading.err = c.source.Read(ctx, schema)
-	c.serialised.Unlock()
+	select {
+	case c.serialised <- struct{}{}:
+		reading.schema, reading.err = c.source.Read(ctx, schema)
+		<-c.serialised
+	case <-ctx.Done():
+		// Given up on before the turn came. The schema was never read, so this
+		// is a failure like any other and is not kept — the next caller starts
+		// a reading of its own rather than inheriting a cancellation that had
+		// nothing to do with it.
+		reading.err = fmt.Errorf("waiting to read %s: %w", schema, ctx.Err())
+	}
 
 	if reading.err != nil {
 		c.forget(schema, reading)
