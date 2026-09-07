@@ -256,6 +256,16 @@ var corpusStatements = []string{
 	`CREATE TABLE {schema}.with_a_hole (id integer, gone text, kept text)`,
 	`ALTER TABLE {schema}.with_a_hole DROP COLUMN gone`,
 
+	// A table whose writes are not written ahead, and one with storage
+	// parameters somebody set on purpose. Recreating the first as an ordinary
+	// table gives the copy durability the original never had; recreating an
+	// ordinary one as unlogged throws away rows the first time the server stops
+	// badly. The parameters are the difference between a copy that behaves like
+	// the original under load and one that does not.
+	`CREATE UNLOGGED TABLE {schema}.scratch (id integer PRIMARY KEY, payload text)`,
+	`CREATE TABLE {schema}.tuned (id integer PRIMARY KEY, busy text)
+		WITH (fillfactor = 70, autovacuum_vacuum_scale_factor = 0.05)`,
+
 	// A table with no columns at all is legal, and it is the shape that finds
 	// a reader which assumes every table joins to at least one row.
 	`CREATE TABLE {schema}.empty_table ()`,
@@ -387,6 +397,14 @@ var corpusStatements = []string{
 	// with a foot in another one would otherwise look like.
 	`CREATE VIEW {schema}.catalog_peek AS
 		SELECT oid, relname FROM pg_catalog.pg_class`,
+
+	// A view with a security barrier, which is not decoration: it refuses to
+	// let a cheap function see the rows the view was meant to hide, and a copy
+	// made without it answers questions the original refused. security_invoker
+	// is the same kind of setting and arrived in PostgreSQL 15, so it is not
+	// here — the corpus has to build on every version of the matrix.
+	`CREATE VIEW {schema}.guarded WITH (security_barrier = true) AS
+		SELECT id, email FROM {schema}.indexed WHERE status = 'active'`,
 
 	// A view whose query refers to itself, through a recursive CTE. The
 	// self-reference is legal and resolves inside the query, so a reader that

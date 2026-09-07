@@ -202,9 +202,10 @@ func describeDependencies(want, got catalog.Schema) string {
 	return ""
 }
 
-// Sequences and views are compared with ==, which they can be: neither carries
-// a slice. A field added to either without a thought for how it compares breaks
-// here rather than quietly stopping being compared.
+// A sequence is compared with ==, which it can be: it carries no slice, so a
+// field added to it without a thought for how it compares breaks here rather
+// than quietly stopping being compared. A view carries its storage parameters
+// and so has a comparison of its own.
 func describeSequences(want, got catalog.Schema) string {
 	if len(want.Sequences) != len(got.Sequences) {
 		return report("sequences", sequenceNames(want), sequenceNames(got))
@@ -226,12 +227,25 @@ func describeViews(want, got catalog.Schema) string {
 	}
 
 	for i := range want.Views {
-		if want.Views[i] != got.Views[i] {
+		if !slices.Equal(want.Views[i].Options, got.Views[i].Options) {
+			return report("the storage parameters of the view "+want.Views[i].Name.String(),
+				want.Views[i].Options, got.Views[i].Options)
+		}
+
+		if !sameView(want.Views[i], got.Views[i]) {
 			return report("the view "+want.Views[i].Name.String(), want.Views[i], got.Views[i])
 		}
 	}
 
 	return ""
+}
+
+// sameView compares two views without their storage parameters, which the
+// caller has already compared and reported more precisely.
+func sameView(want, got catalog.View) bool {
+	return want.Name == got.Name &&
+		want.Definition == got.Definition &&
+		want.CheckOption == got.CheckOption
 }
 
 func sequenceNames(schema catalog.Schema) []string {
@@ -289,6 +303,14 @@ func describeTable(want, got catalog.Table) string {
 // thing that could differ between 12 and 18 and be believed because nothing
 // looked.
 func describeTableItself(want, got catalog.Table) string {
+	if want.Unlogged != got.Unlogged {
+		return report(want.Name.String()+" unlogged", want.Unlogged, got.Unlogged)
+	}
+
+	if !slices.Equal(want.Options, got.Options) {
+		return report(want.Name.String()+" storage parameters", want.Options, got.Options)
+	}
+
 	if want.Partitioned != got.Partitioned || want.Partition != got.Partition {
 		return report(want.Name.String()+" partitioning",
 			[]bool{want.Partitioned, want.Partition},
@@ -1293,6 +1315,77 @@ func TestABpcharColumnKeepsWhetherItHasALength(t *testing.T) {
 			}
 			if got := columnIn(t, aliases, "q").Type.String(); got != "character(3)" {
 				t.Errorf("a bpchar(3) reads as %q, want character(3)", got)
+			}
+		})
+	}
+}
+
+// What a table is made of is not all a table is: whether its writes are logged,
+// and the storage parameters somebody set on it.
+//
+// Both change how the copy behaves rather than how it looks. An unlogged table
+// recreated as an ordinary one has durability the original never had and the
+// write cost that comes with it; an ordinary one recreated as unlogged throws
+// away rows the first time the server stops badly. fillfactor and the autovacuum
+// thresholds are what somebody tuned for a reason nobody wrote down.
+func TestATableIsReadWithHowItIsStored(t *testing.T) {
+	t.Parallel()
+
+	for _, version := range testsupport.SupportedVersions {
+		t.Run(version, func(t *testing.T) {
+			schema := readCorpus(t, version)
+
+			if !tableIn(t, schema, "scratch").Unlogged {
+				t.Error("the unlogged table reads as logged")
+			}
+			if tableIn(t, schema, "indexed").Unlogged {
+				t.Error("an ordinary table reads as unlogged")
+			}
+
+			tuned := tableIn(t, schema, "tuned").Options
+			want := []string{"autovacuum_vacuum_scale_factor=0.05", "fillfactor=70"}
+			if !slices.Equal(tuned, want) {
+				t.Errorf("the tuned table reads with the parameters %v, want %v", tuned, want)
+			}
+			if got := tableIn(t, schema, "indexed").Options; len(got) != 0 {
+				t.Errorf("a table nobody tuned reads with the parameters %v", got)
+			}
+		})
+	}
+}
+
+// A view keeps its security barrier, which decides what a cheap function is
+// allowed to see.
+//
+// A view declared with one refuses to let a function chosen for being cheap run
+// against rows the view was meant to hide. A copy made without it answers
+// questions the original refused — a change of security posture produced by a
+// copy of a structure, which is exactly the kind of difference a model that
+// loses it cannot report.
+//
+// The check option is kept out of this list, because it has a field of its own:
+// carrying it in both would have the writer emit it twice and the diff report
+// one change as two.
+func TestAViewKeepsItsSecurityBarrier(t *testing.T) {
+	t.Parallel()
+
+	for _, version := range testsupport.SupportedVersions {
+		t.Run(version, func(t *testing.T) {
+			schema := readCorpus(t, version)
+
+			guarded := viewIn(t, schema, "guarded").Options
+			if !slices.Equal(guarded, []string{"security_barrier=true"}) {
+				t.Errorf("the guarded view reads with the parameters %v", guarded)
+			}
+
+			// The one that carries a check option carries it as a check option
+			// and not as a parameter.
+			checked := viewIn(t, schema, "checked_orders")
+			if len(checked.Options) != 0 {
+				t.Errorf("the check option appears among the parameters %v", checked.Options)
+			}
+			if checked.CheckOption != "cascaded" {
+				t.Errorf("the check option reads as %q, want cascaded", checked.CheckOption)
 			}
 		})
 	}

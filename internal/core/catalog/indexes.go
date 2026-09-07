@@ -37,6 +37,14 @@ import (
 // the only place the expression, the WHERE of a partial index and the payload
 // of an INCLUDE survive.
 //
+// indisvalid keeps out an index that does not work. A CREATE INDEX
+// CONCURRENTLY that fails leaves one behind: it is in the catalog, it is not
+// used by the planner, and it exists only to be dropped or rebuilt. Reading it
+// would put a working index in the copy where the original has a broken one,
+// which is not a copy — and the alternative, writing it as broken, is not
+// something DDL can express. It is not compared, and this is where that is
+// written down. pg_dump leaves them out for the same reason.
+//
 // The columns come back through a lateral join rather than an ARRAY subquery so
 // that it can name pg_catalog.unnest and pg_catalog.array_agg. indkey is an
 // int2vector, so the shadowing signature that would hijack it differs from the
@@ -70,6 +78,7 @@ const listIndexes = `SELECT c.relname,
 	     ) cols ON true
 	WHERE n.nspname = $1
 	  AND c.relkind IN ('r', 'p')
+	  AND idx.indisvalid
 	  AND NOT EXISTS (
 	        SELECT 1 FROM pg_catalog.pg_constraint con
 	        WHERE con.conindid = idx.indexrelid

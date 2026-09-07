@@ -27,6 +27,10 @@ func (s *Schema) Sort() {
 	byName(s.Sequences, func(q Sequence) Name { return q.Name })
 	byName(s.Views, func(v View) Name { return v.Name })
 
+	for i := range s.Views {
+		slices.Sort(s.Views[i].Options)
+	}
+
 	slices.SortStableFunc(s.Dependencies, compareDependencies)
 }
 
@@ -82,6 +86,10 @@ func (t *Table) Sort() {
 
 	byName(t.Constraints, func(c Constraint) Name { return c.Name })
 	byName(t.Indexes, func(i Index) Name { return i.Name })
+
+	// The storage parameters come back in whatever order they were set, which
+	// is not a property of the table.
+	slices.Sort(t.Options)
 }
 
 // byName orders a list of objects by the identifier that names them.

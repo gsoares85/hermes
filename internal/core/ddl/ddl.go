@@ -319,12 +319,36 @@ func ownership(sequence catalog.Sequence) string {
 	return "ALTER SEQUENCE " + Ident(sequence.Name) + " OWNED BY " + qualify(sequence.OwnedBy)
 }
 
+// storage writes the parameters declared on a table or a view.
+//
+// They are written back because a copy without them behaves differently from
+// the thing it was copied from: fillfactor and the autovacuum thresholds under
+// load, and on a view security_barrier, which decides whether a cheap function
+// gets to see the rows the view was meant to hide.
+//
+// The text comes from the catalog as key=value and goes back as it came. It is
+// not quoted: a storage parameter is a name the server defines, not an
+// identifier somebody chose, and there is no set of them a person can extend.
+func storage(options []string) string {
+	if len(options) == 0 {
+		return ""
+	}
+
+	return "WITH (" + strings.Join(options, ", ") + ")"
+}
+
 // table writes a CREATE TABLE and the indexes that stand on their own.
 func (w *writer) table(table catalog.Table) []string {
+	kind := "CREATE TABLE "
+	if table.Unlogged {
+		kind = "CREATE UNLOGGED TABLE "
+	}
+
 	statements := []string{clauses(
-		"CREATE TABLE "+Ident(table.Name),
+		kind+Ident(table.Name),
 		body(w.contents(table)),
 		inherits(table),
+		storage(table.Options),
 	)}
 
 	for _, index := range table.Indexes {
@@ -544,7 +568,8 @@ func writeView(view catalog.View) string {
 		check = "WITH " + strings.ToUpper(view.CheckOption) + " CHECK OPTION"
 	}
 
-	return options("CREATE VIEW "+Ident(view.Name)+" AS", view.Definition, check)
+	return options(clauses("CREATE VIEW "+Ident(view.Name), storage(view.Options), "AS"),
+		view.Definition, check)
 }
 
 func (w *writer) sequenceOwnedBy(table, column catalog.Name) (catalog.Sequence, bool) {

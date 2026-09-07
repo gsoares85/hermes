@@ -22,13 +22,22 @@ import (
 // does not mention it — so a reader that asks only for the definition drops the
 // clause that decides whether a write through the view is refused.
 //
+// The rest of reloptions is read as well, and security_barrier is why that is
+// not cosmetic: a view declared with it refuses to let a cheap function see the
+// rows the view was meant to hide, and a copy made without it answers questions
+// the original refused. security_invoker, from PostgreSQL 15, decides whose
+// rights the view reads with. Both are a change of security posture produced by
+// a copy of a structure, which is the kind of difference this model exists to
+// carry rather than to lose.
+//
 // relkind 'v' is a view. A materialised view ('m') is a different object with
 // storage of its own, and it is not compared by this version; it is left out
 // here rather than read as a view, because reading one as a view would produce
 // DDL that creates the wrong kind of object.
 const listViews = `SELECT c.relname,
 	       pg_catalog.pg_get_viewdef(c.oid),
-	       o.option_value
+	       o.option_value,
+	       c.reloptions
 	FROM pg_catalog.pg_class c
 	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 	LEFT JOIN LATERAL pg_catalog.pg_options_to_table(c.reloptions) o
@@ -46,15 +55,17 @@ func (r *Reader) views(ctx context.Context, schema Name) ([]View, error) {
 		var (
 			name, definition string
 			checkOption      *string
+			options          []string
 		)
 
-		if err := rows.Scan(&name, &definition, &checkOption); err != nil {
+		if err := rows.Scan(&name, &definition, &checkOption, &options); err != nil {
 			return nil, fmt.Errorf("reading a view of %s: %w", schema, err)
 		}
 
 		views = append(views, View{
 			Name:        NewName(name),
 			Definition:  viewQuery(definition),
+			Options:     besidesCheckOption(options),
 			CheckOption: text(checkOption),
 		})
 	}
@@ -64,6 +75,25 @@ func (r *Reader) views(ctx context.Context, schema Name) ([]View, error) {
 	}
 
 	return views, nil
+}
+
+// besidesCheckOption drops the check option from the storage parameters, which
+// is where the catalog keeps it and where the model does not.
+//
+// It has a field of its own because it changes what a write through the view is
+// allowed to do, which is worth more than a line in a list. Leaving it in both
+// places would have the writer emit it twice — once in the WITH and once as the
+// clause — and have the diff report one change as two.
+func besidesCheckOption(options []string) []string {
+	var kept []string
+
+	for _, option := range options {
+		if !strings.HasPrefix(option, "check_option=") {
+			kept = append(kept, option)
+		}
+	}
+
+	return kept
 }
 
 // viewQuery is the definition without the punctuation the server wraps it in.

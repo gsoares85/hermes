@@ -64,6 +64,20 @@ type Table struct {
 	// producing either.
 	Partitioned bool
 	Partition   bool
+
+	// Unlogged is a table whose writes are not written ahead, and whose rows
+	// are gone after a crash. It is a property of the table rather than a
+	// tuning knob: recreating one as an ordinary table gives the copy
+	// durability the original never had and the write cost that comes with it,
+	// and recreating an ordinary one as unlogged silently throws away rows the
+	// first time the server stops badly.
+	Unlogged bool
+
+	// Options are the storage parameters declared on the table, as key=value,
+	// ordered. fillfactor is the common one; autovacuum thresholds are the ones
+	// somebody tuned for a reason nobody wrote down. A copy without them
+	// behaves differently under load than the thing it was copied from.
+	Options []string
 }
 
 // Column is one column of a table.
@@ -228,6 +242,18 @@ type View struct {
 	// the parse tree, so two views written differently and meaning the same
 	// come back the same.
 	Definition string
+
+	// Options are the storage parameters declared on the view, as key=value,
+	// ordered and without the check option, which has a field of its own above
+	// it in importance and below it here.
+	//
+	// security_barrier is why this is not cosmetic. A view declared with it
+	// refuses to let a cheap function see rows the view was meant to hide, and
+	// a copy made without it answers questions the original refused —
+	// a change of security posture produced by a copy of a structure.
+	// security_invoker, from PostgreSQL 15, decides whose rights the view reads
+	// with, which is the same kind of difference.
+	Options []string
 
 	// CheckOption is "local", "cascaded" or empty, and it is here because the
 	// definition does not carry it. WITH CHECK OPTION is stored beside the view

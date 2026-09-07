@@ -170,11 +170,27 @@ func (r *Reader) exists(ctx context.Context, schema Name) (bool, error) {
 // model is of one schema and cannot address outside it, the same boundary the
 // dependency graph draws.
 //
+// relpersistence 'u' is an unlogged table, which is a property of the table and
+// not a tuning knob: a copy made logged has durability the original never had,
+// and a copy made unlogged throws away rows the first time the server stops
+// badly. 't' is a temporary table, which belongs to one session and is not an
+// object anybody would compare — those are excluded by the schema filter
+// already, since they live in a namespace of their own.
+//
+// reloptions are the storage parameters somebody set — fillfactor, autovacuum
+// thresholds — and a copy without them behaves differently under load than the
+// thing it was copied from. What is not read is the tablespace: it names an
+// object of the server rather than of the schema, and a copy pointed at a
+// tablespace the other server has never heard of fails to build at all. It is
+// not compared, and this is where that is written down.
+//
 // Everything else pg_class holds — indexes, sequences, views, TOAST tables — is
 // either read by a query of its own or is not an object of this model.
 const listTables = `SELECT c.relname,
 	       c.relkind,
 	       c.relispartition,
+	       c.relpersistence,
+	       c.reloptions,
 	       parents.inherits
 	FROM pg_catalog.pg_class c
 	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -200,12 +216,13 @@ func (r *Reader) tables(ctx context.Context, schema Name) (map[string]*Table, []
 
 	for rows.Next() {
 		var (
-			name, relkind string
-			partition     bool
-			inherits      []string
+			name, relkind, persistence string
+			partition                  bool
+			options, inherits          []string
 		)
 
-		if err := rows.Scan(&name, &relkind, &partition, &inherits); err != nil {
+		if err := rows.Scan(&name, &relkind, &partition, &persistence,
+			&options, &inherits); err != nil {
 			return nil, nil, fmt.Errorf("reading a table of %s: %w", schema, err)
 		}
 
@@ -214,6 +231,8 @@ func (r *Reader) tables(ctx context.Context, schema Name) (map[string]*Table, []
 			Inherits:    namesOf(inherits),
 			Partitioned: relkind == "p",
 			Partition:   partition,
+			Unlogged:    persistence == "u",
+			Options:     options,
 		}
 		order = append(order, name)
 	}

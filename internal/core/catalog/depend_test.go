@@ -19,8 +19,8 @@ func readDependencies(t *testing.T, rows [][]any) catalog.Schema {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, nil}, {"customers", "r", false, nil}},
-		"pg_class relkind =":  {{"open_orders", "SELECT 1", nil}},
+		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}, {"customers", "r", false, "p", nil, nil}},
+		"pg_class relkind =":  {{"open_orders", "SELECT 1", nil, nil}},
 		"pg_sequence": {{"orders_id_seq", "integer",
 			int64(1), int64(1), int64(1), int64(9), int64(1), false, nil, nil}},
 		"pg_depend": rows,
@@ -86,7 +86,7 @@ func TestADependencyOnSomethingThatWasNotListedIsInconsistent(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, nil}},
+		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
 		"pg_depend":           {{"r", "orders", "foreign key", "r", "elsewhere"}},
 	}}
 
@@ -106,7 +106,7 @@ func TestAFailureReadingTheDependenciesFailsTheRead(t *testing.T) {
 	failure := errors.New("the connection went away")
 
 	server := &answers{
-		rows: map[string][][]any{"pg_namespace": existing(), "pg_class relkind IN": {{"orders", "r", false, nil}}},
+		rows: map[string][][]any{"pg_namespace": existing(), "pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}}},
 		err:  map[string]error{"pg_depend": failure},
 	}
 
@@ -123,7 +123,7 @@ func TestARowTheReaderCannotScanFailsTheRead(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, nil}},
+		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
 		"pg_depend":           {{"r", "orders"}},
 	}}
 
@@ -225,7 +225,7 @@ func TestAKindOfObjectTheModelDoesNotHoldIsNotFoldedIntoOneItDoes(t *testing.T) 
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders", "r", false, nil}},
+		"pg_class relkind IN": {{"orders", "r", false, "p", nil, nil}},
 		"pg_depend":           {{"m", "summary", "query", "r", "orders"}},
 	}}
 
