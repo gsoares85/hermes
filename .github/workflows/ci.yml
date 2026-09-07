@@ -369,3 +369,41 @@ jobs:
       # there" stop meaning the same thing.
       - name: Run integration tests
         run: make test-integration
+
+  performance:
+    name: Performance budgets
+    runs-on: ubuntu-latest
+    # The budgets are minutes of work at most; the rest of this is building the
+    # fixture and pulling an image.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # No webview headers here, unlike the jobs around it: the budgets live
+      # under internal/, nothing there imports Wails, and the target compiles
+      # nothing else.
+      #
+      # A job of its own rather than a step of the integration one, because it
+      # answers a different question and fails for a different reason. A red
+      # integration job means the product is wrong; a red budget means it is
+      # slow, and somebody reading the run should be able to tell which without
+      # opening it.
+      #
+      # It is a gate rather than a chart. A performance regression that is only
+      # plotted is one nobody sees until a user does, and by then the change
+      # that caused it is twenty commits back. The budgets are the ones the
+      # testing strategy sets — introspecting a thousand tables in under five
+      # seconds is the one this task adds.
+      #
+      # A runner is slower than a laptop and slower on some days than others, so
+      # the budgets have room in them: they are the number the product promises,
+      # not the number it currently achieves, and the gap between the two is
+      # what keeps this from failing for weather.
+      - name: Run the performance budgets
+        run: make bench

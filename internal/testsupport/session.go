@@ -19,25 +19,25 @@ import (
 // package is four chances to forget the cleanup. A pool left open holds
 // connections until the container dies, which shows up as another test failing
 // to connect rather than as this one leaking.
-func Session(t *testing.T, instance *Instance) driver.Session {
-	t.Helper()
+func Session(tb testing.TB, instance *Instance) driver.Session {
+	tb.Helper()
 
 	config, err := conn.ParseURI(instance.DSN)
 	if err != nil {
-		t.Fatalf("parsing the DSN of PostgreSQL %s: %v", instance.Version, err)
+		tb.Fatalf("parsing the DSN of PostgreSQL %s: %v", instance.Version, err)
 	}
 
-	pool, err := postgres.New().Open(t.Context(), config.Target())
+	pool, err := postgres.New().Open(tb.Context(), config.Target())
 	if err != nil {
-		t.Fatalf("opening a pool against PostgreSQL %s: %v", instance.Version, err)
+		tb.Fatalf("opening a pool against PostgreSQL %s: %v", instance.Version, err)
 	}
-	t.Cleanup(pool.Close)
+	tb.Cleanup(pool.Close)
 
-	session, err := pool.Session(t.Context())
+	session, err := pool.Session(tb.Context())
 	if err != nil {
-		t.Fatalf("checking out a session against PostgreSQL %s: %v", instance.Version, err)
+		tb.Fatalf("checking out a session against PostgreSQL %s: %v", instance.Version, err)
 	}
-	t.Cleanup(session.Close)
+	tb.Cleanup(session.Close)
 
 	return session
 }

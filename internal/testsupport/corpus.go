@@ -34,10 +34,10 @@ var corpusSequence atomic.Uint64
 // A schema of its own per call rather than one shared: creating it is DDL on a
 // container that is already running, which costs milliseconds, and sharing it
 // would make one test's failure show up in another's.
-func Corpus(t *testing.T, instance *Instance) string {
-	t.Helper()
+func Corpus(tb testing.TB, instance *Instance) string {
+	tb.Helper()
 
-	schema := CorpusTarget(t, instance)
+	schema := CorpusTarget(tb, instance)
 
 	// Not dropped when the test ends, and that is not an omission. Exec runs
 	// through the context of the test, which is already cancelled by the time a
@@ -45,7 +45,7 @@ func Corpus(t *testing.T, instance *Instance) string {
 	// second problem on top of whatever the test found. The container is the
 	// cleanup: it is thrown away at the end of the run, and the name carries a
 	// counter so no two calls collide inside one.
-	run(t, instance, schema, corpusStatements)
+	run(tb, instance, schema, corpusStatements)
 
 	return schema
 }
@@ -60,24 +60,24 @@ func Corpus(t *testing.T, instance *Instance) string {
 // them, and what the round trip then proves is that everything the model does
 // hold survives being written and read again — which is the property, rather
 // than a claim that the writer can build a schema out of nothing.
-func CorpusTarget(t *testing.T, instance *Instance) string {
-	t.Helper()
+func CorpusTarget(tb testing.TB, instance *Instance) string {
+	tb.Helper()
 
 	schema := fmt.Sprintf("corpus_%d", corpusSequence.Add(1))
 
-	installExtensions(t, instance)
-	instance.Exec(t, "CREATE SCHEMA "+schema)
-	run(t, instance, schema, corpusPrerequisites)
+	installExtensions(tb, instance)
+	instance.Exec(tb, "CREATE SCHEMA "+schema)
+	run(tb, instance, schema, corpusPrerequisites)
 
 	return schema
 }
 
 // run applies statements to a schema, putting its name where the token is.
-func run(t *testing.T, instance *Instance, schema string, statements []string) {
-	t.Helper()
+func run(tb testing.TB, instance *Instance, schema string, statements []string) {
+	tb.Helper()
 
 	for _, statement := range statements {
-		instance.Exec(t, strings.ReplaceAll(statement, schemaToken, schema))
+		instance.Exec(tb, strings.ReplaceAll(statement, schemaToken, schema))
 	}
 }
 
@@ -94,8 +94,8 @@ var (
 	extensionsBuilt = map[string]bool{}
 )
 
-func installExtensions(t *testing.T, instance *Instance) {
-	t.Helper()
+func installExtensions(tb testing.TB, instance *Instance) {
+	tb.Helper()
 
 	extensionsOnce.Lock()
 	defer extensionsOnce.Unlock()
@@ -107,7 +107,7 @@ func installExtensions(t *testing.T, instance *Instance) {
 	// btree_gist is what lets an exclusion constraint mix an equality on a
 	// scalar with an overlap on a range, which is the shape the corpus needs
 	// and the one information_schema cannot see at all.
-	instance.Exec(t, "CREATE EXTENSION IF NOT EXISTS btree_gist")
+	instance.Exec(tb, "CREATE EXTENSION IF NOT EXISTS btree_gist")
 
 	extensionsBuilt[instance.Version] = true
 }

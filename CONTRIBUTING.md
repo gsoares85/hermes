@@ -28,10 +28,10 @@ integration suite, and checks the authorship and subject of every commit.
 To run locally what the pipeline runs:
 
 ```sh
-make check-commits check-readme lint cover audit build test-integration
+make check-commits check-readme lint cover audit build test-integration bench
 ```
 
-Only `make test-integration` needs Docker. The platform matrix is the one part
+Only `make test-integration` and `make bench` need Docker. The platform matrix is the one part
 that cannot be reproduced on a single machine.
 
 On Windows the race detector needs a C toolchain (mingw-w64). Without it, `make
@@ -99,6 +99,7 @@ A change is ready when all of this is true:
 make test              # unit tests, no Docker needed
 make cover             # unit tests plus the coverage floor
 make test-integration  # integration tests (starts PostgreSQL containers)
+make bench             # the performance budgets (starts PostgreSQL containers)
 ```
 
 Integration tests run against PostgreSQL 12, 13, 15, 16, 17 and 18. Anything
@@ -108,6 +109,12 @@ oldest version Hermes supports, so it is tested rather than assumed.
 Two properties are treated as non-negotiable and are covered by tests: comparing
 a schema against itself must report zero differences, and generating DDL from
 the model, applying it, and reading it back must produce the same model.
+
+Performance budgets are gates, not graphs. `make bench` fails when an operation
+goes over the time the product promises for it, and CI runs it as a job of its
+own so that a red run tells you at a glance whether the code is wrong or merely
+slow. The budgets have room in them: they are what the product promises, not
+what it currently achieves.
 
 ## Authorship
 

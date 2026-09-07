@@ -87,6 +87,24 @@ test-integration: ## Run the integration tests (requires Docker)
 	$(GO) test $(RACE) -tags=$(INTEGRATION_TAGS) \
 		$(if $(INTEGRATION_PARALLEL),-p $(INTEGRATION_PARALLEL)) -timeout=20m ./...
 
+# How many times each benchmark repeats. Once is enough for a budget: what is
+# being asked is "does a thousand tables read in under five seconds", not "what
+# is the mean to three digits", and the fixture costs seconds to build.
+BENCHTIME ?= 1x
+
+# Without -race, and that is not an oversight. The detector multiplies the time
+# of everything it watches, so a budget measured under it would be measuring the
+# detector — and the number the product has to meet is the one a user gets,
+# which is the build they run.
+#
+# -run with a pattern that matches nothing keeps the tests out: they share these
+# packages, and running the whole suite again to reach the benchmarks would make
+# this the slowest target for no reason.
+.PHONY: bench
+bench: ## Run the performance budgets (requires Docker)
+	$(GO) test -tags=$(INTEGRATION_TAGS) -run='^$$' -bench=. -benchtime=$(BENCHTIME) \
+		-timeout=20m ./internal/...
+
 .PHONY: cover
 cover: ## Run the unit tests and enforce the coverage floor
 	$(GO) test $(RACE) -coverprofile=$(COVERAGE_PROFILE) -coverpkg=./internal/... ./internal/...

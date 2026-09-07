@@ -43,13 +43,13 @@ type Instance struct {
 
 // StartPostgres brings up PostgreSQL of the given major version and returns it
 // ready to accept connections. The container is terminated when the test ends.
-func StartPostgres(t *testing.T, version string) *Instance {
-	t.Helper()
+func StartPostgres(tb testing.TB, version string) *Instance {
+	tb.Helper()
 
 	// Tied to the test, not to the process: a container that never comes up
 	// has to die with the test that asked for it, not hold the whole run
 	// until the timeout of the test binary.
-	ctx := t.Context()
+	ctx := tb.Context()
 	image := "postgres:" + version + "-alpine"
 
 	container, err := postgres.Run(ctx, image,
@@ -65,18 +65,18 @@ func StartPostgres(t *testing.T, version string) *Instance {
 		),
 	)
 	if err != nil {
-		t.Fatalf("starting %s: %v", image, err)
+		tb.Fatalf("starting %s: %v", image, err)
 	}
 
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
-			t.Errorf("terminating %s: %v", image, terminateErr)
+			tb.Errorf("terminating %s: %v", image, terminateErr)
 		}
 	})
 
 	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
-		t.Fatalf("reading the connection string of %s: %v", image, err)
+		tb.Fatalf("reading the connection string of %s: %v", image, err)
 	}
 
 	return &Instance{Version: version, DSN: dsn, container: container}
@@ -84,25 +84,25 @@ func StartPostgres(t *testing.T, version string) *Instance {
 
 // Stop halts the server without removing the container, which is how a test
 // makes a connection drop for a reason a client cannot tell from a real outage.
-func (i *Instance) Stop(t *testing.T) {
-	t.Helper()
+func (i *Instance) Stop(tb testing.TB) {
+	tb.Helper()
 
-	ctx, cancel := context.WithTimeout(t.Context(), execTimeout)
+	ctx, cancel := context.WithTimeout(tb.Context(), execTimeout)
 	defer cancel()
 
 	timeout := 10 * time.Second
 	if err := i.container.Stop(ctx, &timeout); err != nil {
-		t.Fatalf("stopping PostgreSQL %s: %v", i.Version, err)
+		tb.Fatalf("stopping PostgreSQL %s: %v", i.Version, err)
 	}
 }
 
 // Exec runs psql inside the container and returns its combined output. It keeps
 // the harness free of a SQL driver: the connection layer arrives in TASK-0002,
 // and until then the container itself is the client.
-func (i *Instance) Exec(t *testing.T, statement string) string {
-	t.Helper()
+func (i *Instance) Exec(tb testing.TB, statement string) string {
+	tb.Helper()
 
-	ctx, cancel := context.WithTimeout(t.Context(), execTimeout)
+	ctx, cancel := context.WithTimeout(tb.Context(), execTimeout)
 	defer cancel()
 
 	// Multiplexed demuxes the Docker stream: without it the output still
@@ -111,12 +111,12 @@ func (i *Instance) Exec(t *testing.T, statement string) string {
 		"psql", "-U", User, "-d", Database, "-t", "-A", "-c", statement,
 	}, tcexec.Multiplexed())
 	if err != nil {
-		t.Fatalf("running %q on PostgreSQL %s: %v", statement, i.Version, err)
+		tb.Fatalf("running %q on PostgreSQL %s: %v", statement, i.Version, err)
 	}
 
-	output := readAll(t, reader)
+	output := readAll(tb, reader)
 	if code != 0 {
-		t.Fatalf("running %q on PostgreSQL %s exited with %d: %s", statement, i.Version, code, output)
+		tb.Fatalf("running %q on PostgreSQL %s exited with %d: %s", statement, i.Version, code, output)
 	}
 
 	return output

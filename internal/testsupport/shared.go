@@ -47,8 +47,8 @@ type sharedInstance struct {
 // they alone name. A test that stops the server, restarts it, or changes a
 // setting has to call StartPostgres and get one of its own, or it pulls the
 // ground out from under everything sharing it.
-func SharedPostgres(t *testing.T, version string) *Instance {
-	t.Helper()
+func SharedPostgres(tb testing.TB, version string) *Instance {
+	tb.Helper()
 
 	sharedMu.Lock()
 	entry, known := sharedInstances[version]
@@ -59,21 +59,21 @@ func SharedPostgres(t *testing.T, version string) *Instance {
 	sharedMu.Unlock()
 
 	entry.once.Do(func() {
-		entry.instance = startShared(t, version)
+		entry.instance = startShared(tb, version)
 	})
 
 	if entry.instance == nil {
-		t.Fatalf("the shared PostgreSQL %s failed to start", version)
+		tb.Fatalf("the shared PostgreSQL %s failed to start", version)
 	}
 
 	return entry.instance
 }
 
 // startShared brings up a container owned by the package rather than by a test.
-func startShared(t *testing.T, version string) *Instance {
-	t.Helper()
+func startShared(tb testing.TB, version string) *Instance {
+	tb.Helper()
 
-	// Deliberately not t.Context(): the server outlives the test that happened
+	// Deliberately not tb.Context(): the server outlives the test that happened
 	// to be first, and a context cancelled at the end of that test would take
 	// the container with it.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -92,7 +92,7 @@ func startShared(t *testing.T, version string) *Instance {
 		),
 	)
 	if err != nil {
-		t.Fatalf("starting the shared %s: %v", image, err)
+		tb.Fatalf("starting the shared %s: %v", image, err)
 	}
 
 	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
@@ -104,10 +104,10 @@ func startShared(t *testing.T, version string) *Instance {
 		// whole point of it. Without this the container runs until the reaper
 		// takes it, and the reaper is something a run can be told to skip.
 		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
-			t.Errorf("terminating the shared %s: %v", image, terminateErr)
+			tb.Errorf("terminating the shared %s: %v", image, terminateErr)
 		}
 
-		t.Fatalf("reading the connection string of the shared %s: %v", image, err)
+		tb.Fatalf("reading the connection string of the shared %s: %v", image, err)
 	}
 
 	return &Instance{Version: version, DSN: dsn, container: container}

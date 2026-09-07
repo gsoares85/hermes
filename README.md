@@ -380,6 +380,7 @@ make test              # unit tests
 make cover             # unit tests plus the 85% floor
 make audit             # known vulnerabilities in both dependency trees
 make test-integration  # PostgreSQL 12, 13, 15, 16, 17 and 18 (needs Docker)
+make bench             # the performance budgets (needs Docker)
 ```
 
 Please report security vulnerabilities privately — see [SECURITY.md](SECURITY.md).
