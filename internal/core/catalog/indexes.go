@@ -11,8 +11,21 @@ import (
 // query encodes. PostgreSQL builds one for every primary key and every unique
 // constraint, so listing both would put the same object in the model twice —
 // and the DDL phase would emit a constraint and then an index that the
-// constraint already created. The constraint owns it; conindid is what says so.
-// A unique index somebody created directly is not a constraint and stays.
+// constraint already created. The constraint owns it. A unique index somebody
+// created directly is not a constraint and stays.
+//
+// conindid alone does not say ownership, and reading it that way deleted
+// indexes nobody had made a constraint of. A foreign key also fills it in — with
+// the index of the table it points at — so a plain CREATE UNIQUE INDEX that
+// happens to be the target of somebody's foreign key was excluded as though the
+// key owned it. It then went missing from the model, and the generated script
+// died halfway through on the ALTER TABLE that adds the key, because the unique
+// index it needs was never created.
+//
+// So ownership is three conditions, not one: the constraint's index is this
+// index, the constraint is on the table this index is on — which is what the
+// foreign key fails, since its conrelid is the referencing table — and the
+// constraint is of a kind that owns an index at all.
 //
 // indnkeyatts is what separates the key from the payload of an INCLUDE, which
 // is why the ordinality is filtered by it rather than the whole of indkey being
@@ -59,7 +72,9 @@ const listIndexes = `SELECT c.relname,
 	  AND c.relkind IN ('r', 'p')
 	  AND NOT EXISTS (
 	        SELECT 1 FROM pg_catalog.pg_constraint con
-	        WHERE con.conindid = idx.indexrelid)`
+	        WHERE con.conindid = idx.indexrelid
+	          AND con.conrelid = idx.indrelid
+	          AND con.contype IN ('p', 'u', 'x'))`
 
 func (r *Reader) indexes(ctx context.Context, schema Name, tables map[string]*Table) error {
 	rows := r.server.Query(ctx, listIndexes, schema.String())

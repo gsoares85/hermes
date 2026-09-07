@@ -1213,3 +1213,31 @@ func columnNames(names []catalog.Name) []string {
 
 	return found
 }
+
+// A unique index somebody made by hand stays in the model even when a foreign
+// key points at it.
+//
+// A foreign key fills conindid with the index of the table it references, so a
+// filter that read conindid as "this index belongs to a constraint" excluded an
+// index no constraint owned. The loss was silent in the model and loud later:
+// the generated script died on the ALTER TABLE that adds the key, because the
+// unique index that key requires had never been created.
+func TestAUniqueIndexAForeignKeyPointsAtIsStillAnIndex(t *testing.T) {
+	t.Parallel()
+
+	for _, version := range testsupport.SupportedVersions {
+		t.Run(version, func(t *testing.T) {
+			schema := readCorpus(t, version)
+
+			index := indexIn(t, tableIn(t, schema, "referenced"), "referenced_code")
+			if !index.Unique || index.Primary {
+				t.Errorf("the index reads as unique=%v primary=%v, want a plain unique index",
+					index.Unique, index.Primary)
+			}
+
+			// And the constraint it is not part of is still read as a
+			// constraint of the other table, so nothing was traded for it.
+			constraintIn(t, tableIn(t, schema, "referring"), "referring_code_fkey")
+		})
+	}
+}

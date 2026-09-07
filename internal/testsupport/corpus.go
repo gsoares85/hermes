@@ -303,6 +303,21 @@ var corpusStatements = []string{
 	`CREATE INDEX indexed_include ON {schema}.indexed (status) INCLUDE (payload)`,
 	`CREATE INDEX indexed_descending ON {schema}.indexed (created DESC NULLS LAST)`,
 
+	// A plain unique index that a foreign key points at.
+	//
+	// PostgreSQL fills a foreign key's conindid with the index of the table it
+	// references, so a reader that treats conindid as "this index belongs to a
+	// constraint" loses this index — and then the generated script dies on the
+	// ALTER TABLE that adds the key, because the unique index it needs was
+	// never created. Nothing else in the corpus has this shape: every other
+	// unique index here either backs a constraint or is pointed at by nothing.
+	`CREATE TABLE {schema}.referenced (code integer NOT NULL, label text)`,
+	`CREATE UNIQUE INDEX referenced_code ON {schema}.referenced (code)`,
+	`CREATE TABLE {schema}.referring (
+		id integer PRIMARY KEY,
+		code integer REFERENCES {schema}.referenced (code)
+	)`,
+
 	// A sequence nobody owns, with every parameter declared away from its
 	// default. A copy made with the defaults hands out different numbers from
 	// the original, which is a data fault produced by a copy of the structure.
