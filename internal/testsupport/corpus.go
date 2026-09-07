@@ -437,6 +437,23 @@ var corpusStatements = []string{
 	`CREATE VIEW {schema}.catalog_peek AS
 		SELECT oid, relname FROM pg_catalog.pg_class`,
 
+	// Row level security with policies, which the testing strategy lists among
+	// the shapes the corpus has to hold. A copy of this table without its
+	// security shows every row it was written to hide, and nothing about the
+	// copy would say so — which is why the writer declines it rather than
+	// producing one.
+	`CREATE TABLE {schema}.patient (
+		id integer PRIMARY KEY,
+		clinician text NOT NULL,
+		notes text
+	)`,
+	`ALTER TABLE {schema}.patient ENABLE ROW LEVEL SECURITY`,
+	`ALTER TABLE {schema}.patient FORCE ROW LEVEL SECURITY`,
+	`CREATE POLICY patient_own ON {schema}.patient
+		USING (clinician = current_user)`,
+	`CREATE POLICY patient_insert ON {schema}.patient FOR INSERT
+		WITH CHECK (clinician = current_user)`,
+
 	// A view with a security barrier, which is not decoration: it refuses to
 	// let a cheap function see the rows the view was meant to hide, and a copy
 	// made without it answers questions the original refused. security_invoker

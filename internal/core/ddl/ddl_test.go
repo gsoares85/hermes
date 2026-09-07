@@ -805,3 +805,31 @@ func TestASequenceOfADeclinedTableIsDeclinedToo(t *testing.T) {
 		t.Errorf("the script holds %v, want nothing writable", script.Statements)
 	}
 }
+
+// A table that restricts which rows are visible is declined, not written
+// without the restriction.
+//
+// The policies are not part of this version's model, so there is no version of
+// such a table that can be written honestly: written without them it shows every
+// row the original hid, and nothing about the copy says a control was dropped.
+// Declining names it, which is what ADR-0007 asks and what a preview has to
+// show.
+func TestATableWithRowSecurityIsDeclinedRatherThanStrippedOfIt(t *testing.T) {
+	t.Parallel()
+
+	schema := catalog.Schema{
+		Name: name("sales"),
+		Tables: []catalog.Table{
+			{Name: name("patient"), RowSecurity: true, Forced: true,
+				Columns: []catalog.Column{{Name: name("id"), Position: 1, Type: catalog.NewTypeName("integer")}}},
+			{Name: name("ordinary"),
+				Columns: []catalog.Column{{Name: name("id"), Position: 1, Type: catalog.NewTypeName("integer")}}},
+		},
+	}
+
+	script := ddl.Of(schema)
+
+	mustNotWrite(t, script, `CREATE TABLE "patient"`)
+	mustWrite(t, script, `CREATE TABLE "ordinary"`)
+	mustWrite(t, script, `-- not written: the table "patient", because it restricts which rows are visible`)
+}

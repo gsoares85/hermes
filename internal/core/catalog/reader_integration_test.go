@@ -1527,3 +1527,32 @@ func (w *watched) Query(ctx context.Context, sql string, args ...any) driver.Row
 
 	return rows
 }
+
+// A table that restricts which rows are visible says so.
+//
+// The policies themselves are not compared by this version, and that is exactly
+// why the fact has to be read: a copy of such a table made without its row
+// security shows every row the original hid, and nothing about the copy would
+// say a control had been dropped on the way. It is the same rule as
+// partitioning and the stakes are higher — the DDL writer declines the table
+// rather than producing one that reveals more than what it was copied from.
+func TestATableSaysWhetherItRestrictsWhichRowsAreVisible(t *testing.T) {
+	t.Parallel()
+
+	for _, version := range testsupport.SupportedVersions {
+		t.Run(version, func(t *testing.T) {
+			schema := readCorpus(t, version)
+
+			patient := tableIn(t, schema, "patient")
+			if !patient.RowSecurity || !patient.Forced {
+				t.Errorf("the guarded table reads as security=%v forced=%v, want both",
+					patient.RowSecurity, patient.Forced)
+			}
+
+			if ordinary := tableIn(t, schema, "indexed"); ordinary.RowSecurity || ordinary.Forced {
+				t.Errorf("an ordinary table reads as security=%v forced=%v",
+					ordinary.RowSecurity, ordinary.Forced)
+			}
+		})
+	}
+}

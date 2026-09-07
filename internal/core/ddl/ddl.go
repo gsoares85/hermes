@@ -266,6 +266,14 @@ func (w *writer) findOmissions() {
 		object := catalog.Object{Kind: catalog.ObjectTable, Name: table.Name}
 
 		switch {
+		case table.RowSecurity:
+			// The gravest of the declines, and the reason it is first. A table
+			// written without its row security is a table whose every hidden
+			// row is readable in the copy, and nothing about the copy says a
+			// control was dropped on the way — the policies are not compared by
+			// this version, so there is no version of this table that can be
+			// written honestly.
+			w.omitted[object] = "it restricts which rows are visible, and this version does not compare policies"
 		case table.Partitioned:
 			w.omitted[object] = "it is divided into partitions, and this version does not compare partitioning"
 		case table.Partition:

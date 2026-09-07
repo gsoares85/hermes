@@ -327,7 +327,7 @@ func TestColumnsLandOnTheirOwnTable(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":             existing(),
-		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}, {"customers", "r", false, "p", nil, nil}},
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}, {"customers", "r", false, "p", false, false, nil, nil}},
 		"pg_attribute": {
 			{"customers", "name", 1, "text", false, nil, "", "", nil},
 			{"orders", "id", 1, "int4", true, nil, "", "", nil},
@@ -363,7 +363,7 @@ func TestAColumnOfAnUnknownTableIsAFault(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":             existing(),
-		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 		"pg_attribute":             {{"somewhere_else", "id", 1, "int4", true, nil, "", "", nil}},
 	}}
 
@@ -379,7 +379,7 @@ func TestAColumnCarriesTheFoldedType(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":             existing(),
-		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 		"pg_attribute":             {{"orders", "created", 1, "timestamptz(3)", true, nil, "", "", nil}},
 	}}
 
@@ -401,7 +401,7 @@ func TestAColumnCarriesWhatTheCatalogSaidAboutIt(t *testing.T) {
 	def, collation := "nextval(:seq:)", "en_US.utf8"
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":             existing(),
-		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 		"pg_attribute": {
 			{"orders", "id", 1, "int4", true, def, "a", "", nil},
 			{"orders", "label", 2, "text", false, nil, "", "", collation},
@@ -439,7 +439,7 @@ func TestAFailedQueryFailsTheRead(t *testing.T) {
 			server := &answers{
 				rows: map[string][][]any{
 					"pg_namespace":             existing(),
-					"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+					"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 					"pg_attribute":             {},
 				},
 				err: map[string]error{table: errors.New("the server went away")},
@@ -544,7 +544,7 @@ func TestAReadSchemaComesOutSorted(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":             existing(),
-		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}, {"customers", "r", false, "p", nil, nil}},
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}, {"customers", "r", false, "p", false, false, nil, nil}},
 		"pg_attribute": {
 			{"orders", "amount", 2, "numeric", false, nil, "", "", nil},
 			{"orders", "id", 1, "int4", true, nil, "", "", nil},
@@ -574,7 +574,7 @@ func TestATypeOfThisSchemaLosesTheSchemaFromItsName(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":             existing(),
-		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 		"pg_attribute": {
 			{"orders", "own", 1, "sales.mood", false, nil, "", "", nil},
 			{"orders", "own_array", 2, "sales.mood[]", false, nil, "", "", nil},
@@ -613,7 +613,7 @@ func TestAQuotedSchemaIsStrippedFromATypeToo(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":             {{"My Sales"}},
-		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 		"pg_attribute":             {{"orders", "own", 1, `"My Sales".mood`, false, nil, "", "", nil}},
 	}}
 
@@ -634,7 +634,7 @@ func TestConstraintsAreReadWithTheirKindAndTheirKeyOrder(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":             existing(),
-		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 		"pg_attribute":             {},
 		"pg_constraint": {
 			{"orders", "orders_pk", "p", "PRIMARY KEY (a, b)", []string{"a", "b"}, nil},
@@ -692,7 +692,7 @@ func TestAConstraintKindThisBuildDoesNotKnowIsCarriedThrough(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":             existing(),
-		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 		"pg_attribute":             {},
 		"pg_constraint":            {{"orders", "odd", "z", "SOMETHING NEW", []string(nil), nil}},
 	}}
@@ -715,7 +715,7 @@ func TestIndexesAreReadWithWhatDistinguishesThem(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":             existing(),
-		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 		"pg_attribute":             {},
 		"pg_index": {
 			{"orders", "by_email", true, false,
@@ -752,13 +752,13 @@ func TestAConstraintOrIndexOfAnUnknownTableIsAFault(t *testing.T) {
 	for name, rows := range map[string]map[string][][]any{
 		"a constraint": {
 			"pg_namespace":             existing(),
-			"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+			"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 			"pg_attribute":             {},
 			"pg_constraint":            {{"elsewhere", "c", "p", "PRIMARY KEY (a)", []string{"a"}, nil}},
 		},
 		"an index": {
 			"pg_namespace":             existing(),
-			"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+			"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 			"pg_attribute":             {},
 			"pg_index":                 {{"elsewhere", "i", false, false, "CREATE INDEX", []string{"a"}}},
 		},
@@ -786,7 +786,7 @@ func TestAFailureReadingConstraintsOrIndexesFailsTheRead(t *testing.T) {
 			server := &answers{
 				rows: map[string][][]any{
 					"pg_namespace":             existing(),
-					"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+					"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 					"pg_attribute":             {},
 				},
 				err: map[string]error{table: errors.New("the server went away")},
@@ -1098,7 +1098,7 @@ func TestATableIsReadWithWhatItInherits(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":             existing(),
-		"pg_class ARRAY['r', 'p']": {{"child", "r", false, "p", nil, []string{"second", "first"}}},
+		"pg_class ARRAY['r', 'p']": {{"child", "r", false, "p", false, false, nil, []string{"second", "first"}}},
 	}}
 
 	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
@@ -1125,9 +1125,9 @@ func TestATableSaysWhetherItTakesPartInPartitioning(t *testing.T) {
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace": existing(),
 		"pg_class ARRAY['r', 'p']": {
-			{"measurements", "p", false, "p", nil, nil},
-			{"measurements_2026", "r", true, "p", nil, []string{"measurements"}},
-			{"ordinary", "r", false, "p", nil, nil},
+			{"measurements", "p", false, "p", false, false, nil, nil},
+			{"measurements_2026", "r", true, "p", false, false, nil, []string{"measurements"}},
+			{"ordinary", "r", false, "p", false, false, nil, nil},
 		},
 	}}
 
@@ -1181,7 +1181,7 @@ func TestAColumnThatIsNeitherGeneratedNorAnIdentitySaysSo(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":             existing(),
-		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 		"pg_attribute":             {{"orders", "label", 1, "text", false, nil, "\x00", "\x00", nil}},
 	}}
 
@@ -1223,7 +1223,7 @@ func TestACancelledReadStillPutsTheSearchPathBack(t *testing.T) {
 	server := &answers{
 		rows: map[string][][]any{
 			"pg_namespace":             existing(),
-			"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+			"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 		},
 		// Cancelled while the columns are being read, which is after the path
 		// has been pointed at the schema and before the read could finish.
@@ -1253,7 +1253,7 @@ func TestAForeignKeySaysWhatItPointsAt(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":             existing(),
-		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 		"pg_constraint": {
 			{"orders", "orders_fk", "f", "FOREIGN KEY (c) REFERENCES other(id)", []string{"c"}, "other"},
 			{"orders", "orders_pk", "p", "PRIMARY KEY (a)", []string{"a"}, nil},
@@ -1295,7 +1295,7 @@ func TestReadingCostsTheSameNumberOfQueriesWhateverTheSchemaHolds(t *testing.T) 
 
 		for i := range tables {
 			named := fmt.Sprintf("table_%03d", i)
-			listed = append(listed, []any{named, "r", false, "p", nil, nil})
+			listed = append(listed, []any{named, "r", false, "p", false, false, nil, nil})
 			columns = append(columns, []any{named, "id", 1, "int4", true, nil, "", "", nil})
 		}
 
@@ -1348,7 +1348,7 @@ func TestASchemaIsReadInsideOneSnapshot(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":             existing(),
-		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 	}}
 
 	if _, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales")); err != nil {
@@ -1375,7 +1375,7 @@ func TestAReadInsideSomebodyElsesTransactionLeavesItAlone(t *testing.T) {
 		inTransaction: true,
 		rows: map[string][][]any{
 			"pg_namespace":             existing(),
-			"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+			"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
 		},
 	}
 

@@ -94,7 +94,7 @@ func TestTheScriptDeclinesOnlyWhatThisVersionDoesNotCompare(t *testing.T) {
 			// The sequence is there because the partitioned table owns it: a
 			// serial column's counter cannot be written when the table it
 			// belongs to is not.
-			want := []string{"measurements_id_seq", "measurements", "measurements_2026"}
+			want := []string{"measurements_id_seq", "measurements", "measurements_2026", "patient"}
 			if !reflect.DeepEqual(objects, want) {
 				t.Errorf("the script declined the objects %v, want %v", objects, want)
 			}

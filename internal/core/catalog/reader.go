@@ -231,6 +231,12 @@ func (r *Reader) exists(ctx context.Context, schema Name) (bool, error) {
 // object anybody would compare — those are excluded by the schema filter
 // already, since they live in a namespace of their own.
 //
+// relrowsecurity and relforcerowsecurity are read because a copy without them
+// shows every row the original hid, and nothing about the copy would say a
+// control had been dropped. The policies themselves are not compared by this
+// version, so the writer declines a table that has row security rather than
+// writing one that reveals more than what it was copied from.
+//
 // reloptions are the storage parameters somebody set — fillfactor, autovacuum
 // thresholds — and a copy without them behaves differently under load than the
 // thing it was copied from. What is not read is the tablespace: it names an
@@ -244,6 +250,8 @@ const listTables = `SELECT c.relname,
 	       c.relkind,
 	       c.relispartition,
 	       c.relpersistence,
+	       c.relrowsecurity,
+	       c.relforcerowsecurity,
 	       c.reloptions,
 	       parents.inherits
 	FROM pg_catalog.pg_class c
@@ -270,13 +278,13 @@ func (r *Reader) tables(ctx context.Context, schema Name) (map[string]*Table, []
 
 	for rows.Next() {
 		var (
-			name, relkind, persistence string
-			partition                  bool
-			options, inherits          []string
+			name, relkind, persistence  string
+			partition, security, forced bool
+			options, inherits           []string
 		)
 
 		if err := rows.Scan(&name, &relkind, &partition, &persistence,
-			&options, &inherits); err != nil {
+			&security, &forced, &options, &inherits); err != nil {
 			return nil, nil, fmt.Errorf("reading a table of %s: %w", schema, err)
 		}
 
@@ -286,6 +294,8 @@ func (r *Reader) tables(ctx context.Context, schema Name) (map[string]*Table, []
 			Partitioned: relkind == "p",
 			Partition:   partition,
 			Unlogged:    persistence == "u",
+			RowSecurity: security,
+			Forced:      forced,
 			Options:     options,
 		}
 		order = append(order, name)

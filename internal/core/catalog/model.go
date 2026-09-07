@@ -73,6 +73,19 @@ type Table struct {
 	// first time the server stops badly.
 	Unlogged bool
 
+	// RowSecurity reports that the table restricts which rows a reader sees,
+	// and Forced that it does so even for the table's owner.
+	//
+	// Neither models the policies themselves — those are SYN-04 and this
+	// version does not compare them. They are here for the reason
+	// Partitioned is, and the stakes are higher: a table written without its
+	// row security is a table whose every hidden row is visible in the copy,
+	// and nothing about the copy says a control was dropped on the way. The
+	// DDL writer declines such a table rather than writing a version of it
+	// that reveals more than the original.
+	RowSecurity bool
+	Forced      bool
+
 	// Options are the storage parameters declared on the table, as key=value,
 	// ordered. fillfactor is the common one; autovacuum thresholds are the ones
 	// somebody tuned for a reason nobody wrote down. A copy without them
