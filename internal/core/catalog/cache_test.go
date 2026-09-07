@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gsoares85/hermes/internal/core/catalog"
 )
@@ -18,6 +19,17 @@ import (
 type counted struct {
 	reads atomic.Int64
 	fail  error
+
+	// inside counts the calls that have not returned and overlapped remembers
+	// whether there was ever more than one.
+	inside     atomic.Int64
+	overlapped atomic.Bool
+
+	// hold is how long each call stays inside, and it is what makes the answer
+	// mean anything: with an instant source two callers can simply miss each
+	// other, and a test that cannot see the fault it is about passes whether or
+	// not the reads are serialised.
+	hold time.Duration
 
 	// held, when set, blocks every read until it is closed. It is what turns
 	// "two callers might overlap" into "two callers do overlap": without it the
@@ -33,6 +45,14 @@ type counted struct {
 
 func (c *counted) Read(_ context.Context, schema catalog.Name) (catalog.Schema, error) {
 	c.reads.Add(1)
+
+	if c.inside.Add(1) > 1 {
+		c.overlapped.Store(true)
+	}
+
+	defer c.inside.Add(-1)
+
+	time.Sleep(c.hold)
 
 	if c.held != nil {
 		c.once.Do(func() { close(c.arrived) })
@@ -528,4 +548,48 @@ func heapAfterGC() uint64 {
 	runtime.ReadMemStats(&stats)
 
 	return stats.HeapAlloc
+}
+
+// Two schemas read at once are still read one at a time.
+//
+// A cache belongs to one connection, and the source reads through it. Two
+// readings overlapping would be two conversations on one connection, which no
+// driver allows — and the reader borrows session state while it works, pointing
+// the search path at the schema it is reading and putting it back after.
+// Overlapped, the second reading saves a path the first had already changed,
+// the first restores the original, and the second puts back a path belonging to
+// nobody. The connection is wrong for everything that follows, and nothing
+// says so.
+//
+// The keying by schema is about what is remembered separately, not about what
+// is read at the same time. This is what holds the difference in place.
+func TestTwoSchemasAreReadOneAtATime(t *testing.T) {
+	t.Parallel()
+
+	// Long enough that two callers starting together are certainly inside at
+	// once if nothing stops them, and short enough that serialising two of them
+	// costs a fifth of a second.
+	source := &counted{hold: 100 * time.Millisecond}
+	cache := catalog.NewCache(source)
+
+	var group sync.WaitGroup
+
+	for i := range 2 {
+		group.Add(1)
+
+		go func() {
+			defer group.Done()
+
+			mustRead(t, cache, fmt.Sprintf("schema_%d", i))
+		}()
+	}
+
+	group.Wait()
+
+	if source.overlapped.Load() {
+		t.Error("two readings of the server overlapped on one connection")
+	}
+	if source.reads.Load() != 2 {
+		t.Errorf("the server was read %d times, want once per schema", source.reads.Load())
+	}
 }

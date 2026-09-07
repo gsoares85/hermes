@@ -17,8 +17,11 @@ import (
 // would show one person objects the other can see, or hide the ones they can,
 // depending only on who arrived first.
 //
-// The key is the schema. Expanding one in the object tree must not cost the
-// reading of its neighbour, and reading public must not invalidate sales.
+// The key is the schema: reading public must not invalidate sales, and
+// invalidating one must not throw away the other. It decides what is remembered
+// separately, not what is read at the same time — a cache holds one connection
+// and a connection carries one conversation, so the readings themselves happen
+// one after another however many callers there are.
 //
 // Invalidation is explicit and there is no expiry. A TTL is neither fresh nor
 // predictable — thirty seconds is far too slow after an ALTER of your own and
@@ -37,11 +40,29 @@ import (
 type Cache struct {
 	source Source
 
-	// mu guards the map and nothing else. It is never held across a read of the
-	// server: a read takes seconds on a large schema, and a lock held over it
-	// would make a second connection's cache wait for the first one's network.
+	// mu guards the map and nothing else, and is never held across a read of
+	// the server: what the map is for is deciding who reads, which has to be
+	// quick even while somebody is reading.
 	mu      sync.Mutex
 	schemas map[Name]*pending
+
+	// serialised is held for the length of a read, which is what keeps two of
+	// them from overlapping.
+	//
+	// A cache belongs to one connection and the source reads through it. Two
+	// readings at once would be two conversations on one connection, which no
+	// driver allows and pgx least of all — and the reader borrows session state
+	// while it works, pointing the search path at the schema it is reading and
+	// putting it back after. Overlap them and the second reading saves a path
+	// the first had already changed, the first restores the original, and the
+	// second puts back a path that belongs to nobody. The connection is then
+	// wrong for everything that follows.
+	//
+	// Serialising here rather than inside the reader because this is the piece
+	// that knows a connection is being shared. A reader handed to one caller at
+	// a time needs no lock, and paying for one there would charge every use for
+	// a problem only this one has.
+	serialised sync.Mutex
 }
 
 // Source is where a cache gets a schema it does not have.
@@ -50,6 +71,10 @@ type Cache struct {
 // which is what makes the cache testable with a double that counts how often it
 // was asked, and therefore what makes "two readers, one read" a thing a test can
 // state rather than a thing the code claims.
+//
+// It is never called from two goroutines at once, and does not have to be safe
+// for that. The cache guarantees it, because the cache is what knows the source
+// reads through a single connection.
 type Source interface {
 	Read(ctx context.Context, schema Name) (Schema, error)
 }
@@ -149,7 +174,9 @@ func (c *Cache) reading(schema Name) (*pending, bool) {
 // moment's trouble permanent until somebody thought to invalidate a schema that
 // never loaded.
 func (c *Cache) fill(ctx context.Context, schema Name, reading *pending) {
+	c.serialised.Lock()
 	reading.schema, reading.err = c.source.Read(ctx, schema)
+	c.serialised.Unlock()
 
 	if reading.err != nil {
 		c.forget(schema, reading)
