@@ -91,7 +91,17 @@ func (r *Reader) Read(ctx context.Context, schema Name) (read Schema, err error)
 		return Schema{}, err
 	}
 
-	defer func() { err = errors.Join(err, restore()) }()
+	// A model is answered only when the path went back. Handing back both a
+	// schema and an error leaves the caller a choice it has no way to make
+	// well: the model is fine, and the session it was read on is not — so a
+	// caller that treats the error as a warning goes on using a connection
+	// that resolves names in the wrong schema. There is one answer here, and
+	// when the session is broken the answer is the error.
+	defer func() {
+		if failed := restore(); failed != nil {
+			read, err = Schema{}, errors.Join(err, failed)
+		}
+	}()
 
 	read = Schema{Name: schema}
 

@@ -69,7 +69,7 @@ type Omission struct {
 func (s Script) String() string {
 	var text strings.Builder
 
-	if len(s.Statements) > 0 && !s.Schema.Valid() {
+	if !s.Schema.Valid() && (len(s.Statements) > 0 || len(s.Omitted) > 0) {
 		// Said rather than skipped. Without the path the file applies itself to
 		// whatever schema the reader's session happens to name, and a file that
 		// does that in silence is the failure the line below exists to prevent.

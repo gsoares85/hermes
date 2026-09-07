@@ -46,6 +46,12 @@ type counted struct {
 	// is inside the source rather than still on its way there.
 	arrived chan struct{}
 	once    sync.Once
+
+	// waiting counts the callers that have reached Cache.Read and not been
+	// answered. A test that wants two of them to meet waits on this rather
+	// than on arrived: arrived says the first is inside the source, which is
+	// nothing about whether the second ever queued behind it.
+	waiting atomic.Int64
 }
 
 func (c *counted) Read(_ context.Context, schema catalog.Name) (catalog.Schema, error) {
@@ -85,6 +91,38 @@ var _ catalog.Source = (*catalog.Reader)(nil)
 
 func blocking() *counted {
 	return &counted{held: make(chan struct{}), arrived: make(chan struct{})}
+}
+
+// queue reads while counting itself, so a test can wait for callers to be
+// genuinely queued rather than merely started.
+func queue(t *testing.T, source *counted, cache *catalog.Cache, schema string) catalog.Schema {
+	t.Helper()
+
+	source.waiting.Add(1)
+	defer source.waiting.Add(-1)
+
+	read, err := cache.Read(t.Context(), catalog.NewName(schema))
+	if err != nil {
+		t.Errorf("Read(%s) = %v", schema, err)
+	}
+
+	return read
+}
+
+// awaitQueued blocks until the given number of callers are inside Cache.Read,
+// so that a test about two of them meeting is about two of them meeting.
+func awaitQueued(t *testing.T, source *counted, callers int64) {
+	t.Helper()
+
+	for range 5000 {
+		if source.waiting.Load() >= callers {
+			return
+		}
+
+		time.Sleep(time.Millisecond)
+	}
+
+	t.Fatalf("only %d callers ever queued, want %d", source.waiting.Load(), callers)
 }
 
 // mustRead reads and fails the test when it does not answer.
@@ -140,14 +178,15 @@ func TestTwoCallersAtOnceCostOneReading(t *testing.T) {
 		go func() {
 			defer group.Done()
 
-			read, err := cache.Read(t.Context(), catalog.NewName("sales"))
-			if err != nil {
-				t.Errorf("Read() = %v", err)
-			}
-			answers[i] = read
+			answers[i] = queue(t, source, cache, "sales")
 		}()
 	}
 
+	// Both of them queued, not just the first one inside the source. Waiting on
+	// arrived alone let the second caller be served from the cache after the
+	// first had finished, and the test passed whether or not the reading was
+	// shared.
+	awaitQueued(t, source, 2)
 	<-source.arrived
 	close(source.held)
 	group.Wait()
@@ -327,12 +366,19 @@ func TestAFailureReachesEveryCallerWaitingOnIt(t *testing.T) {
 		go func() {
 			defer group.Done()
 
+			source.waiting.Add(1)
+			defer source.waiting.Add(-1)
+
 			if _, err := cache.Read(t.Context(), catalog.NewName("sales")); !errors.Is(err, failure) {
 				t.Errorf("Read() = %v, want the failure", err)
 			}
 		}()
 	}
 
+	// Both waiting on the one reading, which is what makes this about the
+	// failure reaching a waiter rather than about a second call that found
+	// nothing cached and failed on its own.
+	awaitQueued(t, source, 2)
 	<-source.arrived
 	close(source.held)
 	group.Wait()
@@ -346,17 +392,16 @@ func TestACallerThatGivesUpStopsWaiting(t *testing.T) {
 	cache := catalog.NewCache(source)
 
 	// The first caller owns the reading and stays in it.
-	started := make(chan struct{})
+	holding := make(chan struct{})
 
 	go func() {
-		close(started)
+		defer close(holding)
 
 		if _, err := cache.Read(context.Background(), catalog.NewName("sales")); err != nil {
 			t.Errorf("the first caller got %v", err)
 		}
 	}()
 
-	<-started
 	<-source.arrived
 
 	giveUp, cancel := context.WithCancel(context.Background())
@@ -366,7 +411,11 @@ func TestACallerThatGivesUpStopsWaiting(t *testing.T) {
 		t.Errorf("the caller that gave up got %v, want the cancellation", err)
 	}
 
+	// Joined, so an error reported by the goroutine lands while the test is
+	// still running. Its sibling below already did this and these two
+	// disagreed.
 	close(source.held)
+	<-holding
 }
 
 // What the cache answers is shared, and Clone is how a caller gets one it may

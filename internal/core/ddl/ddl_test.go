@@ -833,3 +833,31 @@ func TestATableWithRowSecurityIsDeclinedRatherThanStrippedOfIt(t *testing.T) {
 	mustWrite(t, script, `CREATE TABLE "ordinary"`)
 	mustWrite(t, script, `-- not written: the table "patient", because it restricts which rows are visible`)
 }
+
+// A name with a line break in it cannot break the comment it is written into.
+//
+// PostgreSQL allows a line break inside a quoted identifier, and a comment
+// carrying one raw would end at the break — commenting out its own first half
+// and leaving the rest as a statement nobody wrote. The reasoning for writing
+// names through %q was in the code and exercised nowhere.
+func TestANameWithALineBreakCannotBreakOutOfAComment(t *testing.T) {
+	t.Parallel()
+
+	script := ddl.Of(catalog.Schema{
+		Name: name("sales"),
+		Tables: []catalog.Table{
+			{Name: catalog.NewName("two\nlines"), Partitioned: true},
+			{Name: name("ordinary")},
+		},
+	})
+
+	// Every line of the file is either a comment or part of a statement; none
+	// is the tail of a name that escaped one.
+	for _, line := range strings.Split(script.String(), "\n") {
+		if strings.HasPrefix(line, "lines") {
+			t.Errorf("a name broke out of its comment: %q", line)
+		}
+	}
+
+	mustWrite(t, script, `-- not written: the table "two\nlines"`)
+}
