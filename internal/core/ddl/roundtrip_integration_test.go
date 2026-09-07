@@ -91,7 +91,11 @@ func TestTheScriptDeclinesOnlyWhatThisVersionDoesNotCompare(t *testing.T) {
 				objects = append(objects, omission.Object.Name.String())
 			}
 
-			if want := []string{"measurements", "measurements_2026"}; !reflect.DeepEqual(objects, want) {
+			// The sequence is there because the partitioned table owns it: a
+			// serial column's counter cannot be written when the table it
+			// belongs to is not.
+			want := []string{"measurements_id_seq", "measurements", "measurements_2026"}
+			if !reflect.DeepEqual(objects, want) {
 				t.Errorf("the script declined the objects %v, want %v", objects, want)
 			}
 
@@ -100,8 +104,7 @@ func TestTheScriptDeclinesOnlyWhatThisVersionDoesNotCompare(t *testing.T) {
 			// whole table because one of its keys cannot be added is what would
 			// make a schema with a partitioned table in it write almost
 			// nothing.
-			want := []string{"reading_measurement_taken_fkey"}
-			if !reflect.DeepEqual(keys, want) {
+			if want := []string{"reading_measurement_taken_fkey"}; !reflect.DeepEqual(keys, want) {
 				t.Errorf("the script declined the keys %v, want %v", keys, want)
 			}
 		})

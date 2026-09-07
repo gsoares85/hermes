@@ -275,6 +275,25 @@ func (w *writer) findOmissions() {
 		}
 	}
 
+	// A sequence a declined table owns goes with it. The graph cannot say so:
+	// the ownership edge is deliberately not in it — reading it as an ordering
+	// constraint would make every serial column a cycle — so the propagation
+	// below never reaches the sequence. Writing it anyway produced an ALTER
+	// SEQUENCE ... OWNED BY against a table the script had just said it did not
+	// write, which fails on the target halfway through.
+	for _, sequence := range w.schema.Sequences {
+		if !sequence.OwnedBy.Valid() {
+			continue
+		}
+
+		owner := catalog.Object{Kind: catalog.ObjectTable, Name: sequence.OwnedBy.Table}
+		if reason := w.omitted[owner]; reason != "" {
+			w.omitted[catalog.Object{Kind: catalog.ObjectSequence, Name: sequence.Name}] =
+				fmt.Sprintf("the table %q that owns it is not written",
+					sequence.OwnedBy.Table.String())
+		}
+	}
+
 	for spread := true; spread; {
 		spread = false
 

@@ -262,8 +262,12 @@ var corpusStatements = []string{
 
 	// Declarative partitioning. The partitions are tables in their own right,
 	// which is what this proves the reader survives.
+	// The id is a serial, so the partitioned table owns a sequence. A writer
+	// that declines the table and writes the sequence anyway emits an
+	// ALTER SEQUENCE ... OWNED BY against a table it has just said it did not
+	// write, and the script dies on the target halfway through.
 	`CREATE TABLE {schema}.measurements (
-		id integer NOT NULL,
+		id serial NOT NULL,
 		taken date NOT NULL
 	) PARTITION BY RANGE (taken)`,
 	`CREATE TABLE {schema}.measurements_2026 PARTITION OF {schema}.measurements

@@ -765,3 +765,43 @@ func TestAScriptWithNoNameableSchemaSaysTheTargetIsMissing(t *testing.T) {
 	mustWrite(t, script, "-- not written: the line that points the search path")
 	mustWrite(t, script, `CREATE TABLE "orders"`)
 }
+
+// A sequence belonging to a declined table is declined with it.
+//
+// The dependency graph cannot say so. The ownership edge is deliberately not in
+// it — reading it as an ordering constraint would make every serial column a
+// cycle — so the propagation that carries a declined table through to what needs
+// it never reaches the sequence. Writing it anyway produced an ALTER SEQUENCE …
+// OWNED BY against a table the script had said three lines above it did not
+// write, and the script died on the target halfway through.
+func TestASequenceOfADeclinedTableIsDeclinedToo(t *testing.T) {
+	t.Parallel()
+
+	schema := catalog.Schema{
+		Name: name("sales"),
+		Tables: []catalog.Table{{
+			Name: name("measurements"), Partitioned: true,
+			Columns: []catalog.Column{{
+				Name: name("id"), Position: 1, Type: catalog.NewTypeName("integer"),
+				Default: "nextval('measurements_id_seq'::regclass)",
+			}},
+		}},
+		Sequences: []catalog.Sequence{{
+			Name: name("measurements_id_seq"), Type: catalog.NewTypeName("integer"),
+			Start: 1, Increment: 1, Min: 1, Max: 2147483647, Cache: 1,
+			OwnedBy: catalog.ColumnRef{Table: name("measurements"), Column: name("id")},
+		}},
+	}
+
+	script := ddl.Of(schema)
+
+	mustNotWrite(t, script, "CREATE SEQUENCE")
+	mustNotWrite(t, script, "OWNED BY")
+	mustWrite(t, script,
+		`-- not written: the sequence "measurements_id_seq", because the table `+
+			`"measurements" that owns it is not written`)
+
+	if len(script.Statements) != 0 {
+		t.Errorf("the script holds %v, want nothing writable", script.Statements)
+	}
+}
