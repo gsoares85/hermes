@@ -42,18 +42,44 @@ type Table struct {
 
 	// Inherits names the tables this one inherits from, in the order they were
 	// declared — which is significant, because it decides the order inherited
-	// columns appear in.
+	// columns appear in, and is why this one list is not sorted.
+	//
+	// A parent in another schema is not named. The model is of one schema and
+	// has no way to address outside it, which is the same boundary the
+	// dependency graph draws.
 	Inherits []Name
+
+	// Partitioned reports that the table is divided into partitions, and
+	// Partition that it is one of them. Both are true of a partition that is
+	// itself partitioned.
+	//
+	// Neither models partitioning: this version does not compare it. They are
+	// here so that what is not compared can be named as not compared, which
+	// ADR-0007 requires and which matters more here than anywhere else — a
+	// partitioned table written without its PARTITION BY is an ordinary table,
+	// and a partition written without its bounds is a copy that silently holds
+	// the wrong rows. The DDL writer declines them by name rather than
+	// producing either.
+	Partitioned bool
+	Partition   bool
 }
 
 // Column is one column of a table.
 type Column struct {
 	Name Name
 
-	// Position is attnum: the order the table has, which is the order the
-	// server assigns and the order DDL has to reproduce. Columns are ordered by
-	// it and never by name, because a model in an order no CREATE TABLE can
-	// produce is a model the round trip can never close on.
+	// Position is where the column comes in the table, counting from one over
+	// the columns that are there. Columns are ordered by it and never by name,
+	// because a model in an order no CREATE TABLE can produce is a model the
+	// round trip can never close on.
+	//
+	// It is not attnum, and the difference is the point. A table that has had
+	// a column dropped keeps the hole in attnum forever — PostgreSQL leaves
+	// the entry in place so the row layout does not move — while its freshly
+	// created copy has no hole. Comparing the numbers would report a
+	// difference between a table and an exact copy of it, on every column
+	// after the hole, which is the false positive this model exists to avoid.
+	// What is part of the schema is the order; the numbering is bookkeeping.
 	Position int
 
 	Type    TypeName
@@ -69,9 +95,11 @@ type Column struct {
 	// Identity is empty, "always" or "by default".
 	Identity string
 
-	// Generated carries the expression of a generated column, empty when the
-	// column is not one. It is canonicalised with Default, in the same phase
-	// and for the same reason.
+	// Generated is how a generated column is generated — "stored" today, which
+	// is the only form PostgreSQL has — and empty when the column is not one.
+	// The expression itself is in Default, which is where the catalog keeps
+	// it: a generated column has a row in pg_attrdef like any default, and
+	// what tells the two apart is this field rather than where the text lives.
 	Generated string
 
 	// Collation is the collation of the column, always explicit. A column that

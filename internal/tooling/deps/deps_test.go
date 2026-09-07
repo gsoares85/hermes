@@ -266,6 +266,18 @@ func TestTheProjectRulesForbidReachingForAVault(t *testing.T) {
 		"the test harness in the catalog": {
 			module + "/internal/core/catalog", module + "/internal/testsupport",
 		},
+
+		// The DDL writer is the second package with a pull towards the harness,
+		// because the test that matters most to it needs a server: the round
+		// trip writes a model, applies it and reads it back. That test is test
+		// code and may import the harness; the package itself must not, or the
+		// writer would need Docker to compile.
+		"the test harness in the DDL writer": {
+			module + "/internal/core/ddl", module + "/internal/testsupport",
+		},
+		"a driver implementation in the DDL writer": {
+			module + "/internal/core/ddl", module + "/internal/driver/postgres",
+		},
 	}
 
 	for name, forbidden := range cases {

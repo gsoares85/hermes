@@ -169,3 +169,38 @@ func TestAnEmptySchemaSorts(t *testing.T) {
 	var empty catalog.Schema
 	empty.Sort()
 }
+
+// A column's position is where it comes, not what attnum happened to be.
+//
+// A table that has had a column dropped keeps the hole in attnum forever —
+// PostgreSQL leaves the entry in place so the row layout does not move — and
+// its freshly created copy has no hole. Comparing the raw numbers would report
+// a difference between a table and an exact copy of it, on every column after
+// the hole, which is the false positive the whole model exists to avoid.
+func TestAColumnKeepsItsPlaceAndNotItsAttnum(t *testing.T) {
+	t.Parallel()
+
+	holed := catalog.Table{
+		Name: catalog.NewName("with_a_hole"),
+		Columns: []catalog.Column{
+			{Name: catalog.NewName("kept"), Position: 3},
+			{Name: catalog.NewName("id"), Position: 1},
+		},
+	}
+
+	copied := catalog.Table{
+		Name: catalog.NewName("with_a_hole"),
+		Columns: []catalog.Column{
+			{Name: catalog.NewName("id"), Position: 1},
+			{Name: catalog.NewName("kept"), Position: 2},
+		},
+	}
+
+	holed.Sort()
+	copied.Sort()
+
+	if !reflect.DeepEqual(holed, copied) {
+		t.Errorf("a table with a dropped column compares unequal to its copy:\n %+v\n %+v",
+			holed, copied)
+	}
+}

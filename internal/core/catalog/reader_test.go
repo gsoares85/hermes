@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -274,7 +275,7 @@ func TestColumnsLandOnTheirOwnTable(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders"}, {"customers"}},
+		"pg_class relkind IN": {{"orders", "r", false, nil}, {"customers", "r", false, nil}},
 		"pg_attribute": {
 			{"customers", "name", 1, "text", false, nil, "", "", nil},
 			{"orders", "id", 1, "int4", true, nil, "", "", nil},
@@ -310,7 +311,7 @@ func TestAColumnOfAnUnknownTableIsAFault(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders"}},
+		"pg_class relkind IN": {{"orders", "r", false, nil}},
 		"pg_attribute":        {{"somewhere_else", "id", 1, "int4", true, nil, "", "", nil}},
 	}}
 
@@ -326,7 +327,7 @@ func TestAColumnCarriesTheFoldedType(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders"}},
+		"pg_class relkind IN": {{"orders", "r", false, nil}},
 		"pg_attribute":        {{"orders", "created", 1, "timestamptz(3)", true, nil, "", "", nil}},
 	}}
 
@@ -348,7 +349,7 @@ func TestAColumnCarriesWhatTheCatalogSaidAboutIt(t *testing.T) {
 	def, collation := "nextval(:seq:)", "en_US.utf8"
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders"}},
+		"pg_class relkind IN": {{"orders", "r", false, nil}},
 		"pg_attribute": {
 			{"orders", "id", 1, "int4", true, def, "a", "", nil},
 			{"orders", "label", 2, "text", false, nil, "", "", collation},
@@ -386,7 +387,7 @@ func TestAFailedQueryFailsTheRead(t *testing.T) {
 			server := &answers{
 				rows: map[string][][]any{
 					"pg_namespace":        existing(),
-					"pg_class relkind IN": {{"orders"}},
+					"pg_class relkind IN": {{"orders", "r", false, nil}},
 					"pg_attribute":        {},
 				},
 				err: map[string]error{table: errors.New("the server went away")},
@@ -485,7 +486,7 @@ func TestAReadSchemaComesOutSorted(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders"}, {"customers"}},
+		"pg_class relkind IN": {{"orders", "r", false, nil}, {"customers", "r", false, nil}},
 		"pg_attribute": {
 			{"orders", "amount", 2, "numeric", false, nil, "", "", nil},
 			{"orders", "id", 1, "int4", true, nil, "", "", nil},
@@ -515,7 +516,7 @@ func TestATypeOfThisSchemaLosesTheSchemaFromItsName(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders"}},
+		"pg_class relkind IN": {{"orders", "r", false, nil}},
 		"pg_attribute": {
 			{"orders", "own", 1, "sales.mood", false, nil, "", "", nil},
 			{"orders", "own_array", 2, "sales.mood[]", false, nil, "", "", nil},
@@ -554,7 +555,7 @@ func TestAQuotedSchemaIsStrippedFromATypeToo(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":        {{"My Sales"}},
-		"pg_class relkind IN": {{"orders"}},
+		"pg_class relkind IN": {{"orders", "r", false, nil}},
 		"pg_attribute":        {{"orders", "own", 1, `"My Sales".mood`, false, nil, "", "", nil}},
 	}}
 
@@ -575,7 +576,7 @@ func TestConstraintsAreReadWithTheirKindAndTheirKeyOrder(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders"}},
+		"pg_class relkind IN": {{"orders", "r", false, nil}},
 		"pg_attribute":        {},
 		"pg_constraint": {
 			{"orders", "orders_pk", "p", "PRIMARY KEY (a, b)", []string{"a", "b"}},
@@ -633,7 +634,7 @@ func TestAConstraintKindThisBuildDoesNotKnowIsCarriedThrough(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders"}},
+		"pg_class relkind IN": {{"orders", "r", false, nil}},
 		"pg_attribute":        {},
 		"pg_constraint":       {{"orders", "odd", "z", "SOMETHING NEW", []string(nil)}},
 	}}
@@ -656,7 +657,7 @@ func TestIndexesAreReadWithWhatDistinguishesThem(t *testing.T) {
 
 	server := &answers{rows: map[string][][]any{
 		"pg_namespace":        existing(),
-		"pg_class relkind IN": {{"orders"}},
+		"pg_class relkind IN": {{"orders", "r", false, nil}},
 		"pg_attribute":        {},
 		"pg_index": {
 			{"orders", "by_email", true, false,
@@ -693,13 +694,13 @@ func TestAConstraintOrIndexOfAnUnknownTableIsAFault(t *testing.T) {
 	for name, rows := range map[string]map[string][][]any{
 		"a constraint": {
 			"pg_namespace":        existing(),
-			"pg_class relkind IN": {{"orders"}},
+			"pg_class relkind IN": {{"orders", "r", false, nil}},
 			"pg_attribute":        {},
 			"pg_constraint":       {{"elsewhere", "c", "p", "PRIMARY KEY (a)", []string{"a"}}},
 		},
 		"an index": {
 			"pg_namespace":        existing(),
-			"pg_class relkind IN": {{"orders"}},
+			"pg_class relkind IN": {{"orders", "r", false, nil}},
 			"pg_attribute":        {},
 			"pg_index":            {{"elsewhere", "i", false, false, "CREATE INDEX", []string{"a"}}},
 		},
@@ -727,7 +728,7 @@ func TestAFailureReadingConstraintsOrIndexesFailsTheRead(t *testing.T) {
 			server := &answers{
 				rows: map[string][][]any{
 					"pg_namespace":        existing(),
-					"pg_class relkind IN": {{"orders"}},
+					"pg_class relkind IN": {{"orders", "r", false, nil}},
 					"pg_attribute":        {},
 				},
 				err: map[string]error{table: errors.New("the server went away")},
@@ -1026,5 +1027,112 @@ func TestNothingIsScopedForASchemaThatIsNotThere(t *testing.T) {
 		if strings.Contains(sql, "set_config") {
 			t.Errorf("the path was changed for a schema that is not there: %s", sql)
 		}
+	}
+}
+
+// A table says what it inherits, in the order it was declared in.
+//
+// The order is what decides where the inherited columns come, so it is the one
+// list in the model that is not sorted — a CREATE TABLE that names the parents
+// the other way round produces a table with its columns in another order.
+func TestATableIsReadWithWhatItInherits(t *testing.T) {
+	t.Parallel()
+
+	server := &answers{rows: map[string][][]any{
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {{"child", "r", false, []string{"second", "first"}}},
+	}}
+
+	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+	if err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+
+	want := []catalog.Name{catalog.NewName("second"), catalog.NewName("first")}
+	if got := schema.Tables[0].Inherits; !reflect.DeepEqual(got, want) {
+		t.Errorf("the table inherits %v, want %v in the order they were declared", got, want)
+	}
+}
+
+// A table that takes part in partitioning says so, in both directions.
+//
+// It is not partitioning modelled: this version does not compare it. It is the
+// fact recorded so the DDL writer can decline the table by name — a partitioned
+// table written without its PARTITION BY is an ordinary table, and a partition
+// written without its bounds is a copy that holds the wrong rows and says
+// nothing about it.
+func TestATableSaysWhetherItTakesPartInPartitioning(t *testing.T) {
+	t.Parallel()
+
+	server := &answers{rows: map[string][][]any{
+		"pg_namespace": existing(),
+		"pg_class relkind IN": {
+			{"measurements", "p", false, nil},
+			{"measurements_2026", "r", true, []string{"measurements"}},
+			{"ordinary", "r", false, nil},
+		},
+	}}
+
+	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+	if err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+
+	for _, want := range []struct {
+		name        string
+		partitioned bool
+		partition   bool
+	}{
+		{"measurements", true, false},
+		{"measurements_2026", false, true},
+		{"ordinary", false, false},
+	} {
+		table := tableNamed(t, schema, want.name)
+		if table.Partitioned != want.partitioned || table.Partition != want.partition {
+			t.Errorf("%s reads as partitioned=%v partition=%v, want %v and %v",
+				want.name, table.Partitioned, table.Partition, want.partitioned, want.partition)
+		}
+	}
+}
+
+func tableNamed(t *testing.T, schema catalog.Schema, name string) catalog.Table {
+	t.Helper()
+
+	for _, table := range schema.Tables {
+		if table.Name.String() == name {
+			return table
+		}
+	}
+
+	t.Fatalf("the schema has no table %q", name)
+
+	return catalog.Table{}
+}
+
+// A column that is nothing in particular says nothing, and the catalog spells
+// "nothing" as a NUL rather than as the empty string.
+//
+// attidentity and attgenerated are both "char" — one byte, zero when there is
+// nothing to say — and they arrive here as "\x00". A reader that checked only
+// for the empty string would put that byte in the model of every ordinary
+// column, where it compares equal to itself and no reading notices; it reaches
+// daylight when the DDL writer puts GENERATED ALWAYS AS () and a zero byte into
+// a statement, on a schema that has nothing generated in it at all.
+func TestAColumnThatIsNeitherGeneratedNorAnIdentitySaysSo(t *testing.T) {
+	t.Parallel()
+
+	server := &answers{rows: map[string][][]any{
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {{"orders", "r", false, nil}},
+		"pg_attribute":        {{"orders", "label", 1, "text", false, nil, "\x00", "\x00", nil}},
+	}}
+
+	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+	if err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+
+	if column := schema.Tables[0].Columns[0]; column.Identity != "" || column.Generated != "" {
+		t.Errorf("an ordinary column came back as %+v", column)
 	}
 }

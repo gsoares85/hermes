@@ -37,10 +37,7 @@ var corpusSequence atomic.Uint64
 func Corpus(t *testing.T, instance *Instance) string {
 	t.Helper()
 
-	schema := fmt.Sprintf("corpus_%d", corpusSequence.Add(1))
-
-	installExtensions(t, instance)
-	instance.Exec(t, "CREATE SCHEMA "+schema)
+	schema := CorpusTarget(t, instance)
 
 	// Not dropped when the test ends, and that is not an omission. Exec runs
 	// through the context of the test, which is already cancelled by the time a
@@ -48,11 +45,40 @@ func Corpus(t *testing.T, instance *Instance) string {
 	// second problem on top of whatever the test found. The container is the
 	// cleanup: it is thrown away at the end of the run, and the name carries a
 	// counter so no two calls collide inside one.
-	for _, statement := range corpusStatements {
-		instance.Exec(t, strings.ReplaceAll(statement, schemaToken, schema))
-	}
+	run(t, instance, schema, corpusStatements)
 
 	return schema
+}
+
+// CorpusTarget creates a schema holding what the corpus needs and the model
+// does not carry, and nothing else.
+//
+// It is what a round trip writes into. The DDL written from a model can only
+// build what the model holds, and the model deliberately does not hold types:
+// an enum, a domain and a composite are SYN-04, out of scope for this version
+// and named as not compared rather than pretended about. So the target is given
+// them, and what the round trip then proves is that everything the model does
+// hold survives being written and read again — which is the property, rather
+// than a claim that the writer can build a schema out of nothing.
+func CorpusTarget(t *testing.T, instance *Instance) string {
+	t.Helper()
+
+	schema := fmt.Sprintf("corpus_%d", corpusSequence.Add(1))
+
+	installExtensions(t, instance)
+	instance.Exec(t, "CREATE SCHEMA "+schema)
+	run(t, instance, schema, corpusPrerequisites)
+
+	return schema
+}
+
+// run applies statements to a schema, putting its name where the token is.
+func run(t *testing.T, instance *Instance, schema string, statements []string) {
+	t.Helper()
+
+	for _, statement := range statements {
+		instance.Exec(t, strings.ReplaceAll(statement, schemaToken, schema))
+	}
 }
 
 // Extensions belong to the database rather than to a schema, so they are
@@ -94,6 +120,21 @@ func installExtensions(t *testing.T, instance *Instance) {
 // was written to prove.
 const schemaToken = "{schema}"
 
+// The statements that create what the corpus needs and the model does not
+// carry.
+//
+// Types of their own — an enum, a domain, a composite — which the columns below
+// use and which this version does not compare. They are split out from the rest
+// because the round trip has to be able to build the target without them being
+// part of what is written: a model that does not hold a type cannot write one,
+// and a fixture that mixed the two would make the round trip prove something
+// weaker than it claims.
+var corpusPrerequisites = []string{
+	`CREATE TYPE {schema}.mood AS ENUM ('sad', 'ok', 'happy')`,
+	`CREATE DOMAIN {schema}.positive AS integer CHECK (VALUE > 0)`,
+	`CREATE TYPE {schema}.pair AS (first integer, second text)`,
+}
+
 // The statements, each naming the schema through schemaToken.
 //
 // Ordered so that what a later one depends on already exists, which is the same
@@ -108,11 +149,6 @@ var corpusStatements = []string{
 		"Full Name" text NOT NULL,
 		"endereço" text
 	)`,
-
-	// A type of their own, which must not be folded into a built-in.
-	`CREATE TYPE {schema}.mood AS ENUM ('sad', 'ok', 'happy')`,
-	`CREATE DOMAIN {schema}.positive AS integer CHECK (VALUE > 0)`,
-	`CREATE TYPE {schema}.pair AS (first integer, second text)`,
 
 	// Every shape a column can have that the model has a field for. The
 	// defaults are deliberately of different kinds — a literal, a cast, a

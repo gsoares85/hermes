@@ -9,9 +9,7 @@ import (
 	"testing"
 
 	"github.com/gsoares85/hermes/internal/core/catalog"
-	"github.com/gsoares85/hermes/internal/core/conn"
 	"github.com/gsoares85/hermes/internal/driver"
-	"github.com/gsoares85/hermes/internal/driver/postgres"
 	"github.com/gsoares85/hermes/internal/testsupport"
 )
 
@@ -22,24 +20,7 @@ func openSession(t *testing.T, version string) (driver.Session, *testsupport.Ins
 
 	instance := testsupport.SharedPostgres(t, version)
 
-	config, err := conn.ParseURI(instance.DSN)
-	if err != nil {
-		t.Fatalf("parsing the DSN: %v", err)
-	}
-
-	pool, err := postgres.New().Open(t.Context(), config.Target())
-	if err != nil {
-		t.Fatalf("opening a pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-
-	session, err := pool.Session(t.Context())
-	if err != nil {
-		t.Fatalf("checking out a session: %v", err)
-	}
-	t.Cleanup(session.Close)
-
-	return session, instance
+	return testsupport.Session(t, instance), instance
 }
 
 // readCorpus creates the pathological schema on a server of the given version

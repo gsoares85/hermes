@@ -153,18 +153,38 @@ func (r *Reader) exists(ctx context.Context, schema Name) (bool, error) {
 	return found, nil
 }
 
-// listTables reads the tables of a schema.
+// listTables reads the tables of a schema, what each inherits, and whether it
+// takes part in partitioning.
 //
 // relkind 'r' is an ordinary table and 'p' a partitioned one. A partitioned
-// table is a table, and leaving it out would make the reader silently miss it;
-// how its partitions relate to it is not modelled yet, so each of those is
-// read as the ordinary table it also is.
+// table is a table, and leaving it out would make the reader silently miss it.
+// Both facts about partitioning are read rather than modelled: this version
+// does not compare partitioning, and what is not compared has to be named as
+// not compared instead of quietly written as an ordinary table. See
+// Table.Partitioned.
+//
+// The parents come back through pg_inherits ordered by inhseqno, which is the
+// order they were declared in and therefore the order the inherited columns
+// appear in. Sorting them would be wrong, which is why this is the one list in
+// the model Sort leaves alone. A parent in another schema is left out: the
+// model is of one schema and cannot address outside it, the same boundary the
+// dependency graph draws.
 //
 // Everything else pg_class holds — indexes, sequences, views, TOAST tables — is
 // either read by a query of its own or is not an object of this model.
-const listTables = `SELECT c.relname
+const listTables = `SELECT c.relname,
+	       c.relkind,
+	       c.relispartition,
+	       parents.inherits
 	FROM pg_catalog.pg_class c
 	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+	LEFT JOIN LATERAL (
+	        SELECT array_agg(p.relname ORDER BY i.inhseqno) AS inherits
+	        FROM pg_catalog.pg_inherits i
+	        JOIN pg_catalog.pg_class p ON p.oid = i.inhparent
+	        JOIN pg_catalog.pg_namespace pn ON pn.oid = p.relnamespace
+	        WHERE i.inhrelid = c.oid AND pn.nspname = n.nspname
+	     ) parents ON true
 	WHERE n.nspname = $1 AND c.relkind IN ('r', 'p')`
 
 // tables answers the tables of the schema, and the order the server listed
@@ -179,12 +199,22 @@ func (r *Reader) tables(ctx context.Context, schema Name) (map[string]*Table, []
 	var order []string
 
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var (
+			name, relkind string
+			partition     bool
+			inherits      []string
+		)
+
+		if err := rows.Scan(&name, &relkind, &partition, &inherits); err != nil {
 			return nil, nil, fmt.Errorf("reading a table of %s: %w", schema, err)
 		}
 
-		tables[name] = &Table{Name: NewName(name)}
+		tables[name] = &Table{
+			Name:        NewName(name),
+			Inherits:    namesOf(inherits),
+			Partitioned: relkind == "p",
+			Partition:   partition,
+		}
 		order = append(order, name)
 	}
 
@@ -335,9 +365,16 @@ func identityOf(stored string) string {
 // generatedOf spells out what attgenerated abbreviates, for the same reason.
 // The catalog has held only 's' since generated columns arrived; anything else
 // is a form this build does not know, and naming it is better than dropping it.
+//
+// A column that is not generated holds a NUL rather than nothing: attgenerated
+// is a "char", which is one byte and is zero when there is nothing to say. It
+// arrives here as "\x00", and a check for the empty string alone lets that
+// through — which puts a NUL in the model of every ordinary column, compares
+// equal to itself so no reading notices, and reaches daylight only when the DDL
+// writer puts GENERATED ALWAYS AS () and a zero byte into a statement.
 func generatedOf(stored string) string {
 	switch stored {
-	case "":
+	case "", "\x00":
 		return ""
 	case "s":
 		return "stored"

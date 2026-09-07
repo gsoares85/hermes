@@ -70,6 +70,16 @@ func (t *Table) Sort() {
 	// never close.
 	slices.SortStableFunc(t.Columns, func(a, b Column) int { return a.Position - b.Position })
 
+	// And renumbered once they are in order, so that the position is where the
+	// column comes rather than what attnum happened to be. A table that has
+	// had a column dropped keeps that hole in attnum forever and its freshly
+	// created copy has none; comparing the raw numbers would report every
+	// column after the hole as changed between a table and an exact copy of
+	// it. See Column.Position.
+	for i := range t.Columns {
+		t.Columns[i].Position = i + 1
+	}
+
 	byName(t.Constraints, func(c Constraint) Name { return c.Name })
 	byName(t.Indexes, func(i Index) Name { return i.Name })
 }
