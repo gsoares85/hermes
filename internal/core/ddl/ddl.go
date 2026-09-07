@@ -248,6 +248,8 @@ func (w *writer) findOmissions() {
 			w.omitted[object] = "it is divided into partitions, and this version does not compare partitioning"
 		case table.Partition:
 			w.omitted[object] = "it is a partition, and this version does not compare partitioning"
+		default:
+			w.declineUnknownGeneration(object, table)
 		}
 	}
 
@@ -283,6 +285,33 @@ func (w *writer) findOmissions() {
 func blocking(edge catalog.Dependency) bool {
 	return edge.Reason != catalog.ReasonForeignKey
 }
+
+// declineUnknownGeneration declines a table with a column generated in a way
+// this build does not know.
+//
+// The reader carries an unrecognised form through rather than dropping it, which
+// is right: a spelling from a version newer than this one is still a fact about
+// the column. The writer cannot do the same. Interpolating it produces
+// GENERATED ALWAYS AS (...) followed by whatever the catalog said, which is not
+// a statement — so the choice is between a script that fails on the target and a
+// table declined by name here, and ADR-0007 already answers that.
+func (w *writer) declineUnknownGeneration(object catalog.Object, table catalog.Table) {
+	for _, column := range table.Columns {
+		if column.Generated == "" || column.Generated == generatedStored {
+			continue
+		}
+
+		w.omitted[object] = fmt.Sprintf(
+			"its column %q is generated %q, which this version does not know how to write",
+			column.Name.String(), column.Generated)
+
+		return
+	}
+}
+
+// generatedStored is the only way PostgreSQL generates a column today. A model
+// holding anything else came from a newer server than this build knows.
+const generatedStored = "stored"
 
 // omissions is what was not written: the objects first, in the order the schema
 // holds them, then the rules left out of objects that were.
@@ -469,11 +498,15 @@ func (w *writer) generation(table catalog.Table, column catalog.Column) string {
 	switch {
 	case column.Identity != "":
 		return w.identity(table, column)
-	case column.Generated != "":
+	case column.Generated == generatedStored:
 		// Parenthesised on the way out whatever the server rendered, because
 		// the syntax requires it and the rendering only supplies it for an
 		// expression that needed it. Two sets of parentheses are harmless; the
 		// server prints them back as one.
+		//
+		// Only the form this build knows reaches here: a table with a column
+		// generated any other way is declined whole, because there is no way to
+		// write it and no way to leave it out of a table it is a column of.
 		return "GENERATED ALWAYS AS (" + column.Default + ") " + strings.ToUpper(column.Generated)
 	case column.Default != "":
 		return "DEFAULT " + column.Default

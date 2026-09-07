@@ -665,3 +665,38 @@ func TestAnEmptySchemaIsWrittenWithoutAPath(t *testing.T) {
 		t.Errorf("an empty schema is written as %q", got)
 	}
 }
+
+// A column generated in a way this build does not know takes its table out of
+// the script, by name.
+//
+// The reader carries an unrecognised form through rather than dropping it, which
+// is right: a spelling from a newer server is still a fact about the column. The
+// writer cannot do the same — interpolating it produces GENERATED ALWAYS AS (…)
+// followed by whatever the catalog said, which is not a statement. The choice is
+// between a script that fails on the target and a table declined here with the
+// reason attached, and ADR-0007 answers that.
+func TestAColumnGeneratedInAnUnknownWayDeclinesItsTable(t *testing.T) {
+	t.Parallel()
+
+	schema := catalog.Schema{
+		Name: name("sales"),
+		Tables: []catalog.Table{
+			{Name: name("future"), Columns: []catalog.Column{
+				{Name: name("id"), Position: 1, Type: catalog.NewTypeName("integer")},
+				{Name: name("computed"), Position: 2, Type: catalog.NewTypeName("integer"),
+					Default: "(id * 2)", Generated: "virtual"},
+			}},
+			{Name: name("ordinary"), Columns: []catalog.Column{
+				{Name: name("id"), Position: 1, Type: catalog.NewTypeName("integer")},
+			}},
+		},
+	}
+
+	script := ddl.Of(schema)
+
+	mustNotWrite(t, script, `CREATE TABLE "future"`)
+	mustNotWrite(t, script, "GENERATED ALWAYS AS ((id * 2)) VIRTUAL")
+	mustWrite(t, script, `CREATE TABLE "ordinary"`)
+	mustWrite(t, script,
+		`-- not written: the table "future", because its column "computed" is generated "virtual"`)
+}
