@@ -113,7 +113,27 @@ type failedRow struct{ err error }
 
 func (r failedRow) Scan(...any) error { return r.err }
 
+// BeginSnapshot opens the transaction a read of many statements needs: one
+// snapshot for all of them, and no way to write.
+//
+// REPEATABLE READ is the level that gives it. PostgreSQL takes the snapshot at
+// the first statement of the transaction and every later one sees the same, so
+// a schema read across eleven queries is a schema of one moment. SERIALIZABLE
+// would do as well and buys nothing here — there is nothing to serialise
+// against, because the transaction never writes — while costing the chance of a
+// serialisation failure the caller would have to retry.
+func (s *session) BeginSnapshot(ctx context.Context) error {
+	return s.begin(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+}
+
 func (s *session) Begin(ctx context.Context) error {
+	return s.begin(ctx, pgx.TxOptions{})
+}
+
+func (s *session) begin(ctx context.Context, options pgx.TxOptions) error {
 	if s.tx != nil {
 		return driver.ErrTransactionActive
 	}
@@ -122,7 +142,7 @@ func (s *session) Begin(ctx context.Context) error {
 		return driver.ErrSessionClosed
 	}
 
-	tx, err := s.conn.Begin(ctx)
+	tx, err := s.conn.BeginTx(ctx, options)
 	if err != nil {
 		return fmt.Errorf("opening a transaction: %w", err)
 	}

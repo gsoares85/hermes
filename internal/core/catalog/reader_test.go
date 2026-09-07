@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gsoares85/hermes/internal/core/catalog"
@@ -38,6 +39,14 @@ type answers struct {
 	cancelDuring string
 	cancel       context.CancelFunc
 
+	// snapshots counts the transactions opened and left, so a test can say the
+	// read happened inside one. snapshotFails is what a server that refuses to
+	// open one answers, and inTransaction is the caller that already had one.
+	snapshots     atomic.Int64
+	left          atomic.Int64
+	snapshotFails error
+	inTransaction bool
+
 	// restoredLive records whether the context the path was put back through
 	// was still usable. It is the whole point of the test that sets
 	// cancelDuring: restoring through a cancelled context fails exactly when
@@ -47,6 +56,26 @@ type answers struct {
 
 // The path the session is on before a read scopes it, and what it goes back to.
 const pathBefore = "public"
+
+func (a *answers) BeginSnapshot(context.Context) error {
+	if a.inTransaction {
+		return driver.ErrTransactionActive
+	}
+
+	if a.snapshotFails != nil {
+		return a.snapshotFails
+	}
+
+	a.snapshots.Add(1)
+
+	return nil
+}
+
+func (a *answers) Rollback(context.Context) error {
+	a.left.Add(1)
+
+	return nil
+}
 
 func (a *answers) Query(ctx context.Context, sql string, _ ...any) driver.Rows {
 	if setting, isSetting := a.searchPath(ctx, sql); isSetting {
@@ -457,6 +486,12 @@ type recordingQuerier struct {
 	sql   []string
 	args  []any
 }
+
+func (r *recordingQuerier) BeginSnapshot(ctx context.Context) error {
+	return r.inner.BeginSnapshot(ctx)
+}
+
+func (r *recordingQuerier) Rollback(ctx context.Context) error { return r.inner.Rollback(ctx) }
 
 func (r *recordingQuerier) Query(ctx context.Context, sql string, args ...any) driver.Rows {
 	r.sql = append(r.sql, sql)
@@ -1296,5 +1331,78 @@ func TestReadingCostsTheSameNumberOfQueriesWhateverTheSchemaHolds(t *testing.T) 
 	if one != asks {
 		t.Errorf("reading a schema costs %d queries, want %d — a query was added"+
 			" or removed, which is a decision rather than a detail", one, asks)
+	}
+}
+
+// A schema is read inside one view of the database, and the view is left
+// afterwards.
+//
+// Eleven statements go into a schema. Without a snapshot each of them sees a
+// different database, and the failure that produces is silent: a table listed by
+// the first and dropped before the second comes back with no columns, no
+// constraints and no indexes, and nothing reports it. The model is then
+// indistinguishable from a table that lost everything, and the diff offers to
+// put it back.
+func TestASchemaIsReadInsideOneSnapshot(t *testing.T) {
+	t.Parallel()
+
+	server := &answers{rows: map[string][][]any{
+		"pg_namespace":             existing(),
+		"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+	}}
+
+	if _, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales")); err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+
+	if got := server.snapshots.Load(); got != 1 {
+		t.Errorf("the read opened %d snapshots, want one", got)
+	}
+	if got := server.left.Load(); got != 1 {
+		t.Errorf("the read left %d snapshots, want one", got)
+	}
+}
+
+// A caller that already has a transaction keeps it.
+//
+// Its transaction is the one in force and it is not this package's to end —
+// rolling it back at the end of a read would undo work the caller had done and
+// not asked anybody to discard.
+func TestAReadInsideSomebodyElsesTransactionLeavesItAlone(t *testing.T) {
+	t.Parallel()
+
+	server := &answers{
+		inTransaction: true,
+		rows: map[string][][]any{
+			"pg_namespace":             existing(),
+			"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", nil, nil}},
+		},
+	}
+
+	if _, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales")); err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+
+	if got := server.left.Load(); got != 0 {
+		t.Errorf("the read ended somebody else's transaction %d times", got)
+	}
+}
+
+// A server that will not give a snapshot fails the read.
+//
+// Reading anyway would answer a model that might be of no moment at all, and a
+// model nobody can trust is worse than an error: the diff cannot tell one from
+// a schema that really is in that state.
+func TestAReadThatCannotGetASnapshotFails(t *testing.T) {
+	t.Parallel()
+
+	refused := errors.New("the server would not")
+	server := &answers{
+		snapshotFails: refused,
+		rows:          map[string][][]any{"pg_namespace": existing()},
+	}
+
+	if _, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales")); !errors.Is(err, refused) {
+		t.Errorf("Read() = %v, want the refusal", err)
 	}
 }

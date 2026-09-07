@@ -180,6 +180,26 @@ type Session interface {
 	// reusing the outer one would make a rollback undo more than it should.
 	Begin(ctx context.Context) error
 
+	// BeginSnapshot opens a transaction in which every statement sees one
+	// state of the database, and which cannot write.
+	//
+	// It exists because reading a schema is many statements and the answer has
+	// to be of one moment. Without it, a table listed by the first statement
+	// and dropped before the second comes back with no columns at all — a
+	// model nobody can tell from a table that lost them, which is the false
+	// positive the whole comparison is built to avoid. Ordinary Begin is not
+	// enough: it gives each statement its own view, which is the right default
+	// for work that writes and the wrong one for work that has to agree with
+	// itself.
+	//
+	// Read-only is part of it rather than a precaution. Introspection writes
+	// nothing, saying so lets the server refuse anything that tries, and a
+	// reader that has declared it cannot become a writer by mistake.
+	//
+	// It fails with ErrTransactionActive like Begin, which is how a caller that
+	// already has a transaction is told its own is the one in force.
+	BeginSnapshot(ctx context.Context) error
+
 	// Commit and Rollback close the transaction, and fail with
 	// ErrNoTransaction when there is none.
 	Commit(ctx context.Context) error

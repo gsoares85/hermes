@@ -3,11 +3,13 @@
 package catalog_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gsoares85/hermes/internal/core/catalog"
@@ -1448,4 +1450,80 @@ func TestAnIndexOnAPartitionedTableIsReadOnce(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A schema read while somebody else is changing it comes back whole.
+//
+// This is the property the snapshot exists for, against a real server rather
+// than a double. A table is dropped from another connection in the middle of the
+// read — between the statement that lists the tables and the ones that fill
+// them — and the reading must either hold the table as it was or fail. What it
+// must not do is hold the table with nothing in it, which is what eleven
+// statements against eleven views of the database produce, and which no diff can
+// tell from a table that really did lose everything.
+//
+// The drop runs on a connection of its own, because the reader's is inside the
+// transaction being tested. It is committed before the read is allowed to go on,
+// so this is not a race the test hopes to win: the table is certainly gone from
+// every view taken after it.
+//
+// What the snapshot buys is measured rather than assumed: a catalog scan inside
+// REPEATABLE READ keeps answering from the view the transaction opened with,
+// which was confirmed against a server. The renderers — pg_get_constraintdef and
+// its family — do not, because they read the catalog through a snapshot of their
+// own, so a table with a constraint on it makes the read fail instead. Failing
+// is a fine answer. Coming back hollow is not, and that is what this pins.
+func TestASchemaIsReadWholeWhileSomebodyElseChangesIt(t *testing.T) {
+	t.Parallel()
+
+	session, instance := openSession(t, testsupport.SupportedVersions[0])
+	corpus := testsupport.Corpus(t, instance)
+
+	// A table of its own, so dropping it cannot disturb the rest of the corpus,
+	// and with nothing on it that the server renders: a constraint or an index
+	// would send pg_get_constraintdef after an object that is gone, and those
+	// functions read the catalog through a snapshot of their own rather than
+	// the transaction's. That is a failure rather than a hollow table, which is
+	// an acceptable answer — but the property worth pinning is the other one,
+	// so this table is shaped to reach it.
+	instance.Exec(t, "CREATE TABLE "+corpus+".doomed (id integer, label text)")
+
+	reader := catalog.NewReader(&watched{
+		Session: session,
+		// After the tables are listed and before the columns are read, which is
+		// the window that produced a table with no columns.
+		after: "pg_class",
+		then:  func() { instance.Exec(t, "DROP TABLE "+corpus+".doomed") },
+	})
+
+	read, err := reader.Read(t.Context(), catalog.NewName(corpus))
+	if err != nil {
+		t.Fatalf("reading %s: %v", corpus, err)
+	}
+
+	doomed := tableIn(t, read, "doomed")
+	if len(doomed.Columns) != 2 {
+		t.Errorf("the table dropped mid-read came back with %d columns, want the two it had"+
+			" when the reading began", len(doomed.Columns))
+	}
+}
+
+// watched runs something once, after the first query that reads a given catalog
+// table, so a test can put a change exactly in the window it is about.
+type watched struct {
+	driver.Session
+
+	after string
+	then  func()
+	once  sync.Once
+}
+
+func (w *watched) Query(ctx context.Context, sql string, args ...any) driver.Rows {
+	rows := w.Session.Query(ctx, sql, args...)
+
+	if strings.Contains(sql, "FROM pg_catalog."+w.after) {
+		w.once.Do(w.then)
+	}
+
+	return rows
 }

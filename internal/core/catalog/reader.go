@@ -36,6 +36,11 @@ var ErrInconsistentCatalog = errors.New("the catalog answered inconsistently")
 // hands down.
 type Querier interface {
 	Query(ctx context.Context, sql string, args ...any) driver.Rows
+
+	// BeginSnapshot and Rollback are here because a schema is read across
+	// eleven statements and has to be the schema of one moment. See snapshot.
+	BeginSnapshot(ctx context.Context) error
+	Rollback(ctx context.Context) error
 }
 
 // Reader reads a schema out of pg_catalog.
@@ -65,6 +70,13 @@ func (r *Reader) Read(ctx context.Context, schema Name) (read Schema, err error)
 	if !schema.Valid() {
 		return Schema{}, fmt.Errorf("%w: %q cannot name a schema", ErrSchemaNotFound, schema)
 	}
+
+	release, err := r.snapshot(ctx)
+	if err != nil {
+		return Schema{}, err
+	}
+
+	defer func() { err = errors.Join(err, release()) }()
 
 	found, err := r.exists(ctx, schema)
 	if err != nil {
@@ -131,6 +143,48 @@ func (r *Reader) Read(ctx context.Context, schema Name) (read Schema, err error)
 	read.Sort()
 
 	return read, nil
+}
+
+// snapshot puts the read inside one view of the database and answers how to
+// leave it.
+//
+// Eleven statements go into a schema, and without this each of them sees a
+// different database. The failure that produces is not an error: a table listed
+// by the first statement and dropped before the second comes back with no
+// columns, no constraints and no indexes, and nothing says so — a model
+// indistinguishable from a table that lost everything, which the diff would
+// then offer to restore. A table created between the two is the other half, and
+// that one at least reports, though it reports as though this package had got
+// its queries wrong.
+//
+// A caller that already has a transaction keeps it. Its transaction is the one
+// in force and it is not this function's to end — which is what the sentinel
+// says, and why it is the one error here that is not a failure.
+//
+// Leaving is a rollback rather than a commit because nothing was written; the
+// transaction is read-only and the server would refuse anything else.
+func (r *Reader) snapshot(ctx context.Context) (func() error, error) {
+	switch err := r.server.BeginSnapshot(ctx); {
+	case errors.Is(err, driver.ErrTransactionActive):
+		return func() error { return nil }, nil
+	case err != nil:
+		return nil, fmt.Errorf("opening a snapshot to read from: %w", err)
+	}
+
+	return func() error {
+		// Its own context, for the reason the search path has one: the read
+		// ending early is when leaving matters, and the commonest way for it to
+		// end early is a cancellation that would refuse this statement too —
+		// leaving the transaction open on a connection going back to the pool.
+		leave, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreTimeout)
+		defer cancel()
+
+		if err := r.server.Rollback(leave); err != nil {
+			return fmt.Errorf("leaving the snapshot: %w", err)
+		}
+
+		return nil
+	}, nil
 }
 
 // schemaExists asks whether the namespace is there at all.
