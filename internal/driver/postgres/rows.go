@@ -8,6 +8,31 @@ import (
 	"github.com/gsoares85/hermes/internal/driver"
 )
 
+// row is a single pgx row seen through the seam.
+//
+// It is not here to seal a leak, and it is worth being exact about that: what
+// pgx returns from QueryRow is a defined type over its result set, so it gets a
+// fresh method set and carries only Scan. Nothing extra crosses without it.
+//
+// It is here so that a failure on this path reads like a failure on the other
+// one. rows.Scan says which operation failed; this said nothing, so the same
+// mistake produced a message with context through Query and a bare pgx error
+// through QueryRow. And it makes the adapter uniform, which is what stops the
+// day pgx gives that type another method from being a day nobody notices.
+type row struct{ inner pgx.Row }
+
+// Scan is not classified, for the reason given on rows.Scan below: a failure
+// here is a mismatch between the query and what the caller asked to read it
+// into, which is a bug in this repository rather than a condition of the
+// server.
+func (r row) Scan(dest ...any) error {
+	if err := r.inner.Scan(dest...); err != nil {
+		return fmt.Errorf("reading the row: %w", err)
+	}
+
+	return nil
+}
+
 // rows is a pgx result set seen through the seam.
 //
 // It holds the pgx value in a field rather than embedding it, and that is the

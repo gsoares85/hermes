@@ -83,7 +83,7 @@ func (s *session) QueryRow(ctx context.Context, sql string, args ...any) driver.
 		return failedRow{err: driver.ErrSessionClosed}
 	}
 
-	return run.QueryRow(ctx, sql, args...)
+	return row{inner: run.QueryRow(ctx, sql, args...)}
 }
 
 // Query sends a query and answers the result set.

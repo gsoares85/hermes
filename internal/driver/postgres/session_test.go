@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -94,6 +95,13 @@ func TestClosingTwiceIsSafe(t *testing.T) {
 // the rest through a type it is not allowed to import. That is the arrangement
 // ADR-0009 exists to prevent, and an interface it can be asserted through is
 // not a seam.
+//
+// There is no equivalent for a single row, and the reason is worth writing down
+// so nobody adds one. pgx.Row and driver.Row are the same interface written
+// twice — one method, Scan — so asserting either to the other always succeeds
+// and proves nothing, and what pgx returns from QueryRow is a defined type over
+// its result set, which gets a fresh method set carrying only Scan. Nothing to
+// seal, and a test would pass whatever the adapter did.
 func TestAResultSetDoesNotCarryThePgxTypeAcrossTheSeam(t *testing.T) {
 	t.Parallel()
 
@@ -108,3 +116,30 @@ func TestAResultSetDoesNotCarryThePgxTypeAcrossTheSeam(t *testing.T) {
 		}
 	}
 }
+
+// A failure reading a single row says which operation failed, like a failure
+// reading a result set does.
+//
+// It is the whole reason the single row has a wrapper. Nothing leaks without
+// one — what pgx returns from QueryRow carries only Scan — but the same mistake
+// produced a message with context through Query and a bare pgx error through
+// QueryRow, and the layer above cannot tell where a message with no operation
+// in it came from.
+func TestAFailureReadingARowSaysWhatFailed(t *testing.T) {
+	t.Parallel()
+
+	broken := errors.New("no rows in result set")
+
+	err := row{inner: scanFails{err: broken}}.Scan(new(int))
+	if !errors.Is(err, broken) {
+		t.Fatalf("Scan() = %v, want the failure underneath", err)
+	}
+	if !strings.Contains(err.Error(), "reading the row") {
+		t.Errorf("Scan() = %q, want it to say which operation failed", err)
+	}
+}
+
+// scanFails is a pgx row that only ever fails.
+type scanFails struct{ err error }
+
+func (s scanFails) Scan(...any) error { return s.err }
