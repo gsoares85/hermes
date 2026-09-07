@@ -700,3 +700,49 @@ func TestAColumnGeneratedInAnUnknownWayDeclinesItsTable(t *testing.T) {
 	mustWrite(t, script,
 		`-- not written: the table "future", because its column "computed" is generated "virtual"`)
 }
+
+// The preview says what it left out, and does not say it left out something it
+// wrote.
+//
+// A foreign key pointing at a declined table cannot be added; the table it is
+// declared on is written all the same. Rendering that as though the table were
+// the thing left out produces a file that contradicts itself three lines later,
+// and the product's first rule is that nothing happens without a preview — a
+// preview that is wrong about what will run is worse than none.
+//
+// The assertion is on the text rather than on the structure, because the text is
+// the artefact and because the fault it guards was exactly a structure that was
+// right and a rendering that had never been written.
+func TestThePreviewDoesNotClaimToHaveSkippedWhatItWrote(t *testing.T) {
+	t.Parallel()
+
+	schema := catalog.Schema{
+		Name: name("sales"),
+		Tables: []catalog.Table{
+			{Name: name("measurements"), Partitioned: true},
+			{Name: name("reading"),
+				Columns: []catalog.Column{
+					{Name: name("id"), Position: 1, Type: catalog.NewTypeName("integer")},
+				},
+				Constraints: []catalog.Constraint{{
+					Name: name("reading_fkey"), Kind: catalog.ConstraintForeignKey,
+					References: name("measurements"),
+					Definition: "FOREIGN KEY (id) REFERENCES measurements(id)",
+				}}},
+		},
+	}
+
+	script := ddl.Of(schema)
+
+	// The table is written, so the file must not say it was not.
+	mustWrite(t, script, `CREATE TABLE "reading"`)
+	mustNotWrite(t, script, `-- not written: the table "reading"`)
+
+	// What was left out is the key, and it is named as one.
+	mustWrite(t, script,
+		`-- not written: the constraint "reading_fkey" on the table "reading", `+
+			`because it points at the table "measurements", which is not written`)
+
+	// And the partitioned table it points at is still declined as an object.
+	mustWrite(t, script, `-- not written: the table "measurements", because it is divided`)
+}

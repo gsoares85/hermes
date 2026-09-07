@@ -5,6 +5,7 @@ package ddl_test
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gsoares85/hermes/internal/core/catalog"
@@ -131,6 +132,43 @@ func apply(t *testing.T, instance *testsupport.Instance, schema string, script d
 
 	for _, statement := range script.Statements {
 		instance.Exec(t, `SET search_path TO "`+schema+`"; `+statement)
+	}
+}
+
+// The file a person is handed builds the schema, not only the statements a
+// caller sends one at a time.
+//
+// They are not the same artefact. String adds the line that points the search
+// path and the comments saying what was left out, and it is the one somebody
+// opens in psql — so it is the one whose mistakes reach a database. It had no
+// coverage against a server at all, which is how a preview that contradicted
+// itself three lines later went unnoticed.
+//
+// Applied as one block, the way a person would, rather than statement by
+// statement: that is what proves the comments do not break the statements
+// around them and that the path line is where it has to be.
+func TestTheScriptAsAFileBuildsTheSchema(t *testing.T) {
+	t.Parallel()
+
+	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
+	session := testsupport.Session(t, instance)
+
+	original := readSchema(t, session, testsupport.Corpus(t, instance))
+	target := testsupport.CorpusTarget(t, instance)
+
+	// The file names the schema it came from, so it is redirected the way
+	// anybody copying between environments would: by editing that one line.
+	file := strings.Replace(ddl.Of(original).String(),
+		`SET search_path TO `+ddl.Ident(original.Name),
+		`SET search_path TO "`+target+`"`, 1)
+
+	instance.Exec(t, file)
+
+	copied := readSchema(t, session, target)
+	script := ddl.Of(original)
+
+	if difference := firstDifference(written(original, script), written(copied, script)); difference != "" {
+		t.Errorf("the schema the file built is not the original.\n%s", difference)
 	}
 }
 

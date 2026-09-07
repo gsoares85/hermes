@@ -76,9 +76,22 @@ func (s Script) String() string {
 	}
 
 	for _, omission := range s.Omitted {
-		// The name goes through %q rather than raw, because an identifier may
+		// The names go through %q rather than raw, because an identifier may
 		// hold a line break — PostgreSQL allows it inside quotes — and a
 		// comment broken in half by one would comment out a statement.
+		//
+		// An omission naming a constraint is a rule left out of an object that
+		// was written, and rendering it as though the object itself had been
+		// left out is worse than saying nothing: the file would claim not to
+		// have written a table three lines above writing it.
+		if omission.Constraint.Valid() {
+			fmt.Fprintf(&text, "-- not written: the constraint %q on the %s %q, because %s\n",
+				omission.Constraint.String(), omission.Object.Kind,
+				omission.Object.Name.String(), omission.Reason)
+
+			continue
+		}
+
 		fmt.Fprintf(&text, "-- not written: the %s %q, because %s\n",
 			omission.Object.Kind, omission.Object.Name.String(), omission.Reason)
 	}
