@@ -160,6 +160,14 @@ func split(raw string) (base, modifier, arrays string) {
 		arrays = "[]" + arrays
 	}
 
+	// A quoted name is one piece, parentheses and all. PostgreSQL allows
+	// "my(type)" as an identifier, and reading the bracket inside it as a
+	// modifier turned the name into "my " with a modifier of (type) — a type
+	// the writer would then emit as something that does not exist.
+	if strings.HasPrefix(body, `"`) && strings.HasSuffix(body, `"`) {
+		return body, "", arrays
+	}
+
 	open := strings.Index(body, "(")
 	closing := strings.LastIndex(body, ")")
 	if open < 0 || closing < open {

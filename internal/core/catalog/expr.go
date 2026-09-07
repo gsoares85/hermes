@@ -83,9 +83,23 @@ import (
 // Everything is named now: every comparison operator, every IN turned into
 // = ANY over an array so the operator can be named at all, and the CASE over
 // classid made searched for the same reason. It is what pg_dump does, and this
-// is why. The corpus declares shadowing operators for all three pairs, so a
-// comparison that loses its qualification empties a list rather than passing
-// quietly.
+// is why.
+//
+// Turning IN into = ANY changed what is being compared, and that is worth
+// saying because the first version of this paragraph did not. IN ('r','p')
+// compared against untyped literals, which the resolver gave the type of the
+// column — an exact "char" against "char". ARRAY['r','p'] is text[], so the
+// comparison is now a "char" against a text and resolves by coercion. Safe,
+// because it is qualified; but it is a coercion where there was none, and it is
+// the reason the corpus's shadowing ("char", text) operator has something to
+// prove that it did not have before.
+//
+// What keeps this true is not the corpus, which only covers the pairs somebody
+// thought of — the pair that went missing did so twice, and both times it was
+// the one nobody had. It is TestEveryComparisonInAQueryNamesPgCatalog, which
+// reads these constants and fails on any comparison left bare, whatever its
+// types. The corpus stays because it proves the server behaves the way this
+// reasoning claims; the enumeration is what makes the rule a rule.
 
 // searchPathNow asks what the path is before the reader changes it, so that
 // what goes back is what was there rather than a default this package invented.

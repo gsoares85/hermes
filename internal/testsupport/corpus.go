@@ -176,7 +176,7 @@ var corpusStatements = []string{
 		SFUNC = {schema}.hijack, STYPE = name[], INITCOND = '{}')`,
 
 	// Operators that shadow the ones the reader compares with, which is the
-	// half of the same attack the function sombras do not reach.
+	// half of the same attack the shadowing functions do not reach.
 	//
 	// An operator is hijacked when pg_catalog has no exact one for the types
 	// being compared and resolves by coercion instead: a coercion loses to an

@@ -235,3 +235,18 @@ func TestATypeOfTheirOwnKeepsItsNameAndLosesItsSpacing(t *testing.T) {
 		}
 	}
 }
+
+// A quoted type name is one piece, parentheses and all.
+//
+// PostgreSQL allows "my(type)" as an identifier. Reading the bracket inside it
+// as a modifier turned the name into "my " with a modifier of (type), and the
+// writer would then emit a type that does not exist.
+func TestAQuotedTypeNameSurvivesItsPunctuation(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{`"my(type)"`, `"weird[]name"`, `"has space"`} {
+		if got := catalog.NewTypeName(raw).String(); got != raw {
+			t.Errorf("NewTypeName(%q) = %q, want it unchanged", raw, got)
+		}
+	}
+}

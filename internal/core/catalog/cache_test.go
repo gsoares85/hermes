@@ -440,6 +440,13 @@ func TestNoSliceOfTheModelSurvivesACloneShared(t *testing.T) {
 }
 
 // sharedSlices answers the paths at which two values point at one array.
+//
+// Anything it does not understand is reported rather than skipped. That is the
+// whole difference between this and the list it replaced: a walk that ignores a
+// kind it was not written for goes quiet exactly when the model grows one, which
+// is the way the previous version of this test went stale. A map or a pointer
+// in the model has to make somebody decide what cloning it means, and the way
+// to force that is to fail here.
 func sharedSlices(a, b reflect.Value, path string) []string {
 	var shared []string
 
@@ -457,7 +464,10 @@ func sharedSlices(a, b reflect.Value, path string) []string {
 			shared = append(shared, sharedSlices(a.Field(i), b.Field(i),
 				path+"."+a.Type().Field(i).Name)...)
 		}
+	case reflect.Map, reflect.Pointer, reflect.Array, reflect.Interface, reflect.Chan, reflect.Func:
+		return []string{path + " (a " + a.Kind().String() + ", which this walk cannot follow)"}
 	default:
+		// A value with nothing inside it: a string, a number, a bool, a Name.
 	}
 
 	return shared
@@ -465,6 +475,8 @@ func sharedSlices(a, b reflect.Value, path string) []string {
 
 // emptySlices answers the paths at which a value holds no elements, so that a
 // fixture with a gap in it fails loudly instead of narrowing the walk.
+//
+// It refuses what it does not understand for the same reason its sibling does.
 func emptySlices(v reflect.Value, path string) []string {
 	var empty []string
 
@@ -481,6 +493,8 @@ func emptySlices(v reflect.Value, path string) []string {
 		for i := range v.NumField() {
 			empty = append(empty, emptySlices(v.Field(i), path+"."+v.Type().Field(i).Name)...)
 		}
+	case reflect.Map, reflect.Pointer, reflect.Array, reflect.Interface, reflect.Chan, reflect.Func:
+		return []string{path + " (a " + v.Kind().String() + ", which this walk cannot follow)"}
 	default:
 	}
 
