@@ -24,6 +24,12 @@ import (
 // the only place the expression, the WHERE of a partial index and the payload
 // of an INCLUDE survive.
 //
+// The columns come back through a lateral join rather than an ARRAY subquery so
+// that it can name pg_catalog.unnest and pg_catalog.array_agg. indkey is an
+// int2vector, so the shadowing signature that would hijack it differs from the
+// one that would hijack a constraint key — the corpus declares both. See
+// expr.go.
+//
 // pg_get_indexdef is asked for the pretty form, and that is not about layout.
 // It is the one renderer that ignores the search path: asked plainly it writes
 // the table it indexes with the schema in front, whatever the path says,
@@ -37,16 +43,18 @@ const listIndexes = `SELECT c.relname,
 	       idx.indisunique,
 	       idx.indisprimary,
 	       pg_catalog.pg_get_indexdef(idx.indexrelid, 0, true),
-	       ARRAY(SELECT a.attname
-	             FROM unnest(idx.indkey) WITH ORDINALITY AS k(attnum, ord)
-	             JOIN pg_catalog.pg_attribute a
-	               ON a.attrelid = idx.indrelid AND a.attnum = k.attnum
-	             WHERE k.ord <= idx.indnkeyatts
-	             ORDER BY k.ord)
+	       cols.columns
 	FROM pg_catalog.pg_index idx
 	JOIN pg_catalog.pg_class i ON i.oid = idx.indexrelid
 	JOIN pg_catalog.pg_class c ON c.oid = idx.indrelid
 	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+	LEFT JOIN LATERAL (
+	        SELECT pg_catalog.array_agg(a.attname ORDER BY k.ord) AS columns
+	        FROM pg_catalog.unnest(idx.indkey) WITH ORDINALITY AS k(attnum, ord)
+	        JOIN pg_catalog.pg_attribute a
+	          ON a.attrelid = idx.indrelid AND a.attnum = k.attnum
+	        WHERE k.ord <= idx.indnkeyatts
+	     ) cols ON true
 	WHERE n.nspname = $1
 	  AND c.relkind IN ('r', 'p')
 	  AND NOT EXISTS (

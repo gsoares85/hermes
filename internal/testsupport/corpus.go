@@ -140,6 +140,34 @@ var corpusPrerequisites = []string{
 // Ordered so that what a later one depends on already exists, which is the same
 // order the dependency phase will later have to work out for itself.
 var corpusStatements = []string{
+	// Functions that shadow the ones the reader calls, which is the shape of
+	// CVE-2018-1058 and the reason every call in those queries names
+	// pg_catalog.
+	//
+	// The reader points the search path at the schema it is reading, so
+	// anything declared here is on the path while it reads. Shadowing is not
+	// blocked by pg_catalog being implicitly first: that only settles two
+	// candidates with identical signatures, and these are deliberately exact
+	// matches for the argument types the reader passes, while the catalog's own
+	// are polymorphic. An exact match wins over a polymorphic one wherever it
+	// sits on the path.
+	//
+	// So they are in the corpus rather than in a test of their own: every
+	// integration test reads this schema, and a call that loses its
+	// qualification makes all of them fail rather than one nobody ran.
+	//
+	// The bodies answer a wrong value instead of doing damage. What is being
+	// proved is which function the server chose, and a fixture that granted
+	// itself rights would be a fixture nobody wants in their test database.
+	`CREATE FUNCTION {schema}.unnest(smallint[]) RETURNS SETOF smallint
+		LANGUAGE sql IMMUTABLE AS $$ SELECT 666::smallint $$`,
+	`CREATE FUNCTION {schema}.unnest(int2vector) RETURNS SETOF smallint
+		LANGUAGE sql IMMUTABLE AS $$ SELECT 666::smallint $$`,
+	`CREATE FUNCTION {schema}.hijack(name[], name) RETURNS name[]
+		LANGUAGE sql IMMUTABLE AS $$ SELECT ARRAY['hijacked'::name] $$`,
+	`CREATE AGGREGATE {schema}.array_agg(name) (
+		SFUNC = {schema}.hijack, STYPE = name[], INITCOND = '{}')`,
+
 	// Names that need quoting, in three ways that each broke something once:
 	// upper case, which folds if it is not quoted; a space, which ends the
 	// identifier; and an accent, which is more than one byte and sorts

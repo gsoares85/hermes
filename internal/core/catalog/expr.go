@@ -42,6 +42,34 @@ import (
 // it came from when nothing is ambiguous. That is a difference in what the two
 // servers store, not in what the path resolves, and no rewriting here can undo
 // it without making two different views compare equal. See ADR-0012.
+//
+// # What pointing the path costs, and what pays for it
+//
+// Pointing the path at somebody else's schema means every unqualified name in
+// every catalog query is resolved against a schema that somebody else can write
+// to. That is CVE-2018-1058, and it is why every function these queries call is
+// written as pg_catalog.something — including the two that look like syntax,
+// pg_catalog.unnest and pg_catalog.array_agg.
+//
+// The trap is that pg_catalog is implicitly first on the path and that looks
+// like protection. It is not. Path order only settles two candidates with
+// identical signatures; it does not enter into it when the signatures differ,
+// and there the ordinary type rules decide. The catalog's unnest takes anyarray
+// and its array_agg takes anynonarray — both polymorphic — so a function
+// declared for the exact type the query passes beats them from anywhere on the
+// path. A schema owner who declares unnest(smallint[]) has the reader running
+// their code with the connected role's rights, which on a DBA's connection is
+// every right there is.
+//
+// Operators are left unqualified, and that is a decision rather than an
+// oversight. Every comparison in these queries has an exact operator in
+// pg_catalog for the types it compares — including nspname = $1, where both
+// =(name,name) and =(name,text) exist — so no candidate can beat them, and
+// identical signatures go back to being settled by path order. It was measured
+// rather than assumed: an operator declared to win by type preference over
+// "char" = "char" does not, and neither does one against name = text. What
+// keeps that true as queries change is the corpus, which declares the shadowing
+// functions so that every integration test reads a schema trying to hijack it.
 
 // searchPathNow asks what the path is before the reader changes it, so that
 // what goes back is what was there rather than a default this package invented.

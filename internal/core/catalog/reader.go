@@ -179,7 +179,7 @@ const listTables = `SELECT c.relname,
 	FROM pg_catalog.pg_class c
 	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 	LEFT JOIN LATERAL (
-	        SELECT array_agg(p.relname ORDER BY i.inhseqno) AS inherits
+	        SELECT pg_catalog.array_agg(p.relname ORDER BY i.inhseqno) AS inherits
 	        FROM pg_catalog.pg_inherits i
 	        JOIN pg_catalog.pg_class p ON p.oid = i.inhparent
 	        JOIN pg_catalog.pg_namespace pn ON pn.oid = p.relnamespace

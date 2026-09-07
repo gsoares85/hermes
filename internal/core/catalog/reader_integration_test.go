@@ -5,6 +5,7 @@ package catalog_test
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1150,4 +1151,65 @@ func TestACollationIsAlwaysExplicit(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A schema that shadows the functions the reader calls does not get to choose
+// what the reader reads.
+//
+// This is CVE-2018-1058 applied to this package. The reader points the search
+// path at the schema it is reading — which it must, because that is what makes
+// the expressions the server renders independent of the schema's name — and
+// from that moment anything declared in that schema is on the path. A call left
+// unqualified there is a call the schema's owner decides.
+//
+// pg_catalog being implicitly first does not save it, and that is the part
+// worth stating because it is the part that looks like it should. Path order
+// only settles two candidates with identical signatures. The corpus declares
+// unnest(smallint[]) and unnest(int2vector) against the catalog's
+// unnest(anyarray), and array_agg(name) against array_agg(anynonarray): exact
+// matches against polymorphic ones, which win from anywhere on the path.
+//
+// The values below come from those three calls. A key read through a shadowed
+// unnest comes back as the single column 666 — which is not a column of
+// anything — and a parent list read through a shadowed array_agg comes back as
+// "hijacked". Asserting the real values is asserting that the server ran the
+// catalog's functions.
+func TestASchemaCannotHijackTheFunctionsTheReaderCalls(t *testing.T) {
+	t.Parallel()
+
+	for _, version := range testsupport.SupportedVersions {
+		t.Run(version, func(t *testing.T) {
+			schema := readCorpus(t, version)
+
+			// unnest, through the key of a constraint. The order matters as
+			// much as the names, and both come from the ordinality the
+			// shadowed function does not produce.
+			key := constraintIn(t, tableIn(t, schema, "constrained"), "constrained_pk")
+			if got := columnNames(key.Columns); !reflect.DeepEqual(got, []string{"first", "second"}) {
+				t.Errorf("the key of the primary key reads as %v, want [first second]", got)
+			}
+
+			// unnest again, through the columns of an index — a different
+			// argument type, int2vector, and so a different shadowing function.
+			index := indexIn(t, tableIn(t, schema, "indexed"), "indexed_unique")
+			if got := columnNames(index.Columns); !reflect.DeepEqual(got, []string{"email", "status"}) {
+				t.Errorf("the columns of the index read as %v, want [email status]", got)
+			}
+
+			// array_agg, through the parents of an inherited table.
+			child := tableIn(t, schema, "child")
+			if got := columnNames(child.Inherits); !reflect.DeepEqual(got, []string{"parent"}) {
+				t.Errorf("the parents of the child read as %v, want [parent]", got)
+			}
+		})
+	}
+}
+
+func columnNames(names []catalog.Name) []string {
+	found := make([]string, 0, len(names))
+	for _, name := range names {
+		found = append(found, name.String())
+	}
+
+	return found
 }
