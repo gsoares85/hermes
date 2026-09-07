@@ -217,7 +217,9 @@ var corpusStatements = []string{
 		l timetz,
 		m time,
 		n char(3),
-		o serial
+		o serial,
+		p bpchar,
+		q bpchar(3)
 	)`,
 
 	// Inheritance, which is not partitioning and is read as its own thing.

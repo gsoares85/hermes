@@ -28,7 +28,6 @@ func TestATypeNameFoldsTheAliasesOfABuiltInType(t *testing.T) {
 		"real":        "real",
 		"float8":      "double precision",
 		"varchar":     "character varying",
-		"bpchar":      "character",
 		"char":        "character",
 		"decimal":     "numeric",
 		"numeric":     "numeric",
@@ -183,5 +182,33 @@ func TestTheZeroTypeNameIsNotValid(t *testing.T) {
 	}
 	if !catalog.NewTypeName("int4").Valid() {
 		t.Error("integer is not valid")
+	}
+}
+
+// bpchar folds when it carries a length and does not when it is bare.
+//
+// It looks like an inconsistency and is the opposite. bpchar(3) is exactly
+// character(3), so folding it is right. A bare bpchar is not a bare character:
+// bpchar with no length is the unlimited blank-padded type, while character
+// with no length means character(1). Folding it wrote a column of one character
+// where the original held any length — data lost by a copy of a structure, and
+// invisible until somebody's row came back truncated.
+//
+// The server draws the same line, which is what makes this a fold of its answer
+// rather than a rule invented here: format_type renders character(n) where
+// there is a length and bpchar where there is none.
+func TestBpcharFoldsOnlyWhenItCarriesALength(t *testing.T) {
+	t.Parallel()
+
+	for raw, want := range map[string]string{
+		"bpchar(3)": "character(3)",
+		"BPCHAR(3)": "character(3)",
+		"bpchar":    "bpchar",
+		"BPCHAR":    "bpchar",
+		"bpchar[]":  "bpchar[]",
+	} {
+		if got := catalog.NewTypeName(raw).String(); got != want {
+			t.Errorf("NewTypeName(%q) = %q, want %q", raw, got, want)
+		}
 	}
 }

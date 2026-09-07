@@ -1241,3 +1241,30 @@ func TestAUniqueIndexAForeignKeyPointsAtIsStillAnIndex(t *testing.T) {
 		})
 	}
 }
+
+// A bpchar column keeps the length it has, and keeps not having one.
+//
+// The two are different types wearing one word. bpchar(3) is exactly
+// character(3); a bare bpchar is the unlimited blank-padded type, and a bare
+// character is character(1). Folding the bare spelling into character wrote a
+// column of a single character where the original held any length — a copy of a
+// structure losing data, invisible until a row came back truncated.
+//
+// Read off a real server on every version, because what makes this the right
+// answer is what format_type renders, not what the alias table was told.
+func TestABpcharColumnKeepsWhetherItHasALength(t *testing.T) {
+	t.Parallel()
+
+	for _, version := range testsupport.SupportedVersions {
+		t.Run(version, func(t *testing.T) {
+			aliases := tableIn(t, readCorpus(t, version), "type_aliases")
+
+			if got := columnIn(t, aliases, "p").Type.String(); got != "bpchar" {
+				t.Errorf("a bpchar with no length reads as %q, want bpchar", got)
+			}
+			if got := columnIn(t, aliases, "q").Type.String(); got != "character(3)" {
+				t.Errorf("a bpchar(3) reads as %q, want character(3)", got)
+			}
+		})
+	}
+}

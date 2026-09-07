@@ -96,12 +96,40 @@ func NewTypeName(raw string) TypeName {
 
 	base, modifier, arrays := split(trimmed)
 
+	if isUnlimitedBlankPadded(base, modifier) {
+		return TypeName{canonical: unlimitedBlankPadded + arrays}
+	}
+
 	canonical, known := typeAliases[strings.ToLower(base)]
 	if !known {
 		return TypeName{canonical: trimmed}
 	}
 
 	return TypeName{canonical: canonical.head + modifier + spaced(canonical.tail) + arrays}
+}
+
+// unlimitedBlankPadded is bpchar with no length, which the alias table cannot
+// hold because the same word folds one way with a modifier and another without.
+const unlimitedBlankPadded = "bpchar"
+
+// isUnlimitedBlankPadded reports whether this is that one spelling.
+//
+// bpchar with a length is exactly character(n), and folding it is right.
+// bpchar without one is not character without one: the bare bpchar is the
+// unlimited blank-padded type, while a bare character means character(1). So
+// folding the modifier-less spelling wrote a column of a single character where
+// the original held any length — data lost by a copy of a structure, and
+// invisible until somebody's row was truncated.
+//
+// format_type draws the same line, which is what makes this a fold of the
+// server's own answer rather than a rule invented here: it renders character(n)
+// where there is a length and bpchar where there is none.
+//
+// It is a case here rather than a column in the table because it is the only
+// type PostgreSQL has that behaves this way. A field for it would be a field
+// that is false everywhere else.
+func isUnlimitedBlankPadded(base, modifier string) bool {
+	return modifier == "" && strings.EqualFold(base, unlimitedBlankPadded)
 }
 
 // String is the canonical spelling, which is what the DDL writes and what the
