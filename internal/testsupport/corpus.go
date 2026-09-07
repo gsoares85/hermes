@@ -234,6 +234,21 @@ var corpusStatements = []string{
 	) PARTITION BY RANGE (taken)`,
 	`CREATE TABLE {schema}.measurements_2026 PARTITION OF {schema}.measurements
 		FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')`,
+	`ALTER TABLE {schema}.measurements ADD PRIMARY KEY (id, taken)`,
+
+	// A table with one key pointing at a partitioned table and another pointing
+	// at an ordinary one. Referencing a partitioned table is legal from
+	// PostgreSQL 12, and this version does not write partitioned tables — so
+	// the first key cannot be written and the second must be. A writer that
+	// declined the whole table for the first would take out everything that
+	// referenced this one in turn.
+	`CREATE TABLE {schema}.reading (
+		id integer PRIMARY KEY,
+		measurement integer,
+		taken date,
+		customer integer REFERENCES {schema}."Customer" (id),
+		FOREIGN KEY (measurement, taken) REFERENCES {schema}.measurements (id, taken)
+	)`,
 
 	// A dropped column. PostgreSQL leaves the entry in pg_attribute so the row
 	// layout does not move, and a reader that does not skip it puts a column

@@ -602,11 +602,11 @@ func TestConstraintsAreReadWithTheirKindAndTheirKeyOrder(t *testing.T) {
 		"pg_class relkind IN": {{"orders", "r", false, nil}},
 		"pg_attribute":        {},
 		"pg_constraint": {
-			{"orders", "orders_pk", "p", "PRIMARY KEY (a, b)", []string{"a", "b"}},
-			{"orders", "orders_fk", "f", "FOREIGN KEY (c) REFERENCES other(id)", []string{"c"}},
-			{"orders", "orders_uq", "u", "UNIQUE (b, a)", []string{"b", "a"}},
-			{"orders", "orders_ck", "c", "CHECK ((amount > 0))", []string{"amount"}},
-			{"orders", "orders_ex", "x", "EXCLUDE USING gist (room WITH =)", []string{"room"}},
+			{"orders", "orders_pk", "p", "PRIMARY KEY (a, b)", []string{"a", "b"}, nil},
+			{"orders", "orders_fk", "f", "FOREIGN KEY (c) REFERENCES other(id)", []string{"c"}, "other"},
+			{"orders", "orders_uq", "u", "UNIQUE (b, a)", []string{"b", "a"}, nil},
+			{"orders", "orders_ck", "c", "CHECK ((amount > 0))", []string{"amount"}, nil},
+			{"orders", "orders_ex", "x", "EXCLUDE USING gist (room WITH =)", []string{"room"}, nil},
 		},
 	}}
 
@@ -659,7 +659,7 @@ func TestAConstraintKindThisBuildDoesNotKnowIsCarriedThrough(t *testing.T) {
 		"pg_namespace":        existing(),
 		"pg_class relkind IN": {{"orders", "r", false, nil}},
 		"pg_attribute":        {},
-		"pg_constraint":       {{"orders", "odd", "z", "SOMETHING NEW", []string(nil)}},
+		"pg_constraint":       {{"orders", "odd", "z", "SOMETHING NEW", []string(nil), nil}},
 	}}
 
 	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
@@ -719,7 +719,7 @@ func TestAConstraintOrIndexOfAnUnknownTableIsAFault(t *testing.T) {
 			"pg_namespace":        existing(),
 			"pg_class relkind IN": {{"orders", "r", false, nil}},
 			"pg_attribute":        {},
-			"pg_constraint":       {{"elsewhere", "c", "p", "PRIMARY KEY (a)", []string{"a"}}},
+			"pg_constraint":       {{"elsewhere", "c", "p", "PRIMARY KEY (a)", []string{"a"}, nil}},
 		},
 		"an index": {
 			"pg_namespace":        existing(),
@@ -1203,5 +1203,38 @@ func TestACancelledReadStillPutsTheSearchPathBack(t *testing.T) {
 
 	if !server.restoredLive {
 		t.Error("the search path was put back through the cancelled context, which cannot work")
+	}
+}
+
+// A foreign key says which table it points at, as structure rather than only
+// inside the text the server rendered.
+//
+// The writer acts on it: a key pointing at a table this version declines to
+// write cannot be written either, and answering that by reading the definition
+// would mean parsing SQL for something the catalog already knows. Every other
+// kind of constraint points at nothing and says so.
+func TestAForeignKeySaysWhatItPointsAt(t *testing.T) {
+	t.Parallel()
+
+	server := &answers{rows: map[string][][]any{
+		"pg_namespace":        existing(),
+		"pg_class relkind IN": {{"orders", "r", false, nil}},
+		"pg_constraint": {
+			{"orders", "orders_fk", "f", "FOREIGN KEY (c) REFERENCES other(id)", []string{"c"}, "other"},
+			{"orders", "orders_pk", "p", "PRIMARY KEY (a)", []string{"a"}, nil},
+		},
+	}}
+
+	schema, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+	if err != nil {
+		t.Fatalf("Read() = %v", err)
+	}
+
+	constraints := schema.Tables[0].Constraints
+	if got := constraints[0].References.String(); got != "other" {
+		t.Errorf("the foreign key points at %q, want other", got)
+	}
+	if got := constraints[1].References; got.Valid() {
+		t.Errorf("the primary key points at %q, want nothing", got)
 	}
 }

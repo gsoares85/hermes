@@ -78,14 +78,30 @@ func TestTheScriptDeclinesOnlyWhatThisVersionDoesNotCompare(t *testing.T) {
 
 			script := ddl.Of(readSchema(t, session, testsupport.Corpus(t, instance)))
 
-			declined := make([]string, 0, len(script.Omitted))
+			var objects, keys []string
+
 			for _, omission := range script.Omitted {
-				declined = append(declined, omission.Object.Name.String())
+				if omission.Constraint.Valid() {
+					keys = append(keys, omission.Constraint.String())
+
+					continue
+				}
+
+				objects = append(objects, omission.Object.Name.String())
 			}
 
-			want := []string{"measurements", "measurements_2026"}
-			if !reflect.DeepEqual(declined, want) {
-				t.Errorf("the script declined %v, want %v", declined, want)
+			if want := []string{"measurements", "measurements_2026"}; !reflect.DeepEqual(objects, want) {
+				t.Errorf("the script declined the objects %v, want %v", objects, want)
+			}
+
+			// One key and one only. The table it is on has another pointing at
+			// an ordinary table, and that one has to be written — declining a
+			// whole table because one of its keys cannot be added is what would
+			// make a schema with a partitioned table in it write almost
+			// nothing.
+			want := []string{"reading_measurement_taken_fkey"}
+			if !reflect.DeepEqual(keys, want) {
+				t.Errorf("the script declined the keys %v, want %v", keys, want)
 			}
 		})
 	}
@@ -129,16 +145,26 @@ func apply(t *testing.T, instance *testsupport.Instance, schema string, script d
 // is what checks that list is the one it should be.
 func written(schema catalog.Schema, script ddl.Script) catalog.Schema {
 	declined := map[catalog.Object]bool{}
+	declinedKeys := map[catalog.Name]bool{}
+
 	for _, omission := range script.Omitted {
+		if omission.Constraint.Valid() {
+			declinedKeys[omission.Constraint] = true
+
+			continue
+		}
+
 		declined[omission.Object] = true
 	}
 
 	kept := catalog.Schema{Name: schema.Name}
 
 	for _, table := range schema.Tables {
-		if !declined[catalog.Object{Kind: catalog.ObjectTable, Name: table.Name}] {
-			kept.Tables = append(kept.Tables, table)
+		if declined[catalog.Object{Kind: catalog.ObjectTable, Name: table.Name}] {
+			continue
 		}
+
+		kept.Tables = append(kept.Tables, withoutKeys(table, declinedKeys))
 	}
 
 	for _, sequence := range schema.Sequences {
@@ -156,6 +182,29 @@ func written(schema catalog.Schema, script ddl.Script) catalog.Schema {
 	for _, edge := range schema.Dependencies {
 		if !declined[edge.Object] && !declined[edge.Needs] {
 			kept.Dependencies = append(kept.Dependencies, edge)
+		}
+	}
+
+	return kept
+}
+
+// withoutKeys is a table without the constraints the script declined.
+//
+// A foreign key pointing at a table this version does not write is left out of
+// the script, so the copy does not have it and the original does. Dropping it
+// from both is what leaves two models that can be compared at all — and doing it
+// from the script's own list keeps the test honest about which ones those are.
+func withoutKeys(table catalog.Table, declined map[catalog.Name]bool) catalog.Table {
+	if len(declined) == 0 {
+		return table
+	}
+
+	kept := table
+	kept.Constraints = nil
+
+	for _, constraint := range table.Constraints {
+		if !declined[constraint.Name] {
+			kept.Constraints = append(kept.Constraints, constraint)
 		}
 	}
 

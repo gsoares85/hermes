@@ -134,11 +134,20 @@ type Constraint struct {
 	// constraints.
 	Columns []Name
 
+	// References is the table a foreign key points at, empty for every other
+	// kind. It is structure rather than text because the writer has to act on
+	// it: a key pointing at a table this version declines to write cannot be
+	// written either, and finding that out by reading the definition would mean
+	// parsing SQL to answer a question the catalog already answers.
+	//
+	// A key pointing outside the schema is left empty, the same boundary the
+	// dependency graph draws: the model is of one schema and cannot address
+	// beyond it.
+	References Name
+
 	// Definition is the constraint as the server renders it. It carries what
-	// the fields above cannot yet: the referenced table of a foreign key, the
-	// expression of a check, the operators of an exclusion. The phase that
-	// reads constraints decides how much of it becomes structure and how much
-	// stays text.
+	// the fields above cannot: the ON DELETE of a foreign key, the expression
+	// of a check, the operators of an exclusion.
 	Definition string
 }
 

@@ -27,9 +27,19 @@ type Script struct {
 	Omitted []Omission
 }
 
-// Omission is one object the script did not write, and why.
+// Omission is one thing the script did not write, and why.
+//
+// Usually a whole object. Sometimes a rule on one that was written: a foreign
+// key pointing at a table this version declines cannot be added, while the
+// table it is declared on is perfectly writable — so the table goes in the
+// script and the key goes here.
 type Omission struct {
 	Object catalog.Object
+
+	// Constraint names the rule that was left out, and is empty when what was
+	// left out is the object itself.
+	Constraint catalog.Name
+
 	Reason string
 }
 
@@ -83,6 +93,10 @@ type writer struct {
 
 	// omitted is every object not written, by the reason it was not.
 	omitted map[catalog.Object]string
+
+	// declined are the rules left out of objects that were written, gathered as
+	// the statements are built rather than worked out beforehand.
+	declined []Omission
 }
 
 func newWriter(schema catalog.Schema) *writer {
@@ -155,7 +169,7 @@ func (w *writer) statements() (creates, follows map[catalog.Object][]string) {
 		}
 
 		creates[object] = w.table(table)
-		follows[object] = foreignKeys(table)
+		follows[object] = w.foreignKeys(table)
 	}
 
 	for _, view := range w.schema.Views {
@@ -198,7 +212,7 @@ func (w *writer) findOmissions() {
 		spread = false
 
 		for _, edge := range w.schema.Dependencies {
-			if w.omitted[edge.Object] != "" || w.omitted[edge.Needs] == "" {
+			if !blocking(edge) || w.omitted[edge.Object] != "" || w.omitted[edge.Needs] == "" {
 				continue
 			}
 
@@ -209,13 +223,36 @@ func (w *writer) findOmissions() {
 	}
 }
 
-// omissions is what was not written, in the order the schema holds its objects.
+// blocking reports whether an object that needs a declined one is itself
+// impossible to write.
+//
+// Not every dependency is. A foreign key is already written afterwards, in a
+// statement of its own, so a table whose only tie to a declined one is a key can
+// be created perfectly well — the key is what has to go, and it goes on its own.
+// Treating it as blocking made one declined table take out everything that
+// referenced it, and everything that referenced those, until a schema with a
+// partitioned table anywhere near the middle wrote almost nothing.
+//
+// The reason is on the edge precisely so this can be asked. A view has no such
+// escape: its query names the object and there is no later statement to move it
+// to. Inheritance and a default that calls a sequence are the same — both are
+// clauses of the CREATE TABLE itself.
+func blocking(edge catalog.Dependency) bool {
+	return edge.Reason != catalog.ReasonForeignKey
+}
+
+// omissions is what was not written: the objects first, in the order the schema
+// holds them, then the rules left out of objects that were.
+//
+// It runs after the statements are built, because the second list is gathered
+// while they are — a foreign key is known to be unwritable at the point it would
+// have been written.
 func (w *writer) omissions() []Omission {
-	if len(w.omitted) == 0 {
+	if len(w.omitted) == 0 && len(w.declined) == 0 {
 		return nil
 	}
 
-	omitted := make([]Omission, 0, len(w.omitted))
+	omitted := make([]Omission, 0, len(w.omitted)+len(w.declined))
 
 	for _, object := range w.order.Objects {
 		if reason := w.omitted[object]; reason != "" {
@@ -223,7 +260,9 @@ func (w *writer) omissions() []Omission {
 		}
 	}
 
-	return omitted
+	// Already in one order: they were gathered walking the schema's tables and
+	// each table's constraints, both of which Sort left ordered.
+	return append(omitted, w.declined...)
 }
 
 // sequence writes a CREATE SEQUENCE.
@@ -407,11 +446,11 @@ func constraintClause(constraint catalog.Constraint) string {
 }
 
 // foreignKeys writes the keys of a table, after every table exists.
-func foreignKeys(table catalog.Table) []string {
+func (w *writer) foreignKeys(table catalog.Table) []string {
 	var statements []string
 
 	for _, constraint := range table.Constraints {
-		if constraint.Kind != catalog.ConstraintForeignKey {
+		if constraint.Kind != catalog.ConstraintForeignKey || w.declinedKey(table, constraint) {
 			continue
 		}
 
@@ -422,6 +461,32 @@ func foreignKeys(table catalog.Table) []string {
 	}
 
 	return statements
+}
+
+// declinedKey reports whether a foreign key points at something the script did
+// not write, and records it as left out when it does.
+//
+// The key is what has to go, and only the key. The table it is declared on is
+// writable — its other keys included — which is why declining the table for it
+// would take out everything referencing that table, and everything referencing
+// those, until a schema with a partitioned table near the middle wrote almost
+// nothing.
+func (w *writer) declinedKey(table catalog.Table, key catalog.Constraint) bool {
+	target := catalog.Object{Kind: catalog.ObjectTable, Name: key.References}
+
+	reason := w.omitted[target]
+	if !key.References.Valid() || reason == "" {
+		return false
+	}
+
+	w.declined = append(w.declined, Omission{
+		Object:     catalog.Object{Kind: catalog.ObjectTable, Name: table.Name},
+		Constraint: key.Name,
+		Reason: fmt.Sprintf("it points at the table %q, which is not written",
+			key.References.String()),
+	})
+
+	return true
 }
 
 // inherits writes the parents of a table, in the order they were declared.

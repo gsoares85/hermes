@@ -25,18 +25,35 @@ import (
 // declares unnest(smallint[]) would otherwise decide what a key is. See
 // expr.go.
 //
-// pg_get_constraintdef carries what the columns cannot: the referenced table of
-// a foreign key with its ON DELETE, the expression of a check, the operators of
-// an exclusion. It is rendered from the parse tree, so two constraints written
-// differently and meaning the same come back the same.
+// pg_get_constraintdef carries what the columns cannot: the ON DELETE of a
+// foreign key, the expression of a check, the operators of an exclusion. It is
+// rendered from the parse tree, so two constraints written differently and
+// meaning the same come back the same.
+//
+// conparentid = 0 keeps out the constraints the server made rather than a
+// person. Referencing a partitioned table creates one foreign key per partition
+// on the referencing side, each pointing back at the declared one, and reading
+// them put a second constraint in the model for a key somebody wrote once —
+// a difference the diff would report against a schema that has none, and a
+// duplicate ALTER TABLE in the script. The same field keeps out the copies a
+// partition inherits from its parent.
+//
+// The referenced table comes back as structure as well as inside that text,
+// because the writer has to act on it: a key pointing at a table this version
+// declines to write cannot be written either. The join is restricted to the
+// schema being read, the same boundary the dependency graph draws — a key
+// pointing outside it is one the model has no way to name.
 const listConstraints = `SELECT c.relname,
 	       con.conname,
 	       con.contype,
 	       pg_catalog.pg_get_constraintdef(con.oid),
-	       cols.columns
+	       cols.columns,
+	       ref.relname
 	FROM pg_catalog.pg_constraint con
 	JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
 	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+	LEFT JOIN pg_catalog.pg_class ref
+	       ON ref.oid = con.confrelid AND ref.relnamespace = c.relnamespace
 	LEFT JOIN LATERAL (
 	        SELECT pg_catalog.array_agg(a.attname ORDER BY k.ord) AS columns
 	        FROM pg_catalog.unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
@@ -45,7 +62,8 @@ const listConstraints = `SELECT c.relname,
 	     ) cols ON true
 	WHERE n.nspname = $1
 	  AND c.relkind IN ('r', 'p')
-	  AND con.contype IN ('p', 'f', 'u', 'c', 'x')`
+	  AND con.contype IN ('p', 'f', 'u', 'c', 'x')
+	  AND con.conparentid = 0`
 
 func (r *Reader) constraints(ctx context.Context, schema Name, tables map[string]*Table) error {
 	rows := r.server.Query(ctx, listConstraints, schema.String())
@@ -55,9 +73,10 @@ func (r *Reader) constraints(ctx context.Context, schema Name, tables map[string
 		var (
 			table, name, kind, definition string
 			columns                       []string
+			references                    *string
 		)
 
-		if err := rows.Scan(&table, &name, &kind, &definition, &columns); err != nil {
+		if err := rows.Scan(&table, &name, &kind, &definition, &columns, &references); err != nil {
 			return fmt.Errorf("reading a constraint of %s: %w", schema, err)
 		}
 
@@ -71,6 +90,7 @@ func (r *Reader) constraints(ctx context.Context, schema Name, tables map[string
 			Name:       NewName(name),
 			Kind:       constraintKind(kind),
 			Columns:    namesOf(columns),
+			References: NewName(text(references)),
 			Definition: definition,
 		})
 	}
