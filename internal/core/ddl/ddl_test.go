@@ -746,3 +746,22 @@ func TestThePreviewDoesNotClaimToHaveSkippedWhatItWrote(t *testing.T) {
 	// And the partitioned table it points at is still declined as an object.
 	mustWrite(t, script, `-- not written: the table "measurements", because it is divided`)
 }
+
+// A schema with no name this can write says so, instead of producing a file
+// that points nowhere.
+//
+// Without the path line the file applies itself to whatever schema the session
+// of whoever runs it happens to name. Skipping it in silence is the failure the
+// line exists to prevent, so the absence is declared like any other omission.
+func TestAScriptWithNoNameableSchemaSaysTheTargetIsMissing(t *testing.T) {
+	t.Parallel()
+
+	script := ddl.Of(catalog.Schema{
+		Name:   catalog.NewName("two\nlines"),
+		Tables: []catalog.Table{{Name: name("orders")}},
+	})
+
+	mustNotWrite(t, script, "SET search_path")
+	mustWrite(t, script, "-- not written: the line that points the search path")
+	mustWrite(t, script, `CREATE TABLE "orders"`)
+}

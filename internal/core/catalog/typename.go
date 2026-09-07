@@ -102,7 +102,12 @@ func NewTypeName(raw string) TypeName {
 
 	canonical, known := typeAliases[strings.ToLower(base)]
 	if !known {
-		return TypeName{canonical: trimmed}
+		// A type of somebody's own keeps its name exactly — those are case
+		// sensitive the way an object name is — but not the spacing somebody
+		// left inside its modifier. dom(10, 2) and dom(10,2) are one type, and
+		// a model holding both would report a change between a schema and a
+		// comparison target that says the same thing.
+		return TypeName{canonical: base + modifier + arrays}
 	}
 
 	return TypeName{canonical: canonical.head + modifier + spaced(canonical.tail) + arrays}

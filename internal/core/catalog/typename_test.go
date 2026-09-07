@@ -212,3 +212,26 @@ func TestBpcharFoldsOnlyWhenItCarriesALength(t *testing.T) {
 		}
 	}
 }
+
+// A type of somebody's own keeps its name and loses the spacing inside its
+// modifier.
+//
+// The name is untouched because those are case sensitive the way an object name
+// is, and folding one would point a column at a type that does not exist. The
+// spacing is not part of the type: dom(10, 2) and dom(10,2) are one thing, and a
+// model holding both reports a change between a schema and a comparison target
+// that says the same as it.
+func TestATypeOfTheirOwnKeepsItsNameAndLosesItsSpacing(t *testing.T) {
+	t.Parallel()
+
+	for raw, want := range map[string]string{
+		"MyType":         "MyType",
+		"dom(10, 2)":     "dom(10,2)",
+		"dom(10,2)":      "dom(10,2)",
+		"MyType(1, 2)[]": "MyType(1,2)[]",
+	} {
+		if got := catalog.NewTypeName(raw).String(); got != want {
+			t.Errorf("NewTypeName(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}

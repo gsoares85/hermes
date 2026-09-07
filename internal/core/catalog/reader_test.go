@@ -1282,4 +1282,19 @@ func TestReadingCostsTheSameNumberOfQueriesWhateverTheSchemaHolds(t *testing.T) 
 		t.Errorf("a schema of one table costs %d queries and one of fifty costs %d;"+
 			" the reader is asking per object", one, fifty)
 	}
+
+	// And the number itself, not only that it does not grow. Equality alone
+	// lets a new fixed query in without anybody noticing, and every one of them
+	// is a round trip on every expansion of every schema.
+	//
+	// Eleven: three for the search path — what it was, pointing it, putting it
+	// back — one asking whether the schema is there at all, and seven reading
+	// the objects: tables, columns, constraints, indexes, sequences, views and
+	// dependencies.
+	const asks = 11
+
+	if one != asks {
+		t.Errorf("reading a schema costs %d queries, want %d — a query was added"+
+			" or removed, which is a decision rather than a detail", one, asks)
+	}
 }

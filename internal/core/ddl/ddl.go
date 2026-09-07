@@ -69,6 +69,15 @@ type Omission struct {
 func (s Script) String() string {
 	var text strings.Builder
 
+	if len(s.Statements) > 0 && !s.Schema.Valid() {
+		// Said rather than skipped. Without the path the file applies itself to
+		// whatever schema the reader's session happens to name, and a file that
+		// does that in silence is the failure the line below exists to prevent.
+		text.WriteString("-- not written: the line that points the search path, because " +
+			"the schema has no name this can write.\n" +
+			"-- Point the session at the target before running any of this.\n\n")
+	}
+
 	if s.Schema.Valid() && len(s.Statements) > 0 {
 		fmt.Fprintf(&text, "-- Every name below is written bare, so this builds into whatever\n"+
 			"-- schema the search path names. Change the line below to build elsewhere.\n"+
