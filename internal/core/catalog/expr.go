@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // The canonical form of an expression is asked of the server, not computed here.
@@ -101,13 +102,35 @@ func (r *Reader) scopeTo(ctx context.Context, schema Name) (func() error, error)
 	}
 
 	return func() error {
-		if _, err := r.setting(ctx, searchPathBack, previous); err != nil {
+		// A context of its own, and that is the whole of this function.
+		//
+		// Putting the path back matters most exactly when the read did not
+		// finish, and the commonest way for a read not to finish is the caller
+		// cancelling it — which the product requires every long operation to
+		// allow. Restoring through the caller's context would therefore fail
+		// precisely in the case it exists for: the cancelled context refuses
+		// the statement, the path stays pointing at the schema that was being
+		// read, and the connection goes back to the pool resolving the next
+		// caller's names in the wrong place.
+		//
+		// It still needs a deadline. Putting the path back is an ordinary
+		// statement, and against a backend that stopped answering without
+		// closing the socket it would wait for ever, holding the read that is
+		// already failing. Same shape as the rollback a closing session runs.
+		restore, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreTimeout)
+		defer cancel()
+
+		if _, err := r.setting(restore, searchPathBack, previous); err != nil {
 			return fmt.Errorf("putting the search path back to %q: %w", previous, err)
 		}
 
 		return nil
 	}, nil
 }
+
+// restoreTimeout bounds putting the search path back. Short, because it runs
+// when a read has already failed and a caller is waiting to be told so.
+const restoreTimeout = 5 * time.Second
 
 // setting runs one of the search path queries and answers the value it left.
 //

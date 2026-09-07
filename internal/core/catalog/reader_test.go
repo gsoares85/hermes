@@ -31,14 +31,32 @@ type answers struct {
 	// answered here rather than through the fixtures because they read no
 	// catalog table and no test is about them; the ones that are set these.
 	askingFails, scopingFails, restoringFails error
+
+	// cancelDuring names the catalog table whose read gives up, standing in for
+	// a person pressing cancel while the schema is being read. The read that
+	// matches it cancels the context and answers the cancellation.
+	cancelDuring string
+	cancel       context.CancelFunc
+
+	// restoredLive records whether the context the path was put back through
+	// was still usable. It is the whole point of the test that sets
+	// cancelDuring: restoring through a cancelled context fails exactly when
+	// restoring matters.
+	restoredLive bool
 }
 
 // The path the session is on before a read scopes it, and what it goes back to.
 const pathBefore = "public"
 
-func (a *answers) Query(_ context.Context, sql string, _ ...any) driver.Rows {
-	if setting, isSetting := a.searchPath(sql); isSetting {
+func (a *answers) Query(ctx context.Context, sql string, _ ...any) driver.Rows {
+	if setting, isSetting := a.searchPath(ctx, sql); isSetting {
 		return setting
+	}
+
+	if a.cancelDuring != "" && reads(sql, a.cancelDuring) {
+		a.cancel()
+
+		return &fakeRows{err: ctx.Err()}
 	}
 
 	if key := match(sql, a.err); key != "" {
@@ -59,13 +77,18 @@ func (a *answers) Query(_ context.Context, sql string, _ ...any) driver.Rows {
 // rewording one is a refactor and not a broken double. The scoping call is the
 // one that quotes its argument, which is what separates it from the call that
 // puts the old value back.
-func (a *answers) searchPath(sql string) (driver.Rows, bool) {
+func (a *answers) searchPath(ctx context.Context, sql string) (driver.Rows, bool) {
 	switch {
 	case strings.Contains(sql, "current_setting"):
 		return &fakeRows{rows: [][]any{{pathBefore}}, err: a.askingFails}, true
 	case strings.Contains(sql, "quote_ident"):
 		return &fakeRows{rows: [][]any{{"scoped"}}, err: a.scopingFails}, true
 	case strings.Contains(sql, "set_config"):
+		// The only set_config left is the one putting the path back, and
+		// whether its context is still usable is what a cancelled read is
+		// judged on.
+		a.restoredLive = ctx.Err() == nil
+
 		return &fakeRows{rows: [][]any{{pathBefore}}, err: a.restoringFails}, true
 	default:
 		return nil, false
@@ -1134,5 +1157,51 @@ func TestAColumnThatIsNeitherGeneratedNorAnIdentitySaysSo(t *testing.T) {
 
 	if column := schema.Tables[0].Columns[0]; column.Identity != "" || column.Generated != "" {
 		t.Errorf("an ordinary column came back as %+v", column)
+	}
+}
+
+// A read that is cancelled still puts the search path back.
+//
+// This is the case restoring exists for, and the one it used to fail. The path
+// is only pointed somewhere else while a read is running, so the read ending
+// early is the moment it matters most — and a person pressing cancel is how a
+// read most often ends early, because the product requires every long operation
+// to allow it.
+//
+// Restoring through the caller's context could not work: the context is
+// cancelled, which is why the read stopped, and the statement that puts the
+// path back is refused for the same reason. The connection then goes back to
+// the pool still pointing at the schema that was being read, and the next
+// person's unqualified names resolve in the wrong place — the pool runs no
+// reset between callers, so closing the session does not clear it either.
+//
+// A unit test rather than one against a server, because what is being asserted
+// is which context the statement is issued with. That is a property of this
+// code, and reproducing it against a real server would mean cancelling at
+// exactly the right moment and calling whatever happened the test.
+func TestACancelledReadStillPutsTheSearchPathBack(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	server := &answers{
+		rows: map[string][][]any{
+			"pg_namespace":        existing(),
+			"pg_class relkind IN": {{"orders", "r", false, nil}},
+		},
+		// Cancelled while the columns are being read, which is after the path
+		// has been pointed at the schema and before the read could finish.
+		cancelDuring: "pg_attribute",
+		cancel:       cancel,
+	}
+
+	_, err := catalog.NewReader(server).Read(ctx, catalog.NewName("sales"))
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Read() = %v, want the cancellation", err)
+	}
+
+	if !server.restoredLive {
+		t.Error("the search path was put back through the cancelled context, which cannot work")
 	}
 }
