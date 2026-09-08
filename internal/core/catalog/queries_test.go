@@ -158,6 +158,31 @@ func (r *Reader) built(ctx context.Context, name string) error {
 	}
 }
 
+// Every way a session is handed SQL is a send, QueryRow included.
+//
+// It is on driver.Session already and the catalog's Querier has not asked for
+// it, so this finds nothing in the package today. That is the reason to write
+// it: the crossing is what stands between a new query and nobody reading it,
+// and a method missing from its list is a query nothing checks on the day
+// somebody reaches for the obvious way to read one value.
+func TestEveryWayOfHandingSQLToASessionIsASend(t *testing.T) {
+	t.Parallel()
+
+	for _, method := range []string{"Query", "QueryRow", "Exec"} {
+		sent := sends(map[string]*ast.File{"fake.go": parseText(t, `package catalog
+
+func (r *Reader) one(ctx context.Context, name string) error {
+	return r.server.`+method+`(ctx, "SELECT "+name)
+}
+`)})
+
+		want := []string{"a literal or an expression in fake.go"}
+		if !slices.Equal(sent, want) {
+			t.Errorf("a query sent through %s is answered %q, want %q", method, sent, want)
+		}
+	}
+}
+
 // The three shapes a name can be resolved by, and none of them is allowed bare.
 var (
 	// A run of the characters PostgreSQL builds operators out of. Anything left
@@ -462,8 +487,14 @@ func parameterAt(function *ast.FuncDecl, wanted int) string {
 
 // sqlArgument answers where a call carries SQL, and whether it carries any.
 //
-// The two methods that hand SQL to a connection take it second, after the
+// The three methods that hand SQL to a connection take it second, after the
 // context; a carrier takes it wherever it declared it.
+//
+// QueryRow is beside Query and Exec because driver.Session has it and reading a
+// single value is the natural thing to want. The catalog's own Querier does not
+// expose it yet, so nothing is found by listing it — which is the point: the
+// day it is exposed, a query sent through it would otherwise leave the crossing
+// without a word.
 func sqlArgument(call *ast.CallExpr, carriers map[string]int) (int, bool) {
 	switch fun := call.Fun.(type) {
 	case *ast.SelectorExpr:
@@ -472,7 +503,7 @@ func sqlArgument(call *ast.CallExpr, carriers map[string]int) (int, bool) {
 		}
 
 		switch fun.Sel.Name {
-		case "Query", "Exec":
+		case "Query", "QueryRow", "Exec":
 			return 1, len(call.Args) >= 2
 		}
 	case *ast.Ident:
