@@ -1520,7 +1520,15 @@ func TestAFailedReadDoesNotAlsoComplainAboutTheSearchPath(t *testing.T) {
 	t.Parallel()
 
 	broken := errors.New("column does not exist")
-	aborted := errors.New("current transaction is aborted (SQLSTATE 25P02)")
+
+	// The error the driver actually hands up, built the way the driver builds
+	// it. A version of this test wrote the message itself, which meant it
+	// proved the reader could read a string this test had written.
+	aborted := &driver.Failure{
+		Class:    driver.FailureUnknown,
+		SQLState: "25P02",
+		Err:      errors.New("current transaction is aborted"),
+	}
 
 	server := &answers{
 		rows: map[string][][]any{"pg_namespace": existing()},

@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
+
+	"github.com/gsoares85/hermes/internal/driver"
 )
 
 // The canonical form of an expression is asked of the server, not computed here.
@@ -182,14 +183,21 @@ const abortedTransaction = "25P02"
 
 // aborted reports whether a failure is only the transaction refusing to go on.
 //
-// It is matched on the code rather than on the text because the text is
-// localised and the code is not, and it is matched at all because the
-// alternative is an alarm that rings on every ordinary failure. The alarm this
-// is keeping quiet — a search path that did not go back — means a connection
-// resolving the next caller's names in the wrong schema, so it has to mean that
-// and nothing else.
+// It is matched at all because the alternative is an alarm that rings on every
+// ordinary failure. The alarm this is keeping quiet — a search path that did not
+// go back — means a connection resolving the next caller's names in the wrong
+// schema, so it has to mean that and nothing else.
+//
+// The code is read off the field the driver already carries it in, rather than
+// looked for in the message. The message was searched for the five characters,
+// which made this depend on how Failure chooses to print itself and matched any
+// error that happened to mention them — and the test that covered it built its
+// own error out of that same text, so it checked the fixture and not the
+// contract.
 func aborted(err error) bool {
-	return strings.Contains(err.Error(), abortedTransaction)
+	var failure *driver.Failure
+
+	return errors.As(err, &failure) && failure.SQLState == abortedTransaction
 }
 
 // cleanupTimeout bounds each of the statements a read runs on its way out —
