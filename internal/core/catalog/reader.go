@@ -167,18 +167,29 @@ func (r *Reader) Read(ctx context.Context, schema Name) (read Schema, err error)
 // that one at least reports, though it reports as though this package had got
 // its queries wrong.
 //
-// A caller that already has a transaction keeps it. Its transaction is the one
-// in force and it is not this function's to end — which is what the sentinel
-// says, and why it is the one error here that is not a failure.
+// A caller that already has a transaction keeps it, and is asked what kind it
+// is before the read goes on. Its transaction is the one in force and not this
+// function's to end — but it is also the one this read depends on, and accepting
+// it unseen threw away both properties in silence: a caller that had opened an
+// ordinary transaction got a complete model read across eleven views of the
+// database, with the writes this read declares it does not make no longer
+// refused by anything. Verified against a server, which is where "silence" was
+// the word for it.
 //
 // Leaving is a rollback rather than a commit because nothing was written; the
 // transaction is read-only and the server would refuse anything else.
 func (r *Reader) snapshot(ctx context.Context) (func() error, error) {
-	switch err := r.server.BeginSnapshot(ctx); {
-	case errors.Is(err, driver.ErrTransactionActive):
+	opened := r.server.BeginSnapshot(ctx)
+
+	switch {
+	case errors.Is(opened, driver.ErrTransactionActive):
+		if unsuitable := r.suitable(ctx); unsuitable != nil {
+			return nil, unsuitable
+		}
+
 		return func() error { return nil }, nil
-	case err != nil:
-		return nil, fmt.Errorf("opening a snapshot to read from: %w", err)
+	case opened != nil:
+		return nil, fmt.Errorf("opening a snapshot to read from: %w", opened)
 	}
 
 	return func() error {
@@ -195,6 +206,61 @@ func (r *Reader) snapshot(ctx context.Context) (func() error, error) {
 
 		return nil
 	}, nil
+}
+
+// ErrUnsuitableTransaction is a caller's transaction that cannot carry a read.
+//
+// Separate from ErrSchemaNotFound and from the catalog being inconsistent
+// because it is neither: nothing is wrong with the schema or the server, and
+// the caller can fix it by opening the right kind of transaction or none at
+// all.
+var ErrUnsuitableTransaction = errors.New("the open transaction cannot carry a read")
+
+// transactionKind asks what the transaction in force actually is.
+const transactionKind = `SELECT pg_catalog.current_setting('transaction_isolation'),
+       pg_catalog.current_setting('transaction_read_only')`
+
+// suitable refuses a caller's transaction that does not give what the read
+// needs.
+//
+// Two properties, and the read is built on both. One view of the database, so
+// that eleven statements describe one moment rather than eleven — without it a
+// table dropped between two of them comes back with nothing in it and no error.
+// And no writing, so that a function resolved under a search path pointed at
+// somebody else's schema cannot do anything but read.
+//
+// Both are given by BeginSnapshot and neither is given by an ordinary Begin.
+// Reading anyway would answer a model with the same shape and none of the
+// guarantees, which nobody downstream can tell apart — so it is refused, and
+// the caller is told which of the two is missing.
+func (r *Reader) suitable(ctx context.Context) error {
+	rows := r.server.Query(ctx, transactionKind)
+	defer rows.Close()
+
+	if !rows.Next() {
+		return fmt.Errorf("%w: the server did not say what kind it is: %w",
+			ErrUnsuitableTransaction, rows.Err())
+	}
+
+	var isolation, readOnly string
+	if err := rows.Scan(&isolation, &readOnly); err != nil {
+		return fmt.Errorf("%w: reading what kind it is: %w", ErrUnsuitableTransaction, err)
+	}
+
+	// Serializable gives everything repeatable read gives and more, so it is
+	// accepted rather than insisted against.
+	if isolation != "repeatable read" && isolation != "serializable" {
+		return fmt.Errorf("%w: it is %s, so each statement would see a different"+
+			" database and a schema read across several would describe none of them",
+			ErrUnsuitableTransaction, isolation)
+	}
+
+	if readOnly != "on" {
+		return fmt.Errorf("%w: it can write, and a read of a schema on the search path"+
+			" of that schema's owner must not", ErrUnsuitableTransaction)
+	}
+
+	return nil
 }
 
 // schemaExists asks whether the namespace is there at all.

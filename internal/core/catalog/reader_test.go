@@ -47,6 +47,11 @@ type answers struct {
 	snapshotFails error
 	inTransaction bool
 
+	// What the caller's transaction answers when asked what it is. The
+	// defaults are what BeginSnapshot would have produced, so a test about
+	// something else does not have to say.
+	isolation, readOnly string
+
 	// restoredLive records whether the context the path was put back through
 	// was still usable. It is the whole point of the test that sets
 	// cancelDuring: restoring through a cancelled context fails exactly when
@@ -56,6 +61,21 @@ type answers struct {
 
 // The path the session is on before a read scopes it, and what it goes back to.
 const pathBefore = "public"
+
+// kindOfTransaction answers the two settings the reader asks about, defaulting
+// to the kind BeginSnapshot opens.
+func (a *answers) kindOfTransaction() []any {
+	isolation, readOnly := a.isolation, a.readOnly
+	if isolation == "" {
+		isolation = "repeatable read"
+	}
+
+	if readOnly == "" {
+		readOnly = "on"
+	}
+
+	return []any{isolation, readOnly}
+}
 
 func (a *answers) BeginSnapshot(context.Context) error {
 	if a.inTransaction {
@@ -108,6 +128,8 @@ func (a *answers) Query(ctx context.Context, sql string, _ ...any) driver.Rows {
 // puts the old value back.
 func (a *answers) searchPath(ctx context.Context, sql string) (driver.Rows, bool) {
 	switch {
+	case strings.Contains(sql, "transaction_isolation"):
+		return &fakeRows{rows: [][]any{a.kindOfTransaction()}}, true
 	case strings.Contains(sql, "current_setting"):
 		return &fakeRows{rows: [][]any{{pathBefore}}, err: a.askingFails}, true
 	case strings.Contains(sql, "quote_ident"):
@@ -1404,5 +1426,82 @@ func TestAReadThatCannotGetASnapshotFails(t *testing.T) {
 
 	if _, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales")); !errors.Is(err, refused) {
 		t.Errorf("Read() = %v, want the refusal", err)
+	}
+}
+
+// A caller's transaction that cannot carry the read is refused, and the refusal
+// says which of the two things is missing.
+//
+// The read is built on both. One view of the database, so that eleven
+// statements describe one moment — without it a table dropped between two of
+// them comes back empty and nothing reports it. And no writing, so that a
+// function resolved under a search path pointed at somebody else's schema
+// cannot do anything but read.
+//
+// An ordinary Begin gives neither. Accepting it unseen answered a model with
+// the same shape and none of the guarantees, which nobody downstream can tell
+// apart from a good one — verified against a server, where a write inside the
+// transaction the reader was reading in succeeded.
+func TestAReadRefusesATransactionThatCannotCarryIt(t *testing.T) {
+	t.Parallel()
+
+	for name, kind := range map[string]struct{ isolation, readOnly, says string }{
+		"one that sees each statement differently": {"read committed", "on", "read committed"},
+		"one that can write":                       {"repeatable read", "off", "must not"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			server := &answers{
+				inTransaction: true,
+				isolation:     kind.isolation,
+				readOnly:      kind.readOnly,
+				rows: map[string][][]any{
+					"pg_namespace":             existing(),
+					"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
+				},
+			}
+
+			_, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+			if !errors.Is(err, catalog.ErrUnsuitableTransaction) {
+				t.Fatalf("Read() = %v, want ErrUnsuitableTransaction", err)
+			}
+			if !strings.Contains(err.Error(), kind.says) {
+				t.Errorf("Read() = %q, want it to say what is missing", err)
+			}
+		})
+	}
+}
+
+// A caller's transaction that does carry the read is used, and left alone.
+//
+// Serializable as well as repeatable read: it gives everything repeatable read
+// gives and more, so insisting on the weaker of the two would refuse a caller
+// who had been more careful.
+func TestAReadUsesACallersSnapshotAndLeavesItAlone(t *testing.T) {
+	t.Parallel()
+
+	for _, isolation := range []string{"repeatable read", "serializable"} {
+		t.Run(isolation, func(t *testing.T) {
+			t.Parallel()
+
+			server := &answers{
+				inTransaction: true,
+				isolation:     isolation,
+				readOnly:      "on",
+				rows: map[string][][]any{
+					"pg_namespace":             existing(),
+					"pg_class ARRAY['r', 'p']": {{"orders", "r", false, "p", false, false, nil, nil}},
+				},
+			}
+
+			if _, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales")); err != nil {
+				t.Fatalf("Read() = %v", err)
+			}
+
+			if got := server.left.Load(); got != 0 {
+				t.Errorf("the read ended somebody else's transaction %d times", got)
+			}
+		})
 	}
 }
