@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // Cache holds the schemas one connection has already read.
@@ -46,6 +47,10 @@ type Cache struct {
 	mu      sync.Mutex
 	schemas map[Name]*pending
 
+	// inside counts the callers that have reached Read and not been answered.
+	// See Waiting.
+	inside atomic.Int64
+
 	// serialised is held for the length of a read, which is what keeps two of
 	// them from overlapping. It is a channel rather than a mutex so that
 	// waiting for it can be given up on: a caller that has been cancelled must
@@ -67,6 +72,20 @@ type Cache struct {
 	// a time needs no lock, and paying for one there would charge every use for
 	// a problem only this one has.
 	serialised chan struct{}
+}
+
+// Waiting is how many callers are inside Read and not yet answered.
+//
+// It exists for the tests, and it is here rather than in them because a test
+// cannot see this from outside: counting callers before they call Read proves
+// they are about to, not that they are queued, and the difference is the whole
+// of what single flight means. Two tests were written against the outside count
+// and both passed with the sharing removed.
+//
+// Exported because a test of this package lives outside it, and because a number
+// that says how many callers are waiting is a fair thing for a caller to ask.
+func (c *Cache) Waiting() int {
+	return int(c.inside.Load())
 }
 
 // Source is where a cache gets a schema it does not have.
@@ -120,6 +139,9 @@ func NewCache(source Source) *Cache {
 // that one's context is cancelled the reading fails for everyone waiting on it.
 // They are told, and the failure is not kept, so asking again reads again.
 func (c *Cache) Read(ctx context.Context, schema Name) (Schema, error) {
+	c.inside.Add(1)
+	defer c.inside.Add(-1)
+
 	reading, mine := c.reading(schema)
 	if mine {
 		c.fill(ctx, schema, reading)

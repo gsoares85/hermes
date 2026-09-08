@@ -990,3 +990,57 @@ func TestWhichStorageParametersAreWritten(t *testing.T) {
 		}
 	}
 }
+
+// What stands on a table with row security is declined with it, and what merely
+// points at one is not.
+//
+// All three work today, and all three work because of an edge in the dependency
+// graph that nothing asserted. The day the filter on deptype or refobjsubid
+// changes, the three break together and in silence, and the way they break is a
+// copy written without the control on who can read which rows.
+//
+// The distinction is the point. A view names the table in its query and a child
+// names it in its definition, so neither can be written without it. A foreign
+// key is added afterwards in a statement of its own and exposes no rows, so the
+// table that declares it is written and only the key goes.
+func TestWhatStandsOnATableWithRowSecurityIsDeclinedWithIt(t *testing.T) {
+	t.Parallel()
+
+	secrets := table("secrets")
+
+	schema := catalog.Schema{
+		Name: name("sales"),
+		Tables: []catalog.Table{
+			{Name: name("secrets"), RowSecurity: true,
+				Columns: []catalog.Column{{Name: name("id"), Position: 1, Type: catalog.NewTypeName("integer")}}},
+			{Name: name("child"), Inherits: []catalog.Name{name("secrets")}},
+			{Name: name("refers"),
+				Columns: []catalog.Column{{Name: name("id"), Position: 1, Type: catalog.NewTypeName("integer")}},
+				Constraints: []catalog.Constraint{{
+					Name: name("refers_fkey"), Kind: catalog.ConstraintForeignKey,
+					References: name("secrets"),
+					Definition: "FOREIGN KEY (id) REFERENCES secrets(id)",
+				}}},
+		},
+		Views: []catalog.View{{Name: name("over_secrets"), Definition: "SELECT id FROM secrets"}},
+		Dependencies: []catalog.Dependency{
+			{Object: table("child"), Needs: secrets, Reason: catalog.ReasonInheritance},
+			{Object: table("refers"), Needs: secrets, Reason: catalog.ReasonForeignKey},
+			{Object: view("over_secrets"), Needs: secrets, Reason: catalog.ReasonQuery},
+		},
+	}
+
+	script := ddl.Of(schema)
+
+	// Neither the table nor what cannot exist without it.
+	for _, declined := range []string{
+		`CREATE TABLE "secrets"`, `CREATE TABLE "child"`, `CREATE VIEW "over_secrets"`,
+	} {
+		mustNotWrite(t, script, declined)
+	}
+
+	// The table that only points at it is written, and only its key is not.
+	mustWrite(t, script, `CREATE TABLE "refers"`)
+	mustNotWrite(t, script, "ADD CONSTRAINT")
+	mustWrite(t, script, `-- not written: the constraint "refers_fkey" on the table "refers"`)
+}

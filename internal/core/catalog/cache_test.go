@@ -54,7 +54,6 @@ type counted struct {
 	// answered. A test that wants two of them to meet waits on this rather
 	// than on arrived: arrived says the first is inside the source, which is
 	// nothing about whether the second ever queued behind it.
-	waiting atomic.Int64
 }
 
 func (c *counted) Read(_ context.Context, schema catalog.Name) (catalog.Schema, error) {
@@ -100,13 +99,9 @@ func blocking() *counted {
 	return &counted{held: make(chan struct{}), arrived: make(chan struct{})}
 }
 
-// queue reads while counting itself, so a test can wait for callers to be
-// genuinely queued rather than merely started.
-func queue(t *testing.T, source *counted, cache *catalog.Cache, schema string) catalog.Schema {
+// queue reads and reports, so a goroutine's failure lands on the test.
+func queue(t *testing.T, cache *catalog.Cache, schema string) catalog.Schema {
 	t.Helper()
-
-	source.waiting.Add(1)
-	defer source.waiting.Add(-1)
 
 	read, err := cache.Read(t.Context(), catalog.NewName(schema))
 	if err != nil {
@@ -116,20 +111,25 @@ func queue(t *testing.T, source *counted, cache *catalog.Cache, schema string) c
 	return read
 }
 
-// awaitQueued blocks until the given number of callers are inside Cache.Read,
-// so that a test about two of them meeting is about two of them meeting.
-func awaitQueued(t *testing.T, source *counted, callers int64) {
+// awaitQueued blocks until the given number of callers are inside the cache.
+//
+// The count comes from the cache itself, and that is the point. The first
+// version of this counted callers in the goroutine before it called Read, which
+// proves they are about to call rather than that they are queued — and both
+// tests using it passed with the single flight removed, which is the fault they
+// were written to catch.
+func awaitQueued(t *testing.T, cache *catalog.Cache, callers int) {
 	t.Helper()
 
 	for range 5000 {
-		if source.waiting.Load() >= callers {
+		if cache.Waiting() >= callers {
 			return
 		}
 
 		time.Sleep(time.Millisecond)
 	}
 
-	t.Fatalf("only %d callers ever queued, want %d", source.waiting.Load(), callers)
+	t.Fatalf("only %d callers ever reached the cache, want %d", cache.Waiting(), callers)
 }
 
 // mustRead reads and fails the test when it does not answer.
@@ -185,7 +185,7 @@ func TestTwoCallersAtOnceCostOneReading(t *testing.T) {
 		go func() {
 			defer group.Done()
 
-			answers[i] = queue(t, source, cache, "sales")
+			answers[i] = queue(t, cache, "sales")
 		}()
 	}
 
@@ -193,7 +193,7 @@ func TestTwoCallersAtOnceCostOneReading(t *testing.T) {
 	// arrived alone let the second caller be served from the cache after the
 	// first had finished, and the test passed whether or not the reading was
 	// shared.
-	awaitQueued(t, source, 2)
+	awaitQueued(t, cache, 2)
 	<-source.arrived
 	close(source.held)
 	group.Wait()
@@ -373,9 +373,6 @@ func TestAFailureReachesEveryCallerWaitingOnIt(t *testing.T) {
 		go func() {
 			defer group.Done()
 
-			source.waiting.Add(1)
-			defer source.waiting.Add(-1)
-
 			if _, err := cache.Read(t.Context(), catalog.NewName("sales")); !errors.Is(err, failure) {
 				t.Errorf("Read() = %v, want the failure", err)
 			}
@@ -385,7 +382,7 @@ func TestAFailureReachesEveryCallerWaitingOnIt(t *testing.T) {
 	// Both waiting on the one reading, which is what makes this about the
 	// failure reaching a waiter rather than about a second call that found
 	// nothing cached and failed on its own.
-	awaitQueued(t, source, 2)
+	awaitQueued(t, cache, 2)
 	<-source.arrived
 	close(source.held)
 	group.Wait()

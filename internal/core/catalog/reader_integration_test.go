@@ -1556,3 +1556,52 @@ func TestATableSaysWhetherItRestrictsWhichRowsAreVisible(t *testing.T) {
 		})
 	}
 }
+
+// A read inside a caller's own transaction puts the search path back itself.
+//
+// The test that used to guard this went hollow when the read gained a snapshot:
+// a SET inside a transaction goes back with the rollback, so deleting the
+// restore entirely left it green. This is the branch where the rollback is not
+// the reader's to perform — the caller opened the transaction and keeps it — so
+// the restore is the only thing that puts the path back, and it is the branch
+// that has to be measured.
+func TestAReadInsideACallersTransactionPutsTheSearchPathBack(t *testing.T) {
+	t.Parallel()
+
+	session, instance := openSession(t, testsupport.SupportedVersions[0])
+	corpus := testsupport.Corpus(t, instance)
+
+	before := settingOf(t, session, "search_path")
+
+	// The kind of transaction a read will accept, opened by the caller.
+	if err := session.BeginSnapshot(t.Context()); err != nil {
+		t.Fatalf("BeginSnapshot() = %v", err)
+	}
+
+	if _, err := catalog.NewReader(session).Read(t.Context(), catalog.NewName(corpus)); err != nil {
+		t.Fatalf("reading %s: %v", corpus, err)
+	}
+
+	// Still inside the caller's transaction, so nothing has rolled anything
+	// back: whatever the path is now, the restore is what made it so.
+	if during := settingOf(t, session, "search_path"); during != before {
+		t.Errorf("the search path reads as %q inside the caller's transaction, want %q",
+			during, before)
+	}
+
+	if err := session.Rollback(t.Context()); err != nil {
+		t.Errorf("Rollback() = %v", err)
+	}
+}
+
+func settingOf(t *testing.T, session driver.Session, name string) string {
+	t.Helper()
+
+	var value string
+	if err := session.QueryRow(t.Context(),
+		"SELECT pg_catalog.current_setting($1)", name).Scan(&value); err != nil {
+		t.Fatalf("reading %s: %v", name, err)
+	}
+
+	return value
+}
