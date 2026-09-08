@@ -110,6 +110,12 @@ func TestTheCheckIsQuietAboutTheFormsTheQueriesUse(t *testing.T) {
 		"SELECT k.attnum FROM pg_catalog.pg_index i," +
 			" LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)",
 		"SELECT 1 WHERE c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p'])",
+
+		// The constructs the grammar binds to the catalog, which a check that
+		// complained about them would only teach somebody to switch off.
+		"SELECT CAST(c.oid AS text), GREATEST(1, 2), NULLIF(1, 2), EXTRACT(YEAR FROM pg_catalog.now())",
+		"SELECT pg_catalog.count(*) FILTER (WHERE true) OVER () FROM pg_catalog.pg_class",
+		"SELECT 1 WHERE (a, b) OVERLAPS (c, d)",
 	} {
 		if found := unqualified(sql); len(found) != 0 {
 			t.Errorf("the check reports %v for %q, which resolves nothing by name", found, sql)
@@ -193,8 +199,13 @@ var (
 	// the ordinary way, so each is as hijackable as the symbol it stands for.
 	// IS DISTINCT FROM is matched as the phrase, because DISTINCT on its own is
 	// what SELECT DISTINCT is made of.
+	//
+	// OVERLAPS was here and is not a comparison of that kind. The grammar binds
+	// it to the catalog's own functions, and it stays bound with an exact
+	// four-argument overlaps() declared first on the path — measured, not
+	// assumed. Refusing it only taught somebody to distrust this list.
 	worded = regexp.MustCompile(`(?i)\b(NOT\s+IN|IN|BETWEEN|LIKE|ILIKE|SIMILAR\s+TO|` +
-		`IS\s+(NOT\s+)?DISTINCT\s+FROM|OVERLAPS)\b`)
+		`IS\s+(NOT\s+)?DISTINCT\s+FROM)\b`)
 
 	// An identifier followed by an opening parenthesis. A call, unless it is one
 	// of the keywords below or an alias list.
@@ -222,15 +233,29 @@ var (
 )
 
 // keywords are the words that are followed by a parenthesis without being a
-// call. It is deliberately short and explicit: a keyword missing from it makes
-// this test complain about something harmless, which somebody notices and fixes.
-// The failure of the version this replaced was in the other direction.
+// call. Being wrong about the list makes this test noisy, which somebody
+// notices; being wrong the other way makes it silent, which is what happened.
+//
+// Noisy has a cost of its own, though, and it is the one that gets a check
+// turned off: the version before this one would have failed the build for
+// CAST(, EXTRACT(, FILTER (, OVER ( and GREATEST( — every one of them a
+// construct the grammar binds to the catalog, verified against a server with an
+// exact shadowing function declared first on the path.
+//
+// What is deliberately absent is the words that look like the same thing and
+// are not. substring, trim, position, overlay, left and right have a grammar of
+// their own and are also ordinary functions resolved through the path, so a
+// call to one of them has to be qualified like any other.
 var keywords = map[string]bool{
 	"array": true, "case": true, "coalesce": true, "exists": true,
 	"lateral": true, "not": true, "and": true, "or": true, "on": true,
 	"values": true, "select": true, "where": true, "from": true, "join": true,
 	"union": true, "as": true, "when": true, "then": true, "else": true,
 	"end": true, "with": true, "by": true, "in": true, "any": true, "all": true,
+	"cast": true, "extract": true, "nullif": true, "greatest": true,
+	"least": true, "filter": true, "over": true, "within": true, "group": true,
+	"row": true, "using": true, "distinct": true, "having": true,
+	"order": true, "partition": true, "returning": true, "overlaps": true,
 }
 
 // unqualified answers everything in a query that is resolved by name.
@@ -239,9 +264,13 @@ func unqualified(sql string) []string {
 
 	// Literals first — a % or a word inside one is text, not syntax — and then
 	// the qualified operators, which are themselves an identifier followed by a
-	// parenthesis and would otherwise be reported as calls. What is left is
-	// exactly what the query resolves by name.
-	bare := qualified.ReplaceAllString(literal.ReplaceAllString(sql, "''"), " ")
+	// parenthesis and would otherwise be reported as calls. The star of an
+	// aggregate goes with them: it is the only * in SQL that is not an operator,
+	// and count(*) is a thing a query will want.
+	//
+	// What is left is exactly what the query resolves by name.
+	bare := strings.ReplaceAll(
+		qualified.ReplaceAllString(literal.ReplaceAllString(sql, "''"), " "), "(*)", "()")
 
 	for _, call := range called.FindAllStringSubmatch(bare, -1) {
 		prefix, name := call[1], call[2]
