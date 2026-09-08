@@ -488,7 +488,9 @@ func TestASnapshotIsOneViewAndCannotWrite(t *testing.T) {
 		t.Fatalf("the table starts with %d rows", before)
 	}
 
-	writer.Exec(t.Context(), "INSERT INTO "+table+" VALUES (1)")
+	if err := writer.Exec(t.Context(), "INSERT INTO "+table+" VALUES (1)"); err != nil {
+		t.Fatalf("inserting from the other session: %v", err)
+	}
 
 	if after := countIn(t, reader, table); after != 0 {
 		t.Errorf("the snapshot sees %d rows committed after it began, want the view it opened with", after)
