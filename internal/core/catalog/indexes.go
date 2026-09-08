@@ -92,7 +92,7 @@ const listIndexes = `SELECT c.relname,
 	WHERE n.nspname OPERATOR(pg_catalog.=) $1
 	  AND c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p'])
 	  AND idx.indisvalid
-	  AND i.relispartition OPERATOR(pg_catalog.=) false
+	  AND NOT i.relispartition
 	  AND NOT EXISTS (
 	        SELECT 1 FROM pg_catalog.pg_constraint con
 	        WHERE con.conindid OPERATOR(pg_catalog.=) idx.indexrelid

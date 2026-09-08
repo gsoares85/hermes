@@ -154,6 +154,14 @@ type Rows interface {
 // the connection otherwise. Closing a session with a transaction still open
 // rolls it back: leaving the decision to the server's disconnect handling would
 // make the outcome depend on timing.
+//
+// One caller at a time. Its own fields are guarded, so concurrent use is not a
+// data race — but a connection carries one conversation, and two callers sharing
+// a session get the consequences of that rather than an error. Two statements
+// overlap on one wire; two transactions cannot both be the one in force; and
+// anything that borrows session state for the length of its work, as reading a
+// schema borrows the search path, has it changed underneath. A caller that needs
+// two things at once needs two sessions.
 type Session interface {
 	// Exec runs a statement that returns no rows.
 	Exec(ctx context.Context, sql string, args ...any) error

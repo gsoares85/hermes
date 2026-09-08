@@ -207,7 +207,7 @@ func (r *Reader) snapshot(ctx context.Context) (func() error, error) {
 		// ending early is when leaving matters, and the commonest way for it to
 		// end early is a cancellation that would refuse this statement too —
 		// leaving the transaction open on a connection going back to the pool.
-		leave, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreTimeout)
+		leave, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
 
 		if err := r.server.Rollback(leave); err != nil {

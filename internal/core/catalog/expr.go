@@ -154,7 +154,7 @@ func (r *Reader) scopeTo(ctx context.Context, schema Name) (func() error, error)
 		// statement, and against a backend that stopped answering without
 		// closing the socket it would wait for ever, holding the read that is
 		// already failing. Same shape as the rollback a closing session runs.
-		restore, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreTimeout)
+		restore, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
 
 		if _, err := r.setting(restore, searchPathBack, previous); err != nil {
@@ -192,9 +192,13 @@ func aborted(err error) bool {
 	return strings.Contains(err.Error(), abortedTransaction)
 }
 
-// restoreTimeout bounds putting the search path back. Short, because it runs
-// when a read has already failed and a caller is waiting to be told so.
-const restoreTimeout = 5 * time.Second
+// cleanupTimeout bounds each of the statements a read runs on its way out —
+// putting the search path back, and leaving the snapshot.
+//
+// Short, because they run when a read has already failed and a caller is waiting
+// to be told so. Two of them in a row is the worst case, so the tail a cancelled
+// read can add is twice this and not more.
+const cleanupTimeout = 5 * time.Second
 
 // setting runs one of the search path queries and answers the value it left.
 //
