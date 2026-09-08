@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -63,6 +64,58 @@ func TestEveryQuerySentIsOneThisTestChecked(t *testing.T) {
 	}
 }
 
+// The check catches the forms that were confirmed hijackable against a server,
+// and says nothing about the forms these queries are written in.
+//
+// The two tests above cannot show either. They read the constants this package
+// holds, and those hold none of the dangerous forms — by construction, since
+// the check refuses them — so a check that had quietly stopped looking would
+// make both pass. Which is what happened: three designs of this check have
+// failed in a row, each on a form it did not look for, and each failure was
+// found by a person rather than by the suite.
+//
+// So the forms live here, as a table. Adding a line to it is what closing the
+// next hole looks like.
+func TestTheCheckCatchesWhatWasConfirmedHijackable(t *testing.T) {
+	t.Parallel()
+
+	for sql, want := range map[string]string{
+		"SELECT 1 WHERE a = b":                                "the operator =",
+		"SELECT 1 WHERE a!=b":                                 "the operator !=",
+		"SELECT 1 WHERE a IN (1, 2)":                          "the comparison IN",
+		"SELECT 1 WHERE a NOT IN (1, 2)":                      "the comparison NOT IN",
+		"SELECT 1 WHERE a LIKE 'x'":                           "the comparison LIKE",
+		"SELECT 1 WHERE a IS DISTINCT FROM b":                 "the comparison IS DISTINCT FROM",
+		"SELECT unnest(i.indkey) FROM pg_catalog.pg_index i":  "the function unnest",
+		"SELECT CASE d.classid WHEN 'c'::regclass THEN 1 END": "the comparison CASE d.classid WHEN",
+	} {
+		found := unqualified(sql)
+		if !slices.Contains(found, want) {
+			t.Errorf("the check reports %v for %q; it has to report %q", found, sql, want)
+		}
+	}
+}
+
+// And the forms the queries are actually written in are quiet, because a check
+// that complains about those is a check somebody turns off.
+func TestTheCheckIsQuietAboutTheFormsTheQueriesUse(t *testing.T) {
+	t.Parallel()
+
+	for _, sql := range []string{
+		"SELECT c.relname FROM pg_catalog.pg_class c" +
+			" WHERE c.relname OPERATOR(pg_catalog.=) $1",
+		"SELECT CASE WHEN a OPERATOR(pg_catalog.=) b THEN 1 ELSE 0 END",
+		"SELECT pg_catalog.array_agg(p.relname ORDER BY i.inhseqno) AS inherits",
+		"SELECT k.attnum FROM pg_catalog.pg_index i," +
+			" LATERAL pg_catalog.unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)",
+		"SELECT 1 WHERE c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p'])",
+	} {
+		if found := unqualified(sql); len(found) != 0 {
+			t.Errorf("the check reports %v for %q, which resolves nothing by name", found, sql)
+		}
+	}
+}
+
 // The three shapes a name can be resolved by, and none of them is allowed bare.
 var (
 	// A run of the characters PostgreSQL builds operators out of. Anything left
@@ -79,6 +132,19 @@ var (
 	// An identifier followed by an opening parenthesis. A call, unless it is one
 	// of the keywords below or an alias list.
 	called = regexp.MustCompile(`(?i)([.\w]*?)([a-z_][a-z0-9_]*)\s*\(`)
+
+	// CASE with an expression before the first WHEN. It desugars to an = per
+	// branch, between that expression and each WHEN, resolved the ordinary way
+	// — and there is no operator in the text to qualify, so the form itself is
+	// the only thing that can be refused.
+	//
+	// Confirmed against a server, on the pair this package's own dependency
+	// query compares: CASE d.classid WHEN 'pg_catalog.pg_class'::regclass
+	// answered nothing under a hijacked path where the searched form answered
+	// every row. It is also the rewrite anybody would make to shorten that
+	// query, which is how this package regressed into the CVE the last two
+	// times — a shorter, more natural form replacing a verbose one.
+	simple = regexp.MustCompile(`(?i)\bCASE\b\s+(\S+)`)
 
 	// A qualified operator, which is what the check removes before looking.
 	qualified = regexp.MustCompile(`OPERATOR\(pg_catalog\.[^)]+\)`)
@@ -128,6 +194,12 @@ func unqualified(sql string) []string {
 
 	for _, word := range worded.FindAllString(bare, -1) {
 		found = append(found, "the comparison "+strings.Join(strings.Fields(word), " "))
+	}
+
+	for _, branch := range simple.FindAllStringSubmatch(bare, -1) {
+		if !strings.EqualFold(branch[1], "WHEN") {
+			found = append(found, "the comparison CASE "+branch[1]+" WHEN")
+		}
 	}
 
 	// Operators last, with the qualified ones taken out first so that what is
