@@ -639,6 +639,20 @@ func (w *writer) contents(table catalog.Table) []string {
 }
 
 // column writes one column of a table.
+//
+// The type goes into the statement as it stands, and it is the one field here
+// that neither quotes nor checks. It cannot do either: a type is not an
+// identifier — character varying(10)[] and numeric(10,2) and timestamp with
+// time zone are all one type name each — so quoting it would break every type
+// that has a modifier, and a pattern for what a legal one looks like would be
+// the permit list this package has already had to retract twice.
+//
+// What makes it safe is where it comes from. Every type in a model read by this
+// product is format_type's own rendering, folded by NewTypeName, and a server
+// does not render a type that cannot be written back. TypeName's own doc names
+// a second origin — a comparison target somebody wrote by hand — and whoever
+// adds that owes the same guarantee at the point the model is built, because
+// there is nowhere here to recover it.
 func (w *writer) column(table catalog.Table, column catalog.Column) string {
 	notNull := ""
 	if column.NotNull {
