@@ -54,10 +54,12 @@ type answers struct {
 	isolation, readOnly string
 	kindFails           error
 
-	// restoredLive records whether the context the path was put back through
-	// was still usable. It is the whole point of the test that sets
+	// restored counts the calls that put the path back, so a test can say the
+	// reader tried to. restoredLive records whether the context the path was
+	// put back through was still usable. It is the whole point of the test that sets
 	// cancelDuring: restoring through a cancelled context fails exactly when
 	// restoring matters.
+	restored     atomic.Int64
 	restoredLive bool
 }
 
@@ -144,6 +146,7 @@ func (a *answers) searchPath(ctx context.Context, sql string) (driver.Rows, bool
 		// The only set_config left is the one putting the path back, and
 		// whether its context is still usable is what a cancelled read is
 		// judged on.
+		a.restored.Add(1)
 		a.restoredLive = ctx.Err() == nil
 
 		return &fakeRows{rows: [][]any{{pathBefore}}, err: a.restoringFails}, true
@@ -1543,6 +1546,34 @@ func TestAReadUsesACallersSnapshotAndLeavesItAlone(t *testing.T) {
 				t.Errorf("the read ended somebody else's transaction %d times", got)
 			}
 		})
+	}
+}
+
+// A scoping call that fails still puts the path back.
+//
+// The failure may be in reading the answer to a statement the server already
+// applied: a cancelled context and a connection dropped mid-answer both look
+// like this from here, and only one of them leaves the path where it was. The
+// read gave up without trying, which left the session pointing at the schema it
+// had been asked to read — the state the whole of scopeTo exists to avoid, and
+// reached through the one path that skipped it.
+func TestAFailedScopingStillPutsTheSearchPathBack(t *testing.T) {
+	t.Parallel()
+
+	refused := errors.New("connection reset")
+
+	server := &answers{
+		rows:         map[string][][]any{"pg_namespace": existing()},
+		scopingFails: refused,
+	}
+
+	_, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+	if !errors.Is(err, refused) {
+		t.Fatalf("Read() = %v, want the failure that actually happened", err)
+	}
+
+	if got := server.restored.Load(); got != 1 {
+		t.Errorf("the reader put the search path back %d times, want once", got)
 	}
 }
 

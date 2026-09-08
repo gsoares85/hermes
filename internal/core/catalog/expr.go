@@ -135,11 +135,7 @@ func (r *Reader) scopeTo(ctx context.Context, schema Name) (func() error, error)
 		return nil, fmt.Errorf("reading the search path: %w", err)
 	}
 
-	if _, err := r.setting(ctx, searchPathOfSchema, schema.String()); err != nil {
-		return nil, fmt.Errorf("pointing the search path at %s: %w", schema, err)
-	}
-
-	return func() error {
+	back := func() error {
 		// A context of its own, and that is the whole of this function.
 		//
 		// Putting the path back matters most exactly when the read did not
@@ -164,9 +160,15 @@ func (r *Reader) scopeTo(ctx context.Context, schema Name) (func() error, error)
 				// server refuses every statement until somebody ends it —
 				// including this one. Reporting that would put a second error
 				// on top of every ordinary failure, and this one says the
-				// connection is poisoned. The rollback that follows puts the
-				// path back anyway, because a SET inside a transaction goes
-				// back with it.
+				// connection is poisoned.
+				//
+				// It is safe to say nothing because a SET inside a transaction
+				// goes back when the transaction does, and an aborted
+				// transaction is ended by somebody: this reader when it opened
+				// it, and the caller who opened it otherwise. The second half
+				// is the one that is not this package's to do — a caller whose
+				// own transaction has aborted has to end it before anything
+				// works again, path included.
 				return nil
 			}
 
@@ -174,7 +176,20 @@ func (r *Reader) scopeTo(ctx context.Context, schema Name) (func() error, error)
 		}
 
 		return nil
-	}, nil
+	}
+
+	if _, err := r.setting(ctx, searchPathOfSchema, schema.String()); err != nil {
+		// Put back before it is reported, because the failure may be in reading
+		// the answer to a statement the server already applied — a cancelled
+		// context and a dropped connection both look like this from here, and
+		// only one of them leaves the path where it was. Returning without
+		// trying left the session pointing at the schema being read, which is
+		// the state this whole function exists to avoid.
+		return nil, errors.Join(
+			fmt.Errorf("pointing the search path at %s: %w", schema, err), back())
+	}
+
+	return back, nil
 }
 
 // abortedTransaction is what the server answers to anything at all once a
