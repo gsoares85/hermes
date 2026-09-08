@@ -189,10 +189,41 @@ func (c *Cache) reading(schema Name) (*pending, bool) {
 // moment's trouble permanent until somebody thought to invalidate a schema that
 // never loaded.
 func (c *Cache) fill(ctx context.Context, schema Name, reading *pending) {
+	// Everything that has to happen whatever happens, in one place, because
+	// Source is an interface anybody can implement and a panic inside it used to
+	// take the cache of that connection down for good: the turn was never
+	// returned and this reading was never published, so every later caller for
+	// this schema waited on a channel nothing would close and every caller for
+	// any other waited for a turn nobody held.
+	//
+	// Deferring the two alone would not have been enough. A panic leaves no
+	// error behind, so the reading would have been published as an empty schema
+	// with nothing wrong — a silent wrong answer, which is worse than the
+	// deadlock it replaced. The panic becomes the failure of this reading, the
+	// reading is dropped like any other failure, and then it goes on unwinding:
+	// it is still a bug, and swallowing it would only move the surprise.
+	defer func() {
+		panicked := recover()
+		if panicked != nil {
+			reading.err = fmt.Errorf("reading %s: %v", schema, panicked)
+		}
+
+		if reading.err != nil {
+			c.forget(schema, reading)
+		}
+
+		close(reading.done)
+
+		if panicked != nil {
+			panic(panicked)
+		}
+	}()
+
 	select {
 	case c.serialised <- struct{}{}:
+		defer func() { <-c.serialised }()
+
 		reading.schema, reading.err = c.source.Read(ctx, schema)
-		<-c.serialised
 	case <-ctx.Done():
 		// Given up on before the turn came. The schema was never read, so this
 		// is a failure like any other and is not kept — the next caller starts
@@ -200,12 +231,6 @@ func (c *Cache) fill(ctx context.Context, schema Name, reading *pending) {
 		// nothing to do with it.
 		reading.err = fmt.Errorf("waiting to read %s: %w", schema, ctx.Err())
 	}
-
-	if reading.err != nil {
-		c.forget(schema, reading)
-	}
-
-	close(reading.done)
 }
 
 // forget drops a reading, and only if it is still the one the map holds.

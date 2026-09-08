@@ -31,6 +31,9 @@ type counted struct {
 	// not the reads are serialised.
 	hold time.Duration
 
+	// panics makes the source fail the way nothing else in these tests does.
+	panics bool
+
 	// after runs as the reading finishes, which is how a test puts something
 	// exactly at the moment between the answer being ready and the caller
 	// looking at it.
@@ -56,6 +59,10 @@ type counted struct {
 
 func (c *counted) Read(_ context.Context, schema catalog.Name) (catalog.Schema, error) {
 	c.reads.Add(1)
+
+	if c.panics {
+		panic("the source came apart")
+	}
 
 	if c.inside.Add(1) > 1 {
 		c.overlapped.Store(true)
@@ -784,4 +791,44 @@ func TestACallerWaitingForItsTurnCanGiveUp(t *testing.T) {
 
 	// And giving up left nothing behind: the schema it never read is read now.
 	mustRead(t, cache, "second")
+}
+
+// A panic inside the source does not take the cache down with it.
+//
+// Source is an interface anybody can implement. A panic in one used to leave the
+// turn unreturned and the reading never published, so every later caller for
+// that schema waited on a channel nothing would close, and every caller for any
+// other schema waited for a turn nobody held — one bug, and the metadata of that
+// connection was gone for as long as it lived.
+//
+// Publishing it as an empty schema would have been worse than the deadlock: a
+// caller cannot tell that from a schema that really is empty. So the panic
+// becomes this reading's failure, the reading is dropped like any other failure,
+// and the panic goes on unwinding, because it is still a bug.
+func TestAPanicInTheSourceLeavesTheCacheUsable(t *testing.T) {
+	t.Parallel()
+
+	source := &counted{panics: true}
+	cache := catalog.NewCache(source)
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the panic was swallowed")
+			}
+		}()
+
+		_, _ = cache.Read(t.Context(), catalog.NewName("sales"))
+	}()
+
+	// The turn came back and the reading was dropped, so another schema reads
+	// and the one that panicked can be tried again.
+	source.panics = false
+
+	mustRead(t, cache, "other")
+	mustRead(t, cache, "sales")
+
+	if got := source.reads.Load(); got != 3 {
+		t.Errorf("the server was read %d times, want the panic plus the two after it", got)
+	}
 }
