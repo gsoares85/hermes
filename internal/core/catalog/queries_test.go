@@ -38,10 +38,10 @@ import (
 func TestNothingInAQueryResolvesByName(t *testing.T) {
 	t.Parallel()
 
-	for name, sql := range catalogQueries(t) {
-		for _, found := range unqualified(sql) {
+	for _, query := range catalogQueries(t) {
+		for _, found := range unqualified(query.sql) {
 			t.Errorf("%s resolves %s by name; a schema on the search path can declare"+
-				" one that beats the catalog's", name, found)
+				" one that beats the catalog's", query, found)
 		}
 	}
 }
@@ -59,8 +59,8 @@ func TestEveryQuerySentIsOneThisTestChecked(t *testing.T) {
 	known := catalogQueries(t)
 
 	for _, sent := range queriesSent(t) {
-		if _, checked := known[sent]; !checked {
-			t.Errorf("a query is sent as %s, so nothing checks what it resolves by name", sent)
+		if _, checked := known[sent.name]; !checked {
+			t.Errorf("%s, so nothing checks what it resolves by name", sent)
 		}
 	}
 }
@@ -162,13 +162,35 @@ func (r *Reader) built(ctx context.Context, name string) error {
 }
 `)})
 
-	want := []string{
-		"the identifier listThings in fake.go",
-		"a literal or an expression in fake.go",
+	want := []sending{
+		{name: "listThings", source: "fake.go"},
+		{source: "fake.go"},
 	}
 
 	if !slices.Equal(sent, want) {
-		t.Errorf("the crossing answered %q, want %q", sent, want)
+		t.Errorf("the crossing answered %v, want %v", sent, want)
+	}
+}
+
+// A query sent from a function literal held in a var is a send.
+//
+// The crossing descended into declared functions only, on no stated grounds,
+// which left everything else in the file unread. A var holding a func literal
+// is the shape that lands there, and the doc on the crossing named "kept in a
+// var" as one of the three things it exists to catch.
+func TestAQuerySentFromAVarIsFound(t *testing.T) {
+	t.Parallel()
+
+	sent := sends(map[string]*ast.File{"fake.go": parseText(t, `package catalog
+
+var read = func(r *Reader, ctx context.Context, name string) error {
+	return r.server.Exec(ctx, "SELECT "+name)
+}
+`)})
+
+	want := []sending{{source: "fake.go"}}
+	if !slices.Equal(sent, want) {
+		t.Errorf("the crossing answered %v, want %v", sent, want)
 	}
 }
 
@@ -190,9 +212,9 @@ func (r *Reader) one(ctx context.Context, name string) error {
 }
 `)})
 
-		want := []string{"a literal or an expression in fake.go"}
+		want := []sending{{source: "fake.go"}}
 		if !slices.Equal(sent, want) {
-			t.Errorf("a query sent through %s is answered %q, want %q", method, sent, want)
+			t.Errorf("a query sent through %s is answered %v, want %v", method, sent, want)
 		}
 	}
 }
@@ -330,19 +352,32 @@ func aliasList(sql string, at int) bool {
 	return len(before) > 0 && strings.EqualFold(before[len(before)-1], "AS")
 }
 
+// query is one SQL constant of the package: what it is called, where it is
+// written, and what it says.
+type query struct{ name, source, sql string }
+
+func (q query) String() string { return "the identifier " + q.name + " in " + q.source }
+
 // catalogQueries answers every SQL constant of the package, by its name.
 //
 // Read from the source rather than exported for the test: what has to be
 // checked is what is written, not what somebody remembered to add to a list.
-func catalogQueries(t *testing.T) map[string]string {
+//
+// Keyed by the identifier alone, and not by the identifier and the file it is
+// in. Both sides of the crossing were keyed by the pair, so moving a constant
+// into a queries.go of its own — a refactor that changes nothing — failed the
+// crossing with the words "nothing checks what it resolves by name" about a
+// query that is checked. A test that cries wolf at a rename is a test somebody
+// stops reading. The file stays in the message, where it helps.
+func catalogQueries(t *testing.T) map[string]query {
 	t.Helper()
 
-	queries := map[string]string{}
+	queries := map[string]query{}
 
 	for source, file := range sources(t) {
 		for name, value := range constantsIn(t, file) {
 			if strings.Contains(value, "SELECT") {
-				queries["the identifier "+name+" in "+source] = value
+				queries[name] = query{name: name, source: source, sql: value}
 			}
 		}
 	}
@@ -354,8 +389,20 @@ func catalogQueries(t *testing.T) map[string]string {
 	return queries
 }
 
+// sending is one call that hands SQL to a connection: the constant it names, or
+// nothing when what it hands over is not a name at all.
+type sending struct{ name, source string }
+
+func (s sending) String() string {
+	if s.name == "" {
+		return "a query is sent from a literal or an expression in " + s.source
+	}
+
+	return "a query is sent as " + s.name + " in " + s.source
+}
+
 // queriesSent answers how every call to the server names the SQL it sends.
-func queriesSent(t *testing.T) []string {
+func queriesSent(t *testing.T) []sending {
 	t.Helper()
 
 	sent := sends(sources(t))
@@ -372,16 +419,26 @@ func queriesSent(t *testing.T) []string {
 // An identifier is answered by name so it can be crossed against the constants;
 // anything else is answered as the shape it is, which never matches and so is
 // reported.
-func sends(files map[string]*ast.File) []string {
+func sends(files map[string]*ast.File) []sending {
 	carriers := carriersIn(files)
 
-	var sent []string
+	var sent []sending
 
 	for _, source := range slices.Sorted(maps.Keys(files)) {
 		for _, declaration := range files[source].Decls {
-			if function, isFunction := declaration.(*ast.FuncDecl); isFunction {
-				sent = append(sent, queriesIn(function, source, carriers)...)
+			// Everything that is not a function is walked too, because a
+			// function literal held in a var sends queries like any other and
+			// descending only into declared functions would not see it. It has
+			// no parameter of its own to forgive, which is what the empty name
+			// says.
+			function, isFunction := declaration.(*ast.FuncDecl)
+			if !isFunction {
+				sent = append(sent, sendsUnder(declaration, "", source, carriers)...)
+
+				continue
 			}
+
+			sent = append(sent, queriesIn(function, source, carriers)...)
 		}
 	}
 
@@ -469,16 +526,22 @@ func carried(function *ast.FuncDecl, carriers map[string]int) (int, bool) {
 // the constants of those callers are read like any other. Any other identifier
 // is not — that is where a query built with Sprintf would land, and it is the
 // shape this crossing exists to refuse.
-func queriesIn(function *ast.FuncDecl, source string, carriers map[string]int) []string {
+func queriesIn(function *ast.FuncDecl, source string, carriers map[string]int) []sending {
 	forwarded := ""
 
 	if carried, carries := carriers[function.Name.Name]; carries {
 		forwarded = parameterAt(function, carried)
 	}
 
-	var sent []string
+	return sendsUnder(function, forwarded, source, carriers)
+}
 
-	ast.Inspect(function, func(node ast.Node) bool {
+// sendsUnder answers every send under a node, forgiving the one parameter its
+// enclosing function forwards.
+func sendsUnder(node ast.Node, forwarded, source string, carriers map[string]int) []sending {
+	var sent []sending
+
+	ast.Inspect(node, func(node ast.Node) bool {
 		call, isCall := node.(*ast.CallExpr)
 		if !isCall {
 			return true
@@ -495,9 +558,9 @@ func queriesIn(function *ast.FuncDecl, source string, carriers map[string]int) [
 		case isName && name.Name == forwarded:
 			// Handed in by a caller, whose own call is a send read elsewhere.
 		case isName:
-			sent = append(sent, "the identifier "+name.Name+" in "+source)
+			sent = append(sent, sending{name: name.Name, source: source})
 		default:
-			sent = append(sent, "a literal or an expression in "+source)
+			sent = append(sent, sending{source: source})
 		}
 
 		return true

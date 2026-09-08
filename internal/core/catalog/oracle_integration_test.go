@@ -46,13 +46,13 @@ func TestEveryQueryResolvesOnlyIntoTheCatalog(t *testing.T) {
 			instance.Exec(t, "CREATE SCHEMA "+views)
 
 			queries := catalogQueries(t)
-			named := map[string]string{}
+			named := map[string]query{}
 
 			for at, name := range slices.Sorted(maps.Keys(queries)) {
 				view := fmt.Sprintf("q%d", at)
-				named[view] = name
+				named[view] = queries[name]
 
-				build(t, instance, hostile, views, view, queries[name])
+				build(t, instance, hostile, views, view, queries[name].sql)
 			}
 
 			for _, resolved := range outside(t, instance, views) {
