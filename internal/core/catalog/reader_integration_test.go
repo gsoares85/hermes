@@ -1594,6 +1594,62 @@ func TestAReadInsideACallersTransactionPutsTheSearchPathBack(t *testing.T) {
 	}
 }
 
+// An ordinary transaction is refused, and what it would have cost is measured
+// rather than argued.
+//
+// The note on snapshot says a caller's ordinary transaction gave a model with
+// the same shape and none of the guarantees, verified against a server. That
+// verification was not in the repository, which makes it a claim — and this
+// branch has had to retract four claims about PostgreSQL written that way.
+//
+// Both halves are here. Inside an ordinary transaction the session can create a
+// table, so a function resolved under a path pointed at somebody else's schema
+// would run with that behind it; inside the transaction a read opens for
+// itself, the same statement is refused by the server. And the read declines
+// the first of them rather than answering a model nobody downstream could tell
+// from a good one.
+func TestAReadRefusesAnOrdinaryTransactionAgainstAServer(t *testing.T) {
+	t.Parallel()
+
+	session, instance := openSession(t, testsupport.SupportedVersions[0])
+	corpus := testsupport.Corpus(t, instance)
+
+	if err := session.Begin(t.Context()); err != nil {
+		t.Fatalf("Begin() = %v", err)
+	}
+
+	_, err := catalog.NewReader(session).Read(t.Context(), catalog.NewName(corpus))
+	if !errors.Is(err, catalog.ErrUnsuitableTransaction) {
+		t.Fatalf("reading inside an ordinary transaction = %v, want ErrUnsuitableTransaction", err)
+	}
+
+	// What the refusal is about, on the same transaction the read declined.
+	if err := session.Exec(t.Context(),
+		"CREATE TABLE "+corpus+".written_inside_the_read (x integer)"); err != nil {
+		t.Errorf("writing inside the caller's ordinary transaction = %v, want it to"+
+			" succeed — if it does not, this test no longer measures what it says", err)
+	}
+
+	if err := session.Rollback(t.Context()); err != nil {
+		t.Fatalf("Rollback() = %v", err)
+	}
+
+	// And the same statement inside the transaction a read opens for itself.
+	if err := session.BeginSnapshot(t.Context()); err != nil {
+		t.Fatalf("BeginSnapshot() = %v", err)
+	}
+
+	if err := session.Exec(t.Context(),
+		"CREATE TABLE "+corpus+".written_inside_the_read (x integer)"); err == nil {
+		t.Error("writing inside the transaction the read opens succeeded, so read only" +
+			" is not what this reader depends on it being")
+	}
+
+	if err := session.Rollback(t.Context()); err != nil {
+		t.Errorf("Rollback() = %v", err)
+	}
+}
+
 func settingOf(t *testing.T, session driver.Session, name string) string {
 	t.Helper()
 
