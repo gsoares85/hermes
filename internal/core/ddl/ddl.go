@@ -483,10 +483,13 @@ func ownership(sequence catalog.Sequence) string {
 // exact operator always exists" and "the corpus covers the pairs" — both of
 // which had to be retracted.
 //
-// So it is checked instead of asserted. A parameter has to look like a bare name
-// and a value with nothing in it that could end the statement; anything else is
-// refused rather than interpolated, which turns a thing a stock server happens
-// to reject into a thing this writer does not emit.
+// So it is checked instead of asserted, and checked by naming the values a
+// parameter may have rather than by naming the characters that would end a
+// statement. The second is what the version before this one did, under a
+// comment saying a value had nothing in it that could end the statement — and
+// it accepted an empty value, which produces WITH (ext.a=), and a value of two
+// hyphens, which comments out the closing parenthesis and the semicolon and
+// swallows the statement after it.
 func storage(options []string) (string, []string) {
 	var written, refused []string
 
@@ -508,10 +511,18 @@ func storage(options []string) (string, []string) {
 }
 
 // storageParameter is what a storage parameter may look like: an optionally
-// qualified bare name, then a value of the characters a number, a boolean, a
-// unit or a bare word can be made of. Anything outside that cannot end the
-// statement it is written into.
-var storageParameter = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?=[a-zA-Z0-9_.%-]*$`)
+// qualified bare name, then either a number or a bare word — which is every
+// value a stock server stores, fillfactor=70 and 2.5 and -1 and false and
+// check_option=local included. The hyphen is a sign and only a sign, because
+// log_autovacuum_min_duration=-1 needs one and a value of nothing but hyphens
+// is a comment.
+//
+// Being too narrow here is loud: the parameter is named in the preview instead
+// of written, which somebody reads. Being too wide is what put a comment marker
+// into a statement.
+var storageParameter = regexp.MustCompile(
+	`^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?=` +
+		`(-?[0-9]+(\.[0-9]+)?|[a-zA-Z][a-zA-Z0-9_]*)$`)
 
 // declineParameters records the storage parameters that were not written.
 //

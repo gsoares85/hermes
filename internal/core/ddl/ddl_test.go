@@ -1009,12 +1009,22 @@ func TestWhichStorageParametersAreWritten(t *testing.T) {
 		"security_barrier=true":               true,
 		"myext.label=plain":                   true,
 		"toast_tuple_target=128":              true,
-		"label=":                              true,
-		"label='quoted'":                      false,
-		"label=a;DROP TABLE x":                false,
-		"label=a) --":                         false,
-		"no_equals_sign":                      false,
-		"=leading":                            false,
+		"log_autovacuum_min_duration=-1":      true,
+		"check_option=local":                  true,
+
+		// The two the version before this one accepted. Neither has a character
+		// this writer would have called dangerous, and both break the script:
+		// an empty value is not syntax, and two hyphens comment out the closing
+		// parenthesis, the semicolon and the statement that follows.
+		"label=":     false,
+		"myext.b=--": false,
+
+		"label='quoted'":       false,
+		"label=a;DROP TABLE x": false,
+		"label=a) --":          false,
+		"label=a b":            false,
+		"no_equals_sign":       false,
+		"=leading":             false,
 	} {
 		script := ddl.Of(catalog.Schema{
 			Name:   name("sales"),
