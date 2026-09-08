@@ -33,6 +33,11 @@ its password in your system keychain, and see the databases you have access to; 
 object tree, no SQL editor and no backup yet. This README grows with every feature shipped:
 anything documented below with an example works. Anything in the *Roadmap* section does not.
 
+Work is under way on reading a schema out of `pg_catalog` and writing it back as DDL, which is
+what the structure diff will be built on. It has no command and no screen yet, so there is
+nothing here to show you: it is named under *Roadmap*, not under *Features*, and it moves when
+there is something you can run.
+
 ## Principles
 
 - **Nothing destructive without a preview.** Every operation that changes structure or data
@@ -354,7 +359,10 @@ runs.
 restore and a local catalog of the backups you generate.
 
 **Structure sync** — native schema diff over `pg_catalog`, producing a reviewable migration
-script, a difference report, and a CI mode that turns the diff into a pipeline gate.
+script, a difference report, and a CI mode that turns the diff into a pipeline gate. Reading a
+schema and writing it back as DDL is in place underneath, tested against PostgreSQL 12 through
+18 by building a schema, reading it, writing it out, applying it to an empty schema and
+comparing the two models.
 
 **Data transfer and sync** — move and reconcile bulk data across environments, with a preview
 of everything that will change.
