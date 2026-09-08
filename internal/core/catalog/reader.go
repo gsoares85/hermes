@@ -76,7 +76,17 @@ func (r *Reader) Read(ctx context.Context, schema Name) (read Schema, err error)
 		return Schema{}, err
 	}
 
-	defer func() { err = errors.Join(err, release()) }()
+	// The same rule as the restore below, and for the same reason: there is one
+	// answer here. A model read perfectly well on a connection whose transaction
+	// would not close is still an answer nobody can act on, because nobody knows
+	// what that connection is in the middle of. Leaving both would hand the
+	// caller a choice it has no way to make, and the two defers used to disagree
+	// about which way to make it.
+	defer func() {
+		if failed := release(); failed != nil {
+			read, err = Schema{}, errors.Join(err, failed)
+		}
+	}()
 
 	found, err := r.exists(ctx, schema)
 	if err != nil {

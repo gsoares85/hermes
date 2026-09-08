@@ -1505,3 +1505,35 @@ func TestAReadUsesACallersSnapshotAndLeavesItAlone(t *testing.T) {
 		})
 	}
 }
+
+// A read that fails reports what failed, and not a second time about the search
+// path.
+//
+// Once a statement in the transaction has failed the server refuses everything
+// until somebody ends it, including the statement that puts the path back. That
+// is not news about the connection — the rollback that follows puts the path
+// back anyway, because a SET inside a transaction goes back with it — and
+// reporting it put an alarm on top of every ordinary failure. The alarm means a
+// connection resolving the next caller's names in the wrong schema, so it has to
+// mean only that.
+func TestAFailedReadDoesNotAlsoComplainAboutTheSearchPath(t *testing.T) {
+	t.Parallel()
+
+	broken := errors.New("column does not exist")
+	aborted := errors.New("current transaction is aborted (SQLSTATE 25P02)")
+
+	server := &answers{
+		rows: map[string][][]any{"pg_namespace": existing()},
+		err:  map[string]error{"pg_class": broken},
+		// What the server says to the restore once the read has failed.
+		restoringFails: aborted,
+	}
+
+	_, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+	if !errors.Is(err, broken) {
+		t.Fatalf("Read() = %v, want the failure that actually happened", err)
+	}
+	if strings.Contains(err.Error(), "search path") {
+		t.Errorf("Read() = %q, want nothing about the search path", err)
+	}
+}

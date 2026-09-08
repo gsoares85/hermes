@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -157,11 +158,38 @@ func (r *Reader) scopeTo(ctx context.Context, schema Name) (func() error, error)
 		defer cancel()
 
 		if _, err := r.setting(restore, searchPathBack, previous); err != nil {
+			if aborted(err) {
+				// The read failed and took the transaction with it, so the
+				// server refuses every statement until somebody ends it —
+				// including this one. Reporting that would put a second error
+				// on top of every ordinary failure, and this one says the
+				// connection is poisoned. The rollback that follows puts the
+				// path back anyway, because a SET inside a transaction goes
+				// back with it.
+				return nil
+			}
+
 			return fmt.Errorf("putting the search path back to %q: %w", previous, err)
 		}
 
 		return nil
 	}, nil
+}
+
+// abortedTransaction is what the server answers to anything at all once a
+// statement in the transaction has failed.
+const abortedTransaction = "25P02"
+
+// aborted reports whether a failure is only the transaction refusing to go on.
+//
+// It is matched on the code rather than on the text because the text is
+// localised and the code is not, and it is matched at all because the
+// alternative is an alarm that rings on every ordinary failure. The alarm this
+// is keeping quiet — a search path that did not go back — means a connection
+// resolving the next caller's names in the wrong schema, so it has to mean that
+// and nothing else.
+func aborted(err error) bool {
+	return strings.Contains(err.Error(), abortedTransaction)
 }
 
 // restoreTimeout bounds putting the search path back. Short, because it runs
