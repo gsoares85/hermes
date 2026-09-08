@@ -999,6 +999,40 @@ func TestARefusedStorageParameterDoesNotClaimTheTableWasSkipped(t *testing.T) {
 	mustNotWrite(t, script, `-- not written: the table "orders"`)
 }
 
+// A security parameter that cannot be written takes the object with it.
+//
+// An ordinary parameter that is refused is named in the preview and the object
+// is written without it, which is right for a tuning knob: a copy without
+// fillfactor performs differently and says so. security_barrier is not a knob.
+// A view written without it lets a cheap function see the rows the view exists
+// to hide, and nothing about the copy says a control was dropped — which is the
+// fault row level security is declined for, so degrading one while declining
+// the other was an asymmetry with nothing behind it.
+//
+// Unreachable against a stock server, because both security parameters take a
+// boolean and a boolean is a shape the writer accepts. That is a fact about
+// today's server and not a rule, which is the distinction this branch has had
+// to be corrected on four times.
+func TestAViewWhoseSecurityParameterCannotBeWrittenIsNotWritten(t *testing.T) {
+	t.Parallel()
+
+	script := ddl.Of(catalog.Schema{
+		Name: name("sales"),
+		Views: []catalog.View{{
+			Name:       name("visible"),
+			Definition: "SELECT 1",
+			Options:    []string{"security_barrier=on or off"},
+		}},
+	})
+
+	mustNotWrite(t, script, `CREATE VIEW "visible"`)
+	mustWrite(t, script, `-- not written: the view "visible", because its "security_barrier"`)
+
+	if len(script.Omitted) != 1 || !script.Omitted[0].Whole() {
+		t.Errorf("the script omitted %+v, want the view itself", script.Omitted)
+	}
+}
+
 // The shapes a parameter may take, and the ones it may not.
 func TestWhichStorageParametersAreWritten(t *testing.T) {
 	t.Parallel()

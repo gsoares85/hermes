@@ -298,7 +298,13 @@ func (w *writer) findOmissions() {
 			w.omitted[object] = "it is a partition, and this version does not compare partitioning"
 		default:
 			w.declineUnknownGeneration(object, table)
+			w.declineUnwritableSecurity(object, table.Options)
 		}
+	}
+
+	for _, view := range w.schema.Views {
+		w.declineUnwritableSecurity(
+			catalog.Object{Kind: catalog.ObjectView, Name: view.Name}, view.Options)
 	}
 
 	// The two ways a decline spreads, together, because either can create work
@@ -383,6 +389,45 @@ func (w *writer) declineUnknownGeneration(object catalog.Object, table catalog.T
 
 		return
 	}
+}
+
+// declineUnwritableSecurity declines an object whose refused storage parameter
+// decides who sees which rows.
+//
+// An ordinary parameter that cannot be written is named in the preview and the
+// object is written without it, which is right: fillfactor is a tuning knob and
+// a copy without it is a copy that performs differently. security_barrier and
+// security_invoker are not knobs. A view written without security_barrier lets a
+// cheap function see the rows the view exists to hide, and the copy says nothing
+// about it — which is the same fault row level security is declined for, and
+// declining one while degrading the other was an asymmetry with no reason
+// behind it.
+//
+// Nothing reaches it today: both take a boolean, and a boolean is a shape the
+// writer accepts. It is here because that is a fact about today's server rather
+// than a rule, and the version of this file that reasoned from such facts has
+// had to be corrected four times.
+func (w *writer) declineUnwritableSecurity(object catalog.Object, options []string) {
+	_, refused := storage(options)
+
+	for _, parameter := range refused {
+		name, _, _ := strings.Cut(parameter, "=")
+
+		if securityParameters[name] {
+			w.omitted[object] = fmt.Sprintf(
+				"its %q is not a shape this version writes, and a copy without it shows"+
+					" what the original hides", name)
+
+			return
+		}
+	}
+}
+
+// securityParameters are the storage parameters that decide who sees what,
+// rather than how fast.
+var securityParameters = map[string]bool{
+	"security_barrier": true,
+	"security_invoker": true,
 }
 
 // generatedStored is the only way PostgreSQL generates a column today. A model
