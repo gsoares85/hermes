@@ -251,6 +251,10 @@ func catalogQueries(t *testing.T) map[string]string {
 		}
 	}
 
+	if len(queries) == 0 {
+		t.Fatal("no query constant was found, so every check that reads them is vacuous")
+	}
+
 	return queries
 }
 
