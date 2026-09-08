@@ -247,14 +247,29 @@ func (r *Reader) suitable(ctx context.Context) error {
 	rows := r.server.Query(ctx, transactionKind)
 	defer rows.Close()
 
-	if !rows.Next() {
-		return fmt.Errorf("%w: the server did not say what kind it is: %w",
-			ErrUnsuitableTransaction, rows.Err())
+	found := rows.Next()
+
+	// A transaction that cannot answer is not an unsuitable transaction, and
+	// calling it one sent the caller to fix the wrong thing. A rollback that
+	// does not land leaves the session holding a transaction the driver has
+	// already closed on a connection it has already killed, so this query
+	// fails — and every read afterwards reported that the open transaction
+	// could not carry it, on a session where the caller had opened none.
+	//
+	// Asked after Next and not inside its false branch, which is also where the
+	// %w of a nil error used to print itself as %!w(<nil>).
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("asking what the open transaction is: %w", err)
+	}
+
+	if !found {
+		return fmt.Errorf("%w: the server did not say what kind it is",
+			ErrUnsuitableTransaction)
 	}
 
 	var isolation, readOnly string
 	if err := rows.Scan(&isolation, &readOnly); err != nil {
-		return fmt.Errorf("%w: reading what kind it is: %w", ErrUnsuitableTransaction, err)
+		return fmt.Errorf("reading what the open transaction is: %w", err)
 	}
 
 	// Serializable gives everything repeatable read gives and more, so it is

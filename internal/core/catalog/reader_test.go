@@ -49,8 +49,10 @@ type answers struct {
 
 	// What the caller's transaction answers when asked what it is. The
 	// defaults are what BeginSnapshot would have produced, so a test about
-	// something else does not have to say.
+	// something else does not have to say. kindFails is a transaction that
+	// cannot answer at all, which is what a closed one does.
 	isolation, readOnly string
+	kindFails           error
 
 	// restoredLive records whether the context the path was put back through
 	// was still usable. It is the whole point of the test that sets
@@ -129,6 +131,10 @@ func (a *answers) Query(ctx context.Context, sql string, _ ...any) driver.Rows {
 func (a *answers) searchPath(ctx context.Context, sql string) (driver.Rows, bool) {
 	switch {
 	case strings.Contains(sql, "transaction_isolation"):
+		if a.kindFails != nil {
+			return &fakeRows{err: a.kindFails}, true
+		}
+
 		return &fakeRows{rows: [][]any{a.kindOfTransaction()}}, true
 	case strings.Contains(sql, "current_setting"):
 		return &fakeRows{rows: [][]any{{pathBefore}}, err: a.askingFails}, true
@@ -1470,6 +1476,40 @@ func TestAReadRefusesATransactionThatCannotCarryIt(t *testing.T) {
 				t.Errorf("Read() = %q, want it to say what is missing", err)
 			}
 		})
+	}
+}
+
+// A transaction that cannot answer is not an unsuitable transaction.
+//
+// The difference is what the caller does next. Unsuitable means open the right
+// kind or none at all; a transaction that will not answer means the session is
+// finished and the recovery is a new one.
+//
+// They were the same error, and the way there is entirely inside what this
+// branch already does: a rollback that does not land leaves the session holding
+// a transaction pgx has already closed on a connection it has already killed,
+// so BeginSnapshot answers ErrTransactionActive, this query fails, and every
+// read afterwards said the open transaction could not carry it — about a
+// session where the caller had opened none and could do nothing but close it.
+func TestATransactionThatCannotAnswerIsNotAnUnsuitableOne(t *testing.T) {
+	t.Parallel()
+
+	dead := errors.New("conn closed")
+
+	server := &answers{
+		inTransaction: true,
+		kindFails:     dead,
+		rows:          map[string][][]any{"pg_namespace": existing()},
+	}
+
+	_, err := catalog.NewReader(server).Read(t.Context(), catalog.NewName("sales"))
+
+	if !errors.Is(err, dead) {
+		t.Fatalf("Read() = %v, want the failure that actually happened", err)
+	}
+
+	if errors.Is(err, catalog.ErrUnsuitableTransaction) {
+		t.Errorf("Read() = %q, want it not to blame the kind of transaction", err)
 	}
 }
 

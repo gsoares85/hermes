@@ -190,11 +190,16 @@ func (s *session) Rollback(ctx context.Context) error {
 // Forgetting it either way was the easy shape and it made the session lie. A
 // rollback that did not land leaves the backend in a transaction, and a session
 // that has cleared its own record of one reports no transaction to the status
-// area, refuses to roll back again on Close — the check there is for a
-// transaction it no longer believes in — and accepts a Begin that the server
-// will refuse. Keeping it is the truth: there is an unresolved transaction on
-// that connection, Close tries again, and the pool destroys a connection it
-// cannot get back to idle.
+// area and accepts a Begin the server will refuse. Keeping it is the truth:
+// there is an unresolved transaction on that connection.
+//
+// What keeping it does not do is give a way back. pgx marks the transaction
+// closed before it sends the rollback and kills the connection when the
+// rollback fails, so the one this holds is closed and the connection under it
+// is dead: every use of it answers ErrTxClosed, and Close cannot try again
+// however the check there is written. The recovery is Close and a new session,
+// and callers are told that by the driver's own error rather than by a layer
+// above guessing at it.
 //
 // The lock is held across the round trip. A status read waiting for a commit to
 // land is showing what is true while it is true, which is the point of it.
