@@ -283,27 +283,36 @@ func (w *writer) findOmissions() {
 		}
 	}
 
-	// A sequence a declined table owns goes with it. The graph cannot say so:
-	// the ownership edge is deliberately not in it — reading it as an ordering
-	// constraint would make every serial column a cycle — so the propagation
-	// below never reaches the sequence. Writing it anyway produced an ALTER
-	// SEQUENCE ... OWNED BY against a table the script had just said it did not
-	// write, which fails on the target halfway through.
-	for _, sequence := range w.schema.Sequences {
-		if !sequence.OwnedBy.Valid() {
-			continue
-		}
-
-		owner := catalog.Object{Kind: catalog.ObjectTable, Name: sequence.OwnedBy.Table}
-		if reason := w.omitted[owner]; reason != "" {
-			w.omitted[catalog.Object{Kind: catalog.ObjectSequence, Name: sequence.Name}] =
-				fmt.Sprintf("the table %q that owns it is not written",
-					sequence.OwnedBy.Table.String())
-		}
-	}
-
+	// The two ways a decline spreads, together, because either can create work
+	// for the other and running them in turn does not converge.
+	//
+	// A sequence goes with the table that owns it, and the graph cannot say so:
+	// the ownership edge is deliberately absent — reading it as an ordering
+	// constraint would make every serial column a cycle. That was decided
+	// beside the loop below and ran before it, which meant a table declined by
+	// the propagation itself never reached the sequence check. Row level
+	// security made that reachable by adding a second way for a table to be
+	// declined, and the script went back to writing an ALTER SEQUENCE … OWNED BY
+	// against a table it had said three lines above that it did not write.
 	for spread := true; spread; {
 		spread = false
+
+		for _, sequence := range w.schema.Sequences {
+			if !sequence.OwnedBy.Valid() {
+				continue
+			}
+
+			owned := catalog.Object{Kind: catalog.ObjectSequence, Name: sequence.Name}
+			owner := catalog.Object{Kind: catalog.ObjectTable, Name: sequence.OwnedBy.Table}
+
+			if w.omitted[owned] != "" || w.omitted[owner] == "" {
+				continue
+			}
+
+			w.omitted[owned] = fmt.Sprintf("the table %q that owns it is not written",
+				sequence.OwnedBy.Table.String())
+			spread = true
+		}
 
 		for _, edge := range w.schema.Dependencies {
 			if !blocking(edge) || w.omitted[edge.Object] != "" || w.omitted[edge.Needs] == "" {

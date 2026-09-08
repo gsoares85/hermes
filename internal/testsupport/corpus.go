@@ -454,6 +454,16 @@ var corpusStatements = []string{
 	`CREATE POLICY patient_insert ON {schema}.patient FOR INSERT
 		WITH CHECK (clinician = current_user)`,
 
+	// A table declined by the propagation rather than by a fact about itself,
+	// and owning a sequence. It is the crossing the corpus was missing: the
+	// decline of a sequence used to be decided before the propagation ran, so a
+	// table reached this way kept its sequence in the script and the script died
+	// on the target.
+	`CREATE TABLE {schema}.patient_note (
+		id serial PRIMARY KEY,
+		note text
+	) INHERITS ({schema}.patient)`,
+
 	// A view with a security barrier, which is not decoration: it refuses to
 	// let a cheap function see the rows the view was meant to hide, and a copy
 	// made without it answers questions the original refused. security_invoker

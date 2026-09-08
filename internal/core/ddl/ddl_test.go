@@ -861,3 +861,46 @@ func TestANameWithALineBreakCannotBreakOutOfAComment(t *testing.T) {
 
 	mustWrite(t, script, `-- not written: the table "two\nlines"`)
 }
+
+// A sequence of a table declined by the propagation is declined too.
+//
+// The decline of a sequence cannot come from the graph — the ownership edge is
+// deliberately absent, because reading it as an ordering constraint would make
+// every serial column a cycle — so it is decided beside the propagation. Decided
+// *before* it, a table reached only by the propagation never got there, and its
+// sequence went into the script with an ALTER SEQUENCE … OWNED BY against a
+// table the script had just said it did not write.
+func TestASequenceOfATableDeclinedByPropagationIsDeclinedToo(t *testing.T) {
+	t.Parallel()
+
+	schema := catalog.Schema{
+		Name: name("sales"),
+		Tables: []catalog.Table{
+			{Name: name("parent"), RowSecurity: true},
+			{Name: name("child"), Inherits: []catalog.Name{name("parent")},
+				Columns: []catalog.Column{{
+					Name: name("id"), Position: 1, Type: catalog.NewTypeName("integer"),
+					Default: "nextval('child_id_seq'::regclass)",
+				}}},
+		},
+		Sequences: []catalog.Sequence{{
+			Name: name("child_id_seq"), Type: catalog.NewTypeName("integer"),
+			Start: 1, Increment: 1, Min: 1, Max: 2147483647, Cache: 1,
+			OwnedBy: catalog.ColumnRef{Table: name("child"), Column: name("id")},
+		}},
+		Dependencies: []catalog.Dependency{{
+			Object: table("child"), Needs: table("parent"), Reason: catalog.ReasonInheritance,
+		}},
+	}
+
+	script := ddl.Of(schema)
+
+	mustNotWrite(t, script, "CREATE SEQUENCE")
+	mustNotWrite(t, script, "OWNED BY")
+	mustWrite(t, script,
+		`-- not written: the sequence "child_id_seq", because the table "child" that owns it`)
+
+	if len(script.Statements) != 0 {
+		t.Errorf("the script holds %v, want nothing writable", script.Statements)
+	}
+}
