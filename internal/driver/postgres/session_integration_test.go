@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -550,6 +551,65 @@ func TestATransactionThatWouldNotCloseIsNotForgotten(t *testing.T) {
 
 	if !session.InTransaction() {
 		t.Error("the session says there is no transaction over a backend that is in one")
+	}
+}
+
+// Asking whether a session is in a transaction while it opens and closes them
+// is not a race.
+//
+// One caller at a time is the contract for the work a session does, and this is
+// the exception the lock was added for: the status area reads InTransaction
+// while a read is in flight, on the same session, from another goroutine. The
+// lock is also held across the round trip of a commit, so that what the status
+// shows is true while it is true — and none of that had a test, in a package
+// the coverage gate leaves to the integration suite.
+//
+// It says nothing about what the answer is at any moment, because there is no
+// answer to assert: it is a race detector test, and what it asserts is that the
+// detector stays quiet and the session still works afterwards.
+func TestAskingAboutTheTransactionWhileItOpensAndClosesIsSafe(t *testing.T) {
+	t.Parallel()
+
+	session := openSession(t, openPool(t, testsupport.SupportedVersions[0]))
+
+	var group sync.WaitGroup
+
+	group.Add(2)
+
+	go func() {
+		defer group.Done()
+
+		for range 50 {
+			if err := session.Begin(t.Context()); err != nil {
+				t.Errorf("Begin() = %v", err)
+
+				return
+			}
+
+			if err := session.Rollback(t.Context()); err != nil {
+				t.Errorf("Rollback() = %v", err)
+
+				return
+			}
+		}
+	}()
+
+	go func() {
+		defer group.Done()
+
+		for range 500 {
+			session.InTransaction()
+		}
+	}()
+
+	group.Wait()
+
+	if session.InTransaction() {
+		t.Error("the session is still in a transaction after every one was rolled back")
+	}
+
+	if countIn(t, session, "pg_catalog.pg_class") == 0 {
+		t.Error("the session cannot query after being asked about itself")
 	}
 }
 
