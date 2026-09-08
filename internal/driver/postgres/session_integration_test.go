@@ -462,3 +462,102 @@ func TestQueryInsideATransactionSeesTheTransaction(t *testing.T) {
 		t.Errorf("the table holds %d rows after the rollback, want 1", got)
 	}
 }
+
+// A snapshot is one view of the database and refuses to write, checked against
+// a server rather than by counting calls on a double.
+//
+// Both properties are the contract of BeginSnapshot, and both were unproven:
+// the only test of it counted that the reader asked for a snapshot, which says
+// nothing about whether what it got is one.
+func TestASnapshotIsOneViewAndCannotWrite(t *testing.T) {
+	t.Parallel()
+
+	pool := openPool(t, testsupport.SupportedVersions[0])
+	reader := openSession(t, pool)
+	writer := openSession(t, pool)
+
+	table := createTable(t, writer, "snapshot", "(id integer)")
+
+	if err := reader.BeginSnapshot(t.Context()); err != nil {
+		t.Fatalf("BeginSnapshot() = %v", err)
+	}
+
+	// The snapshot is taken at the first statement, so one is needed before the
+	// change to have a view that predates it.
+	if before := countIn(t, reader, table); before != 0 {
+		t.Fatalf("the table starts with %d rows", before)
+	}
+
+	writer.Exec(t.Context(), "INSERT INTO "+table+" VALUES (1)")
+
+	if after := countIn(t, reader, table); after != 0 {
+		t.Errorf("the snapshot sees %d rows committed after it began, want the view it opened with", after)
+	}
+
+	// And it cannot write, which is what makes a hijacked function under a
+	// hostile search path unable to do anything but read.
+	if err := reader.Exec(t.Context(), "INSERT INTO "+table+" VALUES (2)"); err == nil {
+		t.Error("a write inside the snapshot succeeded")
+	}
+
+	if err := reader.Rollback(t.Context()); err != nil {
+		t.Errorf("Rollback() = %v", err)
+	}
+}
+
+// Opening a second snapshot over one already open says so, rather than quietly
+// reusing it — the same answer Begin gives, and what tells a reader that the
+// transaction in force is somebody else's.
+func TestASecondSnapshotIsRefused(t *testing.T) {
+	t.Parallel()
+
+	session := openSession(t, openPool(t, testsupport.SupportedVersions[0]))
+
+	if err := session.BeginSnapshot(t.Context()); err != nil {
+		t.Fatalf("BeginSnapshot() = %v", err)
+	}
+
+	if err := session.BeginSnapshot(t.Context()); !errors.Is(err, driver.ErrTransactionActive) {
+		t.Errorf("a second BeginSnapshot() = %v, want ErrTransactionActive", err)
+	}
+}
+
+// A transaction that would not close is not forgotten.
+//
+// Forgetting it either way was the easy shape and it made the session lie. A
+// rollback that does not land leaves the backend in a transaction; a session
+// that has cleared its own record reports no transaction to the status area,
+// skips the rollback Close exists to perform — the check there is for a
+// transaction it no longer believes in — and accepts a Begin the server will
+// refuse.
+func TestATransactionThatWouldNotCloseIsNotForgotten(t *testing.T) {
+	t.Parallel()
+
+	session := openSession(t, openPool(t, testsupport.SupportedVersions[0]))
+
+	if err := session.BeginSnapshot(t.Context()); err != nil {
+		t.Fatalf("BeginSnapshot() = %v", err)
+	}
+
+	done, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if err := session.Rollback(done); err == nil {
+		t.Fatal("Rollback with a dead context reported success")
+	}
+
+	if !session.InTransaction() {
+		t.Error("the session says there is no transaction over a backend that is in one")
+	}
+}
+
+func countIn(t *testing.T, session driver.Session, table string) int {
+	t.Helper()
+
+	var rows int
+	if err := session.QueryRow(t.Context(), "SELECT count(*) FROM "+table).Scan(&rows); err != nil {
+		t.Fatalf("counting %s: %v", table, err)
+	}
+
+	return rows
+}

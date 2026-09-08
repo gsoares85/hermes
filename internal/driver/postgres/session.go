@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -22,7 +23,25 @@ const rollbackTimeout = 5 * time.Second
 // It holds the connection until Close, which is what makes two sessions
 // independent: each has its own backend, so a transaction open on one is
 // invisible to the other until it commits.
+// session guards its fields with a mutex, and that became necessary rather than
+// tidy when introspection started opening transactions of its own.
+//
+// Until then the transaction changed only when somebody asked, from one place.
+// A catalog read now opens and closes one from whatever goroutine is doing the
+// reading, while InTransaction — documented as what a tab shows in its status
+// area — is read from the one drawing the window. That is a data race, and the
+// detector does not see it yet only because nothing has wired the two together.
 type session struct {
+	// mu guards conn and tx, and became necessary rather than tidy when
+	// introspection started opening transactions of its own.
+	//
+	// Until then the transaction changed only when somebody asked, from one
+	// place. A catalog read now opens and closes one from whatever goroutine is
+	// reading, while InTransaction — documented as what a tab shows in its
+	// status area — is read from the one drawing the window. That is a data
+	// race, and the detector has not seen it only because nothing has wired the
+	// two together yet.
+	mu   sync.Mutex
 	conn *pgxpool.Conn
 	tx   pgx.Tx
 }
@@ -53,6 +72,9 @@ type runner interface {
 // interface holding a nil pointer, which compares unequal to nil and panics on
 // the first call instead of failing.
 func (s *session) runner() runner {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.tx != nil {
 		return s.tx
 	}
@@ -134,6 +156,9 @@ func (s *session) Begin(ctx context.Context) error {
 }
 
 func (s *session) begin(ctx context.Context, options pgx.TxOptions) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.tx != nil {
 		return driver.ErrTransactionActive
 	}
@@ -152,34 +177,48 @@ func (s *session) begin(ctx context.Context, options pgx.TxOptions) error {
 }
 
 func (s *session) Commit(ctx context.Context) error {
-	if s.tx == nil {
-		return driver.ErrNoTransaction
-	}
-
-	err := s.tx.Commit(ctx)
-	s.tx = nil
-	if err != nil {
-		return fmt.Errorf("committing: %w", err)
-	}
-
-	return nil
+	return s.finish(ctx, "committing", pgx.Tx.Commit)
 }
 
 func (s *session) Rollback(ctx context.Context) error {
+	return s.finish(ctx, "rolling back", pgx.Tx.Rollback)
+}
+
+// finish closes the transaction, and only forgets it when it is actually
+// closed.
+//
+// Forgetting it either way was the easy shape and it made the session lie. A
+// rollback that did not land leaves the backend in a transaction, and a session
+// that has cleared its own record of one reports no transaction to the status
+// area, refuses to roll back again on Close — the check there is for a
+// transaction it no longer believes in — and accepts a Begin that the server
+// will refuse. Keeping it is the truth: there is an unresolved transaction on
+// that connection, Close tries again, and the pool destroys a connection it
+// cannot get back to idle.
+//
+// The lock is held across the round trip. A status read waiting for a commit to
+// land is showing what is true while it is true, which is the point of it.
+func (s *session) finish(ctx context.Context, what string, close func(pgx.Tx, context.Context) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.tx == nil {
 		return driver.ErrNoTransaction
 	}
 
-	err := s.tx.Rollback(ctx)
-	s.tx = nil
-	if err != nil {
-		return fmt.Errorf("rolling back: %w", err)
+	if err := close(s.tx, ctx); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
 	}
+
+	s.tx = nil
 
 	return nil
 }
 
 func (s *session) InTransaction() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	return s.tx != nil
 }
 
@@ -190,6 +229,9 @@ func (s *session) InTransaction() bool {
 // down. Rolling back makes it explicit: work that was never committed is lost,
 // which is what a user closing a tab means.
 func (s *session) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.conn == nil {
 		return
 	}
