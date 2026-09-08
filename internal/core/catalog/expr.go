@@ -96,10 +96,17 @@ import (
 //
 // What keeps this true is not the corpus, which only covers the pairs somebody
 // thought of — the pair that went missing did so twice, and both times it was
-// the one nobody had. It is TestEveryComparisonInAQueryNamesPgCatalog, which
-// reads these constants and fails on any comparison left bare, whatever its
-// types. The corpus stays because it proves the server behaves the way this
-// reasoning claims; the enumeration is what makes the rule a rule.
+// the one nobody had. It is TestNothingInAQueryResolvesByName, which reads these
+// constants and refuses anything resolved by name, and
+// TestEveryQuerySentIsOneThisTestChecked, which refuses a query the first one
+// never saw.
+//
+// The first version of that check listed the forms it thought dangerous, which
+// is a permit list, and a permit list needs its author to know every way
+// PostgreSQL resolves a name. It missed !=, a=b without spaces, IN, LIKE and
+// every function call — all confirmed hijackable — including the IN this code
+// had just moved away from. It refuses rather than permits now, and the corpus
+// stays because it proves the server behaves as this reasoning claims.
 
 // searchPathNow asks what the path is before the reader changes it, so that
 // what goes back is what was there rather than a default this package invented.
