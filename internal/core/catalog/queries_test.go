@@ -65,6 +65,36 @@ func TestEveryQuerySentIsOneThisTestChecked(t *testing.T) {
 	}
 }
 
+// The path is pointed at one schema and nothing else.
+//
+// Every bare relation, type and collation name in these queries is safe for a
+// reason the queries themselves do not carry: pg_catalog is searched
+// implicitly, and implicitly first, so a name that exists in both is read from
+// the catalog. That holds only while the explicit path is a single schema.
+// Writing it as the schema and pg_catalog — which looks more careful, not less
+// — puts the schema in front, and TestTheOrderOfTheSearchPathDecidesTheCatalog
+// measures what that does.
+//
+// So the invariant is that this constant appends nothing to the schema it is
+// given. It lives in a file nothing else in the package points at, which is
+// exactly the kind of thing a later change makes "tidier".
+func TestTheSearchPathIsPointedAtOneSchemaAndNothingElse(t *testing.T) {
+	t.Parallel()
+
+	const want = "SELECT pg_catalog.set_config('search_path', pg_catalog.quote_ident($1), false)"
+
+	scoping, found := catalogQueries(t)["searchPathOfSchema"]
+	if !found {
+		t.Fatal("searchPathOfSchema is not there, so nothing points the path at a schema")
+	}
+
+	if scoping.sql != want {
+		t.Errorf("the path is pointed with %q, want %q — anything after the schema is"+
+			" searched before pg_catalog, and a bare pg_class then reads somebody else's",
+			scoping.sql, want)
+	}
+}
+
 // The check catches the forms that were confirmed hijackable against a server,
 // and says nothing about the forms these queries are written in.
 //

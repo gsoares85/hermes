@@ -94,6 +94,46 @@ func TestTheOracleReportsAQueryThatLeavesTheCatalog(t *testing.T) {
 	}
 }
 
+// The order of the search path decides which pg_class a bare name reads.
+//
+// Nothing in these queries qualifies a relation, a type or a collation, and
+// that is safe only because pg_catalog is searched implicitly and implicitly
+// first. Naming it explicitly — search_path TO schema, pg_catalog, which reads
+// as the more careful of the two — puts the schema ahead of it and a bare
+// pg_class becomes somebody else's table.
+//
+// The invariant lives in one constant in expr.go, guarded by a unit test that
+// says the path is pointed at one schema. This is the measurement behind that
+// test: without it the guard is a claim about PostgreSQL, and this branch has
+// had to retract four of those.
+func TestTheOrderOfTheSearchPathDecidesTheCatalog(t *testing.T) {
+	t.Parallel()
+
+	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
+	hostile := testsupport.Corpus(t, instance)
+	views := hostile + "_path"
+
+	instance.Exec(t, "CREATE TABLE "+hostile+".pg_class (oid oid)")
+	instance.Exec(t, "CREATE SCHEMA "+views)
+
+	build(t, instance, hostile, views, "alone", "SELECT 1 FROM pg_class")
+
+	if found := outside(t, instance, views); len(found) != 0 {
+		t.Fatalf("a bare pg_class under a path of one schema resolved to %v,"+
+			" so the reader's queries are not safe for the reason they claim", found)
+	}
+
+	instance.Exec(t, fmt.Sprintf(
+		"SET search_path TO %s, pg_catalog; CREATE VIEW %s.after AS SELECT (EXISTS ("+
+			"SELECT 1 FROM pg_class)) AS ok", hostile, views))
+
+	found := outside(t, instance, views)
+	if len(found) != 1 || !strings.Contains(found[0], "table "+hostile+".pg_class") {
+		t.Errorf("naming pg_catalog after the schema resolved %v, want the schema's own"+
+			" pg_class — which is the whole reason the path is pointed at one schema", found)
+	}
+}
+
 // build creates one query as a view, under the search path the read uses.
 //
 // The query goes inside an EXISTS so that its columns need no names of their
