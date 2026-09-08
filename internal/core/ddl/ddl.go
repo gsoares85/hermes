@@ -43,19 +43,33 @@ type Script struct {
 
 // Omission is one thing the script did not write, and why.
 //
-// Usually a whole object. Sometimes a rule on one that was written: a foreign
-// key pointing at a table this version declines cannot be added, while the
-// table it is declared on is perfectly writable — so the table goes in the
-// script and the key goes here.
+// Usually a whole object. Sometimes only a part of one that was written: a
+// foreign key pointing at a table this version declines cannot be added, and a
+// storage parameter of a shape this version will not interpolate cannot go
+// back — while the table both are declared on is perfectly writable, so the
+// table goes in the script and the part goes here.
+//
+// Which of the three it is has to be a field rather than something read off the
+// others. It was inferred from Constraint being empty, and the day a second
+// kind of part arrived that inference silently reclassified it as the whole
+// object: the preview said a table had not been written three lines above
+// writing it, and the round trip — which asks the same question to work out
+// what to compare — dropped that table out of the property altogether.
 type Omission struct {
 	Object catalog.Object
 
-	// Constraint names the rule that was left out, and is empty when what was
-	// left out is the object itself.
+	// Constraint names the rule that was left out, and Parameter the storage
+	// parameter. Both are empty when what was left out is the object itself.
 	Constraint catalog.Name
+	Parameter  string
 
 	Reason string
 }
+
+// Whole reports whether what was left out is the object rather than a part of
+// it, which is the question both the preview and the round trip ask and the
+// reason it is asked in one place.
+func (o Omission) Whole() bool { return !o.Constraint.Valid() && o.Parameter == "" }
 
 // String writes the script out as a file: where it applies, what was left out,
 // and then the statements, each terminated.
@@ -90,20 +104,23 @@ func (s Script) String() string {
 		// hold a line break — PostgreSQL allows it inside quotes — and a
 		// comment broken in half by one would comment out a statement.
 		//
-		// An omission naming a constraint is a rule left out of an object that
-		// was written, and rendering it as though the object itself had been
-		// left out is worse than saying nothing: the file would claim not to
-		// have written a table three lines above writing it.
-		if omission.Constraint.Valid() {
+		// An omission naming a part is something left out of an object that was
+		// written, and rendering it as though the object itself had been left
+		// out is worse than saying nothing: the file would claim not to have
+		// written a table three lines above writing it.
+		switch {
+		case omission.Constraint.Valid():
 			fmt.Fprintf(&text, "-- not written: the constraint %q on the %s %q, because %s\n",
 				omission.Constraint.String(), omission.Object.Kind,
 				omission.Object.Name.String(), omission.Reason)
-
-			continue
+		case omission.Parameter != "":
+			fmt.Fprintf(&text, "-- not written: the storage parameter %q of the %s %q, because %s\n",
+				omission.Parameter, omission.Object.Kind,
+				omission.Object.Name.String(), omission.Reason)
+		default:
+			fmt.Fprintf(&text, "-- not written: the %s %q, because %s\n",
+				omission.Object.Kind, omission.Object.Name.String(), omission.Reason)
 		}
-
-		fmt.Fprintf(&text, "-- not written: the %s %q, because %s\n",
-			omission.Object.Kind, omission.Object.Name.String(), omission.Reason)
 	}
 
 	if len(s.Omitted) > 0 && len(s.Statements) > 0 {
@@ -505,9 +522,9 @@ var storageParameter = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a
 func (w *writer) declineParameters(object catalog.Object, refused []string) {
 	for _, parameter := range refused {
 		w.declined = append(w.declined, Omission{
-			Object: object,
-			Reason: fmt.Sprintf("its storage parameter %q is not a shape this version writes",
-				parameter),
+			Object:    object,
+			Parameter: parameter,
+			Reason:    "it is not a shape this version writes",
 		})
 	}
 }

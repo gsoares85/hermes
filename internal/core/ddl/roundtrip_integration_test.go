@@ -79,16 +79,17 @@ func TestTheScriptDeclinesOnlyWhatThisVersionDoesNotCompare(t *testing.T) {
 
 			script := ddl.Of(readSchema(t, session, testsupport.Corpus(t, instance)))
 
-			var objects, keys []string
+			var objects, keys, parameters []string
 
 			for _, omission := range script.Omitted {
-				if omission.Constraint.Valid() {
+				switch {
+				case omission.Whole():
+					objects = append(objects, omission.Object.Name.String())
+				case omission.Constraint.Valid():
 					keys = append(keys, omission.Constraint.String())
-
-					continue
+				default:
+					parameters = append(parameters, omission.Parameter)
 				}
-
-				objects = append(objects, omission.Object.Name.String())
 			}
 
 			// The sequence is there because the partitioned table owns it: a
@@ -113,6 +114,16 @@ func TestTheScriptDeclinesOnlyWhatThisVersionDoesNotCompare(t *testing.T) {
 			// nothing.
 			if want := []string{"reading_measurement_taken_fkey"}; !reflect.DeepEqual(keys, want) {
 				t.Errorf("the script declined the keys %v, want %v", keys, want)
+			}
+
+			// None, and a server cannot make it otherwise: an unknown storage
+			// parameter and an unknown namespace are both rejected by ALTER TABLE,
+			// so every value pg_class.reloptions can hold here is one the server
+			// validated. The refusal in the writer is for a parameter registered by
+			// an extension through add_string_reloption, which is why it is proved
+			// by a unit test and asserted absent by this one.
+			if len(parameters) != 0 {
+				t.Errorf("the script declined the storage parameters %v, want none", parameters)
 			}
 		})
 	}
@@ -194,15 +205,17 @@ func TestTheScriptAsAFileBuildsTheSchema(t *testing.T) {
 func written(schema catalog.Schema, script ddl.Script) catalog.Schema {
 	declined := map[catalog.Object]bool{}
 	declinedKeys := map[catalog.Name]bool{}
+	declinedParameters := map[string]bool{}
 
 	for _, omission := range script.Omitted {
-		if omission.Constraint.Valid() {
+		switch {
+		case omission.Whole():
+			declined[omission.Object] = true
+		case omission.Constraint.Valid():
 			declinedKeys[omission.Constraint] = true
-
-			continue
+		default:
+			declinedParameters[omission.Parameter] = true
 		}
-
-		declined[omission.Object] = true
 	}
 
 	kept := catalog.Schema{Name: schema.Name}
@@ -212,7 +225,7 @@ func written(schema catalog.Schema, script ddl.Script) catalog.Schema {
 			continue
 		}
 
-		kept.Tables = append(kept.Tables, withoutKeys(table, declinedKeys))
+		kept.Tables = append(kept.Tables, withoutParts(table, declinedKeys, declinedParameters))
 	}
 
 	for _, sequence := range schema.Sequences {
@@ -236,23 +249,29 @@ func written(schema catalog.Schema, script ddl.Script) catalog.Schema {
 	return kept
 }
 
-// withoutKeys is a table without the constraints the script declined.
+// withoutParts is a table without the constraints and the storage parameters
+// the script declined.
 //
 // A foreign key pointing at a table this version does not write is left out of
-// the script, so the copy does not have it and the original does. Dropping it
-// from both is what leaves two models that can be compared at all — and doing it
-// from the script's own list keeps the test honest about which ones those are.
-func withoutKeys(table catalog.Table, declined map[catalog.Name]bool) catalog.Table {
-	if len(declined) == 0 {
-		return table
-	}
-
+// the script, so the copy does not have it and the original does; a storage
+// parameter of a shape the writer refuses to interpolate is the same. Dropping
+// both from both sides is what leaves two models that can be compared at all —
+// and doing it from the script's own list keeps the test honest about which
+// ones those are.
+func withoutParts(table catalog.Table, keys map[catalog.Name]bool, parameters map[string]bool) catalog.Table {
 	kept := table
 	kept.Constraints = nil
+	kept.Options = nil
 
 	for _, constraint := range table.Constraints {
-		if !declined[constraint.Name] {
+		if !keys[constraint.Name] {
 			kept.Constraints = append(kept.Constraints, constraint)
+		}
+	}
+
+	for _, option := range table.Options {
+		if !parameters[option] {
+			kept.Options = append(kept.Options, option)
 		}
 	}
 

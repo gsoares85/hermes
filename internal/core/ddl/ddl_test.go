@@ -963,6 +963,42 @@ func TestAStorageParameterThatIsNotOneIsNotWritten(t *testing.T) {
 	}
 }
 
+// A refused storage parameter is a part of a table, not the table.
+//
+// The distinction is the whole of it. The preview reads the omission to decide
+// between "this rule was left out of an object that was written" and "this
+// object was not written", and the round trip reads the same omission to decide
+// what to take out of both models before comparing them — so an omission that
+// says the wrong thing makes the file contradict itself three lines later and
+// quietly shrinks the property that is supposed to catch that.
+//
+// It was inferred rather than stated, which is how a table with a refused
+// parameter came to be announced as not written and then written, and dropped
+// out of the round trip on the way.
+func TestARefusedStorageParameterDoesNotClaimTheTableWasSkipped(t *testing.T) {
+	t.Parallel()
+
+	script := ddl.Of(catalog.Schema{
+		Name: name("sales"),
+		Tables: []catalog.Table{{
+			Name:    name("orders"),
+			Options: []string{"fillfactor=70", "myext.label=a b"},
+		}},
+	})
+
+	if len(script.Omitted) != 1 {
+		t.Fatalf("the script omitted %v, want the one parameter", script.Omitted)
+	}
+
+	if omission := script.Omitted[0]; omission.Whole() {
+		t.Errorf("the omission %+v says the whole table was left out", omission)
+	}
+
+	mustWrite(t, script, `CREATE TABLE "orders"`)
+	mustWrite(t, script, `-- not written: the storage parameter "myext.label=a b" of the table "orders"`)
+	mustNotWrite(t, script, `-- not written: the table "orders"`)
+}
+
 // The shapes a parameter may take, and the ones it may not.
 func TestWhichStorageParametersAreWritten(t *testing.T) {
 	t.Parallel()
