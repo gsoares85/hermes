@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -59,10 +60,6 @@ type counted struct {
 func (c *counted) Read(_ context.Context, schema catalog.Name) (catalog.Schema, error) {
 	c.reads.Add(1)
 
-	if c.panics {
-		panic("the source came apart")
-	}
-
 	if c.inside.Add(1) > 1 {
 		c.overlapped.Store(true)
 	}
@@ -78,6 +75,13 @@ func (c *counted) Read(_ context.Context, schema catalog.Name) (catalog.Schema, 
 	if c.held != nil {
 		c.once.Do(func() { close(c.arrived) })
 		<-c.held
+	}
+
+	// After the blocking, so that a test can put a caller behind the reading
+	// that comes apart. Before it, the source panicked before anyone could
+	// queue and the panic was only ever seen by the caller that caused it.
+	if c.panics {
+		panic("the source came apart")
 	}
 
 	if c.fail != nil {
@@ -788,6 +792,63 @@ func TestACallerWaitingForItsTurnCanGiveUp(t *testing.T) {
 
 	// And giving up left nothing behind: the schema it never read is read now.
 	mustRead(t, cache, "second")
+}
+
+// A caller waiting on a reading that comes apart is told, and not left there.
+//
+// The other panic test has one caller, which is the half that is easy: the
+// panic goes back up the stack it came from and the cache is asked again
+// afterwards. This is the half the recover was written for. A second caller is
+// not on that stack — it is asleep on a channel the panicking goroutine is the
+// only one that can close — so without the recover it waits for a reading that
+// will never finish and nothing ever tells it, on a connection that is fine.
+func TestACallerWaitingOnAReadingThatComesApartIsTold(t *testing.T) {
+	t.Parallel()
+
+	source := blocking()
+	source.panics = true
+	cache := catalog.NewCache(source)
+
+	var group sync.WaitGroup
+
+	group.Add(2)
+
+	go func() {
+		defer group.Done()
+		defer func() {
+			if recover() == nil {
+				t.Error("the panic was swallowed")
+			}
+		}()
+
+		_, _ = cache.Read(t.Context(), catalog.NewName("sales"))
+	}()
+
+	// The first is inside the source before the second asks, so the second
+	// waits on that reading rather than starting one of its own.
+	<-source.arrived
+
+	waiting := make(chan error, 1)
+
+	go func() {
+		defer group.Done()
+
+		_, err := cache.Read(t.Context(), catalog.NewName("sales"))
+		waiting <- err
+	}()
+
+	awaitQueued(t, cache, 2)
+	close(source.held)
+
+	if err := <-waiting; err == nil || !strings.Contains(err.Error(), "came apart") {
+		t.Errorf("the waiting caller was answered %v, want the panic reported to it", err)
+	}
+
+	group.Wait()
+
+	// And the cache is usable, which is the other thing the recover is for.
+	source.panics = false
+	mustRead(t, cache, "sales")
 }
 
 // A panic inside the source does not take the cache down with it.
