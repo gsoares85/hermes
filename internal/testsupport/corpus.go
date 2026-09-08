@@ -180,10 +180,17 @@ var corpusStatements = []string{
 	//
 	// An operator is hijacked when pg_catalog has no exact one for the types
 	// being compared and resolves by coercion instead: a coercion loses to an
-	// exact match declared anywhere on the path. These three are the pairs the
-	// reader actually compares — an oid against a regclass literal, an oid
-	// against an integer literal, and a "char" against an untyped one — and
-	// pg_catalog has an exact operator for only the last of them.
+	// exact match declared anywhere on the path. Three such pairs are here — an
+	// oid against a regclass literal, an oid against an integer literal, and a
+	// "char" against an untyped one — each measured against a server rather
+	// than reasoned about.
+	//
+	// Three of them, not all of them. An earlier version of this note called
+	// them "the pairs the reader compares", which was a claim about the reader
+	// that nobody had counted, and this branch has had to retract four claims
+	// of that shape. What covers every pair is not a list here but the oracle
+	// in the catalog's own tests, which asks the server which operator each
+	// query resolved to and does not depend on anybody remembering.
 	//
 	// They answer wrongly rather than doing damage, and wrongly in the
 	// direction that is loud: false where the reader expects a match, so a

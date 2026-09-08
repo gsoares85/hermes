@@ -78,9 +78,16 @@ type Cache struct {
 //
 // It exists for the tests, and it is here rather than in them because a test
 // cannot see this from outside: counting callers before they call Read proves
-// they are about to, not that they are queued, and the difference is the whole
-// of what single flight means. Two tests were written against the outside count
-// and both passed with the sharing removed.
+// only that they are about to call it, and a test that started two goroutines
+// and assumed both had arrived was written twice and passed twice with the
+// sharing removed.
+//
+// What it counts is arrival, not queueing. A caller is inside Read from the
+// moment it enters, whether it went on to start a read or to wait behind one,
+// so this closes the window between starting a goroutine and its call landing
+// and does not distinguish the two states after that. Which of them a caller is
+// in is what the test asserts afterwards, by counting the reads the source was
+// asked for.
 //
 // Exported because a test of this package lives outside it, and because a number
 // that says how many callers are waiting is a fair thing for a caller to ask.

@@ -236,8 +236,17 @@ const transactionKind = `SELECT pg_catalog.current_setting('transaction_isolatio
 // Two properties, and the read is built on both. One view of the database, so
 // that eleven statements describe one moment rather than eleven — without it a
 // table dropped between two of them comes back with nothing in it and no error.
-// And no writing, so that a function resolved under a search path pointed at
-// somebody else's schema cannot do anything but read.
+// And read only, so that the read cannot change the database it is describing.
+//
+// Read only is narrower than it sounds and is not what makes the read safe. It
+// refuses writes to ordinary tables and refuses nothing else: a temporary table,
+// an advisory lock, a pg_sleep long enough to be a denial of service, and any
+// amount of reading of data that is none of this reader's business all pass. A
+// function of somebody else's, resolved under a path pointed at their schema,
+// would run under it. What stops that is qualifying every name, checked by
+// TestNothingInAQueryResolvesByName and by the oracle beside it; this is a
+// second wall, and one whose real work is to say out loud that a read does not
+// write.
 //
 // Both are given by BeginSnapshot and neither is given by an ordinary Begin.
 // Reading anyway would answer a model with the same shape and none of the
