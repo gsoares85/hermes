@@ -99,7 +99,8 @@ func TestTheScriptDeclinesOnlyWhatThisVersionDoesNotCompare(t *testing.T) {
 			// sequence because the table that owns it is not written.
 			want := []string{
 				"measurements_id_seq", "patient_note_id_seq",
-				"measurements", "measurements_2026", "patient", "patient_note",
+				"forced_only", "measurements", "measurements_2026",
+				"patient", "patient_note",
 			}
 			if !reflect.DeepEqual(objects, want) {
 				t.Errorf("the script declined the objects %v, want %v", objects, want)

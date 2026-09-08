@@ -454,6 +454,15 @@ var corpusStatements = []string{
 	`CREATE POLICY patient_insert ON {schema}.patient FOR INSERT
 		WITH CHECK (clinician = current_user)`,
 
+	// Row security forced and not enabled, which the server accepts and which
+	// does nothing on its own. It is here because the model carries the fact and
+	// the DDL used to lose it: the copy read back as not forced, so a schema
+	// compared against its own copy reported a change nobody made. And on the day
+	// somebody enables it at the source, a copy that had dropped the forcing is
+	// showing the owner rows the original hid from them.
+	`CREATE TABLE {schema}.forced_only (id integer PRIMARY KEY, note text)`,
+	`ALTER TABLE {schema}.forced_only FORCE ROW LEVEL SECURITY`,
+
 	// A table declined by the propagation rather than by a fact about itself,
 	// and owning a sequence. It is the crossing the corpus was missing: the
 	// decline of a sequence used to be decided before the propagation ran, so a

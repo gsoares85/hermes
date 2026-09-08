@@ -904,3 +904,27 @@ func TestASequenceOfATableDeclinedByPropagationIsDeclinedToo(t *testing.T) {
 		t.Errorf("the script holds %v, want nothing writable", script.Statements)
 	}
 }
+
+// A table that forces row security without enabling it is declined too.
+//
+// The forcing does nothing while the security is off, so writing the table
+// anyway looks harmless. It is not: the model carries the fact, the DDL dropped
+// it, and the copy read back as not forced — a schema compared against its own
+// copy reporting a change nobody made. And on the day somebody enables the
+// security at the source, a copy that had dropped the forcing shows the owner
+// the rows the original hid from them.
+func TestATableThatForcesRowSecurityWithoutEnablingItIsDeclined(t *testing.T) {
+	t.Parallel()
+
+	script := ddl.Of(catalog.Schema{
+		Name: name("sales"),
+		Tables: []catalog.Table{
+			{Name: name("forced_only"), Forced: true},
+			{Name: name("ordinary")},
+		},
+	})
+
+	mustNotWrite(t, script, `CREATE TABLE "forced_only"`)
+	mustWrite(t, script, `CREATE TABLE "ordinary"`)
+	mustWrite(t, script, `-- not written: the table "forced_only", because it restricts which rows`)
+}

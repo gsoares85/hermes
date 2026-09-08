@@ -266,7 +266,7 @@ func (w *writer) findOmissions() {
 		object := catalog.Object{Kind: catalog.ObjectTable, Name: table.Name}
 
 		switch {
-		case table.RowSecurity:
+		case table.RowSecurity || table.Forced:
 			// The gravest of the declines, and the reason it is first. A table
 			// written without its row security is a table whose every hidden
 			// row is readable in the copy, and nothing about the copy says a
