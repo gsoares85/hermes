@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -113,6 +114,47 @@ func TestTheCheckIsQuietAboutTheFormsTheQueriesUse(t *testing.T) {
 		if found := unqualified(sql); len(found) != 0 {
 			t.Errorf("the check reports %v for %q, which resolves nothing by name", found, sql)
 		}
+	}
+}
+
+// The crossing follows a helper that is handed a query and sends it.
+//
+// One indirection is allowed, and it is allowed on the grounds that the
+// helper's callers are read like anything else. They were not: only Query and
+// Exec counted as sending, so a call to the helper was not a send at all, and a
+// query built with a + and handed through it was invisible to both checks —
+// which is the one shape the crossing exists to refuse.
+//
+// Written against sources this test supplies rather than the package's own,
+// because the package holds no such query by construction: the check refuses
+// them, so there is nothing to read.
+func TestTheCrossingFollowsAHelperThatSendsWhatItIsGiven(t *testing.T) {
+	t.Parallel()
+
+	sent := sends(map[string]*ast.File{"fake.go": parseText(t, `package catalog
+
+const listThings = "SELECT 1"
+
+func (r *Reader) setting(ctx context.Context, sql string, args ...any) error {
+	return r.server.Exec(ctx, sql, args...)
+}
+
+func (r *Reader) checked(ctx context.Context) error {
+	return r.setting(ctx, listThings)
+}
+
+func (r *Reader) built(ctx context.Context, name string) error {
+	return r.setting(ctx, "SELECT "+name)
+}
+`)})
+
+	want := []string{
+		"the identifier listThings in fake.go",
+		"a literal or an expression in fake.go",
+	}
+
+	if !slices.Equal(sent, want) {
+		t.Errorf("the crossing answered %q, want %q", sent, want)
 	}
 }
 
@@ -234,17 +276,8 @@ func catalogQueries(t *testing.T) map[string]string {
 
 	queries := map[string]string{}
 
-	sources, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatalf("looking for the sources: %v", err)
-	}
-
-	for _, source := range sources {
-		if strings.HasSuffix(source, "_test.go") {
-			continue
-		}
-
-		for name, value := range constantsIn(t, parse(t, source)) {
+	for source, file := range sources(t) {
+		for name, value := range constantsIn(t, file) {
 			if strings.Contains(value, "SELECT") {
 				queries["the identifier "+name+" in "+source] = value
 			}
@@ -259,35 +292,10 @@ func catalogQueries(t *testing.T) map[string]string {
 }
 
 // queriesSent answers how every call to the server names the SQL it sends.
-//
-// An identifier is answered by name so it can be crossed against the constants;
-// anything else is answered as the shape it is, which never matches and so is
-// reported.
 func queriesSent(t *testing.T) []string {
 	t.Helper()
 
-	var sent []string
-
-	sources, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatalf("looking for the sources: %v", err)
-	}
-
-	for _, source := range sources {
-		if strings.HasSuffix(source, "_test.go") {
-			continue
-		}
-
-		for _, declaration := range parse(t, source).Decls {
-			function, isFunction := declaration.(*ast.FuncDecl)
-			if !isFunction {
-				continue
-			}
-
-			sent = append(sent, queriesIn(function, source)...)
-		}
-	}
-
+	sent := sends(sources(t))
 	if len(sent) == 0 {
 		t.Fatal("no query is sent anywhere, so the crossing checks nothing")
 	}
@@ -295,37 +303,134 @@ func queriesSent(t *testing.T) []string {
 	return sent
 }
 
-// queriesIn answers how one function names the SQL it sends.
+// sends is the crossing over already-parsed sources, so a test can hand it ones
+// it wrote rather than only the package's own.
 //
-// A parameter is answered as though it were checked, and that is the one
-// indirection allowed: a helper that takes a query and sends it has moved the
-// question to its callers, and their constants are read like any other. A local
-// variable is not — that is where a query built with Sprintf would land, and it
-// is the shape this crossing exists to refuse.
-func queriesIn(function *ast.FuncDecl, source string) []string {
-	handed := map[string]bool{}
+// An identifier is answered by name so it can be crossed against the constants;
+// anything else is answered as the shape it is, which never matches and so is
+// reported.
+func sends(files map[string]*ast.File) []string {
+	carriers := carriersIn(files)
+
+	var sent []string
+
+	for _, source := range slices.Sorted(maps.Keys(files)) {
+		for _, declaration := range files[source].Decls {
+			if function, isFunction := declaration.(*ast.FuncDecl); isFunction {
+				sent = append(sent, queriesIn(function, source, carriers)...)
+			}
+		}
+	}
+
+	return sent
+}
+
+// carriersIn answers the functions of the package that take SQL and send it,
+// by the position of the argument they take it in.
+//
+// It exists because the crossing allows exactly one indirection — a helper that
+// is handed a query and hands it to the connection — and the reason that is
+// allowed is that the helper's callers are read like anything else. They were
+// not. Only Query and Exec counted as sending, so a call to the helper was not
+// a send at all, and a query built with a + and passed through it was invisible
+// to both checks. Verified by writing one: neither reported a thing.
+//
+// To a fixed point, because a helper that calls a helper is the same shape and
+// one pass finds only the innermost of them.
+func carriersIn(files map[string]*ast.File) map[string]int {
+	carriers := map[string]int{}
+
+	for grew := true; grew; {
+		grew = false
+
+		for _, file := range files {
+			for _, declaration := range file.Decls {
+				function, isFunction := declaration.(*ast.FuncDecl)
+				if !isFunction {
+					continue
+				}
+
+				carried, carries := carried(function, carriers)
+				if carries && carriers[function.Name.Name] != carried {
+					carriers[function.Name.Name] = carried
+					grew = true
+				}
+			}
+		}
+	}
+
+	return carriers
+}
+
+// carried answers which of a function's parameters it hands to the connection.
+func carried(function *ast.FuncDecl, carriers map[string]int) (int, bool) {
+	positions := map[string]int{}
 
 	if function.Type.Params != nil {
 		for _, parameter := range function.Type.Params.List {
 			for _, name := range parameter.Names {
-				handed[name.Name] = true
+				positions[name.Name] = len(positions)
 			}
 		}
+	}
+
+	carried, carries := 0, false
+
+	ast.Inspect(function, func(node ast.Node) bool {
+		call, isCall := node.(*ast.CallExpr)
+		if !isCall {
+			return true
+		}
+
+		holds, sends := sqlArgument(call, carriers)
+		if !sends {
+			return true
+		}
+
+		if name, isName := call.Args[holds].(*ast.Ident); isName {
+			if position, isParameter := positions[name.Name]; isParameter {
+				carried, carries = position, true
+			}
+		}
+
+		return true
+	})
+
+	return carried, carries
+}
+
+// queriesIn answers how one function names the SQL it sends.
+//
+// The one parameter it forwards is answered as though it were checked, because
+// carriersIn has made every call to this function a send in its own right and
+// the constants of those callers are read like any other. Any other identifier
+// is not — that is where a query built with Sprintf would land, and it is the
+// shape this crossing exists to refuse.
+func queriesIn(function *ast.FuncDecl, source string, carriers map[string]int) []string {
+	forwarded := ""
+
+	if carried, carries := carriers[function.Name.Name]; carries {
+		forwarded = parameterAt(function, carried)
 	}
 
 	var sent []string
 
 	ast.Inspect(function, func(node ast.Node) bool {
 		call, isCall := node.(*ast.CallExpr)
-		if !isCall || len(call.Args) < 2 || !sendsToServer(call.Fun) {
+		if !isCall {
 			return true
 		}
 
-		name, isName := call.Args[1].(*ast.Ident)
+		holds, sends := sqlArgument(call, carriers)
+		if !sends {
+			return true
+		}
+
+		name, isName := call.Args[holds].(*ast.Ident)
 
 		switch {
-		case isName && handed[name.Name]:
-			// Handed in by a caller, whose own constant is read elsewhere.
+		case isName && name.Name == forwarded:
+			// Handed in by a caller, whose own call is a send read elsewhere.
 		case isName:
 			sent = append(sent, "the identifier "+name.Name+" in "+source)
 		default:
@@ -338,12 +443,65 @@ func queriesIn(function *ast.FuncDecl, source string) []string {
 	return sent
 }
 
-// sendsToServer reports whether a call is one of the two that hand SQL to the
-// connection.
-func sendsToServer(fun ast.Expr) bool {
-	selected, isSelected := fun.(*ast.SelectorExpr)
+// parameterAt answers the name of a function's nth parameter.
+func parameterAt(function *ast.FuncDecl, wanted int) string {
+	at := 0
 
-	return isSelected && (selected.Sel.Name == "Query" || selected.Sel.Name == "Exec")
+	for _, parameter := range function.Type.Params.List {
+		for _, name := range parameter.Names {
+			if at == wanted {
+				return name.Name
+			}
+
+			at++
+		}
+	}
+
+	return ""
+}
+
+// sqlArgument answers where a call carries SQL, and whether it carries any.
+//
+// The two methods that hand SQL to a connection take it second, after the
+// context; a carrier takes it wherever it declared it.
+func sqlArgument(call *ast.CallExpr, carriers map[string]int) (int, bool) {
+	switch fun := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		if carried, carries := carriers[fun.Sel.Name]; carries && carried < len(call.Args) {
+			return carried, true
+		}
+
+		switch fun.Sel.Name {
+		case "Query", "Exec":
+			return 1, len(call.Args) >= 2
+		}
+	case *ast.Ident:
+		if carried, carries := carriers[fun.Name]; carries && carried < len(call.Args) {
+			return carried, true
+		}
+	}
+
+	return 0, false
+}
+
+// sources answers the package's own non-test files, parsed, by file name.
+func sources(t *testing.T) map[string]*ast.File {
+	t.Helper()
+
+	found, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("looking for the sources: %v", err)
+	}
+
+	files := map[string]*ast.File{}
+
+	for _, source := range found {
+		if !strings.HasSuffix(source, "_test.go") {
+			files[source] = parse(t, source)
+		}
+	}
+
+	return files
 }
 
 func parse(t *testing.T, source string) *ast.File {
@@ -357,6 +515,19 @@ func parse(t *testing.T, source string) *ast.File {
 	parsed, err := parser.ParseFile(token.NewFileSet(), source, text, 0)
 	if err != nil {
 		t.Fatalf("parsing %s: %v", source, err)
+	}
+
+	return parsed
+}
+
+// parseText parses source a test wrote, so the crossing can be given shapes
+// this package does not contain.
+func parseText(t *testing.T, text string) *ast.File {
+	t.Helper()
+
+	parsed, err := parser.ParseFile(token.NewFileSet(), "fake.go", text, 0)
+	if err != nil {
+		t.Fatalf("parsing the source this test wrote: %v", err)
 	}
 
 	return parsed
