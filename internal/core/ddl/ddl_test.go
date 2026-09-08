@@ -928,3 +928,65 @@ func TestATableThatForcesRowSecurityWithoutEnablingItIsDeclined(t *testing.T) {
 	mustWrite(t, script, `CREATE TABLE "ordinary"`)
 	mustWrite(t, script, `-- not written: the table "forced_only", because it restricts which rows`)
 }
+
+// A storage parameter that is not the shape a storage parameter takes is not
+// written, and is named.
+//
+// The text comes from the catalog and used to go back as it came, under a
+// comment claiming that a storage parameter is a name the server defines and
+// that there is no set of them a person can extend. Both halves are false: the
+// extension API exports add_string_reloption, and pg_class.reloptions is plain
+// text. A stock server rejects an unknown parameter, so nothing was exploitable
+// — but the guard was an assertion about PostgreSQL rather than a check, which
+// is the third time that shape has had to be retracted on this branch.
+func TestAStorageParameterThatIsNotOneIsNotWritten(t *testing.T) {
+	t.Parallel()
+
+	script := ddl.Of(catalog.Schema{
+		Name: name("sales"),
+		Tables: []catalog.Table{{
+			Name:    name("orders"),
+			Options: []string{"fillfactor=70", "myext.label=a) ; DROP SCHEMA public CASCADE; --"},
+		}},
+	})
+
+	mustWrite(t, script, "WITH (fillfactor=70)")
+	mustWrite(t, script, `is not a shape this version writes`)
+
+	// The refused text is named, because the reader has to know which parameter
+	// went — and it is named inside a comment, on one line, where it cannot be
+	// anything but text. What must not happen is its reaching a statement.
+	for _, line := range strings.Split(script.String(), "\n") {
+		if strings.Contains(line, "DROP SCHEMA") && !strings.HasPrefix(line, "--") {
+			t.Errorf("the refused parameter reached a statement: %q", line)
+		}
+	}
+}
+
+// The shapes a parameter may take, and the ones it may not.
+func TestWhichStorageParametersAreWritten(t *testing.T) {
+	t.Parallel()
+
+	for option, written := range map[string]bool{
+		"fillfactor=70":                       true,
+		"autovacuum_vacuum_scale_factor=0.05": true,
+		"security_barrier=true":               true,
+		"myext.label=plain":                   true,
+		"toast_tuple_target=128":              true,
+		"label=":                              true,
+		"label='quoted'":                      false,
+		"label=a;DROP TABLE x":                false,
+		"label=a) --":                         false,
+		"no_equals_sign":                      false,
+		"=leading":                            false,
+	} {
+		script := ddl.Of(catalog.Schema{
+			Name:   name("sales"),
+			Tables: []catalog.Table{{Name: name("t"), Options: []string{option}}},
+		})
+
+		if wrote := strings.Contains(script.String(), "WITH ("+option+")"); wrote != written {
+			t.Errorf("the parameter %q was written=%v, want %v", option, wrote, written)
+		}
+	}
+}

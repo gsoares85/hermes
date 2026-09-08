@@ -2,6 +2,7 @@ package ddl
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -243,7 +244,7 @@ func (w *writer) statements() (creates, follows map[catalog.Object][]string) {
 			continue
 		}
 
-		creates[object] = []string{writeView(view)}
+		creates[object] = []string{w.view(view)}
 	}
 
 	return creates, follows
@@ -454,15 +455,61 @@ func ownership(sequence catalog.Sequence) string {
 // load, and on a view security_barrier, which decides whether a cheap function
 // gets to see the rows the view was meant to hide.
 //
-// The text comes from the catalog as key=value and goes back as it came. It is
-// not quoted: a storage parameter is a name the server defines, not an
-// identifier somebody chose, and there is no set of them a person can extend.
-func storage(options []string) string {
-	if len(options) == 0 {
-		return ""
+// The text comes from the catalog as key=value and the shape is checked before
+// it goes back.
+//
+// The first version of this said a storage parameter is a name the server
+// defines and that there is no set of them a person can extend. That is not
+// true: the extension API exports add_string_reloption, and pg_class.reloptions
+// is plain text. It was the third time on this branch that an unverified
+// invariant was written as though it were a property of PostgreSQL, after "an
+// exact operator always exists" and "the corpus covers the pairs" — both of
+// which had to be retracted.
+//
+// So it is checked instead of asserted. A parameter has to look like a bare name
+// and a value with nothing in it that could end the statement; anything else is
+// refused rather than interpolated, which turns a thing a stock server happens
+// to reject into a thing this writer does not emit.
+func storage(options []string) (string, []string) {
+	var written, refused []string
+
+	for _, option := range options {
+		if storageParameter.MatchString(option) {
+			written = append(written, option)
+
+			continue
+		}
+
+		refused = append(refused, option)
 	}
 
-	return "WITH (" + strings.Join(options, ", ") + ")"
+	if len(written) == 0 {
+		return "", refused
+	}
+
+	return "WITH (" + strings.Join(written, ", ") + ")", refused
+}
+
+// storageParameter is what a storage parameter may look like: an optionally
+// qualified bare name, then a value of the characters a number, a boolean, a
+// unit or a bare word can be made of. Anything outside that cannot end the
+// statement it is written into.
+var storageParameter = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?=[a-zA-Z0-9_.%-]*$`)
+
+// declineParameters records the storage parameters that were not written.
+//
+// Not writing one in silence would be the quiet half of the fault: a copy
+// behaving differently under load than the thing it was copied from, with
+// nothing to say why. Naming it is what ADR-0007 asks of anything not compared,
+// and the preview is where somebody sees it.
+func (w *writer) declineParameters(object catalog.Object, refused []string) {
+	for _, parameter := range refused {
+		w.declined = append(w.declined, Omission{
+			Object: object,
+			Reason: fmt.Sprintf("its storage parameter %q is not a shape this version writes",
+				parameter),
+		})
+	}
 }
 
 // table writes a CREATE TABLE and the indexes that stand on their own.
@@ -472,11 +519,14 @@ func (w *writer) table(table catalog.Table) []string {
 		kind = "CREATE UNLOGGED TABLE "
 	}
 
+	parameters, refused := storage(table.Options)
+	w.declineParameters(catalog.Object{Kind: catalog.ObjectTable, Name: table.Name}, refused)
+
 	statements := []string{clauses(
 		kind+Ident(table.Name),
 		body(w.contents(table)),
 		inherits(table),
-		storage(table.Options),
+		parameters,
 	)}
 
 	for _, index := range table.Indexes {
@@ -694,13 +744,16 @@ func inherits(table catalog.Table) string {
 // The check option is written after the query and not inside it, which is where
 // the server keeps it too — a view that only carried its query would accept
 // writes the original refuses.
-func writeView(view catalog.View) string {
+func (w *writer) view(view catalog.View) string {
 	check := ""
 	if view.CheckOption != "" {
 		check = "WITH " + strings.ToUpper(view.CheckOption) + " CHECK OPTION"
 	}
 
-	return options(clauses("CREATE VIEW "+Ident(view.Name), storage(view.Options), "AS"),
+	parameters, refused := storage(view.Options)
+	w.declineParameters(catalog.Object{Kind: catalog.ObjectView, Name: view.Name}, refused)
+
+	return options(clauses("CREATE VIEW "+Ident(view.Name), parameters, "AS"),
 		view.Definition, check)
 }
 
