@@ -89,6 +89,14 @@ func TestTheCheckCatchesWhatWasConfirmedHijackable(t *testing.T) {
 		"SELECT 1 WHERE a IS DISTINCT FROM b":                 "the comparison IS DISTINCT FROM",
 		"SELECT unnest(i.indkey) FROM pg_catalog.pg_index i":  "the function unnest",
 		"SELECT CASE d.classid WHEN 'c'::regclass THEN 1 END": "the comparison CASE d.classid WHEN",
+
+		// A schema that is not pg_catalog is somebody's code, and in
+		// PostgreSQL 14 and below public is writable by PUBLIC.
+		"SELECT public.thing(1)": "the function public.thing",
+
+		// The same text as an alias list earlier in the query, which used to
+		// forgive it.
+		"SELECT x FROM t AS k(a), LATERAL k(1)": "the function k",
 	} {
 		found := unqualified(sql)
 		if !slices.Contains(found, want) {
@@ -272,19 +280,20 @@ func unqualified(sql string) []string {
 	bare := strings.ReplaceAll(
 		qualified.ReplaceAllString(literal.ReplaceAllString(sql, "''"), " "), "(*)", "()")
 
-	for _, call := range called.FindAllStringSubmatch(bare, -1) {
-		prefix, name := call[1], call[2]
+	for _, call := range called.FindAllStringSubmatchIndex(bare, -1) {
+		prefix, name := bare[call[2]:call[3]], bare[call[4]:call[5]]
 
 		switch {
 		case keywords[strings.ToLower(name)]:
 		case strings.HasSuffix(prefix, "pg_catalog."):
-		case strings.HasSuffix(prefix, "."):
-			// A qualified call to something else, or a column of a row type.
-			// Neither is this test's business, and neither resolves against the
-			// search path the way a bare name does.
 		case aliasList(bare, call[0]):
 		default:
-			found = append(found, "the function "+name)
+			// A qualifier that is not pg_catalog is reported rather than
+			// forgiven. It used to be forgiven on the grounds that a qualified
+			// call is somebody else's business, which is the opposite of true:
+			// in PostgreSQL 14 and below public is writable by PUBLIC, so
+			// public.anything() is a call into code an attacker can replace.
+			found = append(found, "the function "+prefix+name)
 		}
 	}
 
@@ -310,12 +319,12 @@ func unqualified(sql string) []string {
 // aliasList reports whether an identifier followed by a parenthesis is naming
 // the columns of a result rather than calling anything — WITH ORDINALITY AS
 // k(attnum, ord) is the shape, and AS in front of it is what says so.
-func aliasList(sql, call string) bool {
-	at := strings.Index(sql, call)
-	if at < 0 {
-		return false
-	}
-
+//
+// It takes where the call is rather than what it says. Looking the text up
+// answered about the first place it appeared, which is a decision about this
+// call made from somewhere else in the query: a bare call was forgiven whenever
+// the same text also appeared after an AS earlier on.
+func aliasList(sql string, at int) bool {
 	before := strings.Fields(sql[:at])
 
 	return len(before) > 0 && strings.EqualFold(before[len(before)-1], "AS")
