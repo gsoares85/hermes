@@ -208,7 +208,17 @@ const abortedTransaction = "25P02"
 // which made this depend on how Failure chooses to print itself and matched any
 // error that happened to mention them — and the test that covered it built its
 // own error out of that same text, so it checked the fixture and not the
-// contract.
+// contract. It builds a driver.Failure now, which is the thing that arrives
+// here.
+//
+// Covered by that test and by no integration test, which is a gap and is
+// written down rather than papered over. Reaching this against a real server
+// means a catalog query failing after the path has been pointed and before it
+// is put back, and every way of arranging that found so far is a race: a
+// statement timeout catches whichever statement it catches, and dropping what
+// is being read from another session depends on getting between two of eleven
+// statements. A flaky test here would be worse than none, because what it
+// guards is an alarm that must not be silenced by accident.
 func aborted(err error) bool {
 	var failure *driver.Failure
 
