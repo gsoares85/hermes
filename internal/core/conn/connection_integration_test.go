@@ -255,3 +255,84 @@ func contains(haystack []string, needle string) bool {
 
 	return false
 }
+
+// Browsing a second database really opens a second connection to it, and the
+// two answer their own catalogs.
+//
+// The stub cannot show this: it proves a pool was asked for, not that a server
+// let anybody in. What makes it worth a server is the fact the whole design
+// rests on — one connection cannot see another database, so the second pool
+// either exists or the tree cannot show a second database at all.
+func TestASecondDatabaseIsReallyASecondConnection(t *testing.T) {
+	t.Parallel()
+
+	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
+	connection := openReal(t, instance)
+
+	const browsed = "browsed_by_the_tree"
+
+	instance.Exec(t, "DROP DATABASE IF EXISTS "+browsed)
+	instance.Exec(t, "CREATE DATABASE "+browsed)
+
+	other, err := connection.Database(t.Context(), browsed)
+	if err != nil {
+		t.Fatalf("opening %s: %v", browsed, err)
+	}
+
+	if status := other.Check(t.Context()); status.State != conn.StateConnected {
+		t.Fatalf("the second database is %q: %s", status.State, status.Diagnosis.Summary)
+	}
+
+	if got := other.Config().Database; got != browsed {
+		t.Errorf("the second connection is on %q, want %s", got, browsed)
+	}
+
+	// The first is untouched by the second, which is what "another connection"
+	// has to mean for the tree to hold two databases at once.
+	if status := connection.Check(t.Context()); status.State != conn.StateConnected {
+		t.Errorf("the first connection is %q after browsing a second database", status.State)
+	}
+}
+
+// A database that cannot be opened says why, and the ones beside it stay open.
+//
+// A server where one database is closed to you is ordinary, and it is exactly
+// the shape a tree must survive: the node reports the reason the server gave
+// and every sibling carries on.
+//
+// The fixture closes the database with ALLOW_CONNECTIONS rather than by
+// revoking CONNECT, because the role these tests run as owns the server and a
+// superuser is not subject to CONNECT — a REVOKE here leaves the database wide
+// open and the test green for the wrong reason, which is what the first version
+// of this did. What is being exercised is the same either way: a pool that
+// cannot open, and a diagnosis with something to show.
+func TestADatabaseThatCannotBeOpenedSaysWhy(t *testing.T) {
+	t.Parallel()
+
+	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
+	connection := openReal(t, instance)
+
+	const locked = "locked_away_from_the_tree"
+
+	instance.Exec(t, "DROP DATABASE IF EXISTS "+locked)
+	instance.Exec(t, "CREATE DATABASE "+locked)
+	instance.Exec(t, fmt.Sprintf("ALTER DATABASE %s WITH ALLOW_CONNECTIONS false", locked))
+
+	refused, err := connection.Database(t.Context(), locked)
+	if err != nil {
+		t.Fatalf("opening a database reached the server: %v", err)
+	}
+
+	status := refused.Check(t.Context())
+	if status.State != conn.StateDown {
+		t.Fatalf("the database that refuses is %q, want %q", status.State, conn.StateDown)
+	}
+
+	if status.Diagnosis.Summary == "" {
+		t.Error("the refusal carries no summary, so the node has nothing to show")
+	}
+
+	if status := connection.Check(t.Context()); status.State != conn.StateConnected {
+		t.Errorf("the connection beside the refused database is %q", status.State)
+	}
+}

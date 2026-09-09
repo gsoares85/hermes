@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,8 +64,20 @@ type Connection struct {
 	config Config
 	pool   driver.Pool
 
+	// opener is kept because browsing is opening. PostgreSQL does not reach
+	// across databases, so the tree's Databases level is not another query on
+	// this connection: it is another connection, and this is what opens it.
+	opener driver.Opener
+
 	mu     sync.RWMutex
 	status Status
+
+	// browsing guards the databases opened under this connection. It is a lock
+	// of its own rather than the one above because the two protect different
+	// things and are held for different lengths: status is read on every
+	// repaint, and this is taken when a node is expanded.
+	browsing  sync.Mutex
+	databases map[string]*Connection
 }
 
 // Open builds a connection without contacting the server.
@@ -84,8 +97,65 @@ func Open(ctx context.Context, opener driver.Opener, config Config) (*Connection
 	return &Connection{
 		config: config,
 		pool:   pool,
+		opener: opener,
 		status: Status{State: StateIdle, Since: time.Now()},
 	}, nil
+}
+
+// Database answers a connection to another database on the same server.
+//
+// It exists because PostgreSQL will not cross from one database to another on
+// one connection, so the object tree's Databases level is not a query — it is a
+// second connection, with the same host, the same credentials and the same
+// identity, differing in the database alone. The password comes from the
+// configuration this connection already holds, so browsing asks nobody for it
+// again and it travels no further than it already had.
+//
+// One per database, kept until this connection closes. A pool per expansion
+// would be a pool per click, and a tree somebody browses for an hour would hold
+// as many connections to a server as it had nodes opened.
+//
+// It reaches no server, which is the promise Open makes and this keeps. A
+// database the person cannot open is therefore answered here and refused later,
+// at the first thing that actually asks — which is where the reason is, and it
+// saves a round trip on every expansion that was going to work. A caller that
+// wants to know before it draws the node calls Check on what comes back.
+//
+// The lock is held across the open for the same reason: opening contacts
+// nothing, so holding it costs a map write, and the alternative is a second
+// implementation of single flight that would save nothing.
+func (c *Connection) Database(ctx context.Context, name string) (*Connection, error) {
+	wanted := strings.TrimSpace(name)
+	if wanted == "" {
+		return nil, fmt.Errorf("%w: a database with no name", ErrInvalidConfig)
+	}
+
+	if wanted == c.config.EffectiveDatabase() {
+		return c, nil
+	}
+
+	c.browsing.Lock()
+	defer c.browsing.Unlock()
+
+	if open, found := c.databases[wanted]; found {
+		return open, nil
+	}
+
+	config := c.config
+	config.Database = wanted
+
+	open, err := Open(ctx, c.opener, config)
+	if err != nil {
+		return nil, fmt.Errorf("opening the database %s: %w", wanted, err)
+	}
+
+	if c.databases == nil {
+		c.databases = map[string]*Connection{}
+	}
+
+	c.databases[wanted] = open
+
+	return open, nil
 }
 
 // Config returns the connection this was opened for.
@@ -177,6 +247,19 @@ func (c *Connection) Close() {
 	}
 	c.status = Status{State: StateClosed, Since: time.Now()}
 	c.mu.Unlock()
+
+	// The databases opened to browse this server go with it. A pool left behind
+	// is a connection held against somebody's server by an application that
+	// believes it closed everything, and nothing else holds a reference that
+	// would ever close it.
+	c.browsing.Lock()
+	browsed := c.databases
+	c.databases = nil
+	c.browsing.Unlock()
+
+	for _, open := range browsed {
+		open.Close()
+	}
 
 	c.pool.Close()
 }
