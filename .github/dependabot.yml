@@ -56,3 +56,21 @@ updates:
         update-types: ["minor", "patch"]
     commit-message:
       prefix: build
+    ignore:
+      # TypeScript 7 is refused, not postponed, and this is here so that the
+      # refusal costs a read instead of the investigation again.
+      #
+      # The 7.0 package no longer exports the compiler API: its "." entry point
+      # is lib/version.cjs and everything a tool needs moved under ./unstable/*.
+      # typescript-eslint is built on that API, caps its peer range at <6.1.0
+      # and refuses to load at all — `eslint .` does not degrade, it dies with
+      # "typescript-eslint does not support TS 7.0". So adopting 7 means
+      # deleting the typed lint: no-floating-promises, no-misused-promises and
+      # no-unnecessary-condition, in a frontend whose whole job is awaiting a
+      # binding. tsc itself is fine; the linter is what breaks.
+      #
+      # Reopen when typescript-eslint supports it — the tracking issue is
+      # typescript-eslint#10940, and it targets TS >= 7.1, so the version that
+      # exists today is not the one to try. Delete this entry then.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
