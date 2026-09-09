@@ -2,9 +2,14 @@ import { useEffect, useState } from "react";
 
 import { fetchAppInfo, unknownAppInfo, type AppInfo } from "./api/appInfo";
 import { ConnectionForm } from "./features/connection/ConnectionForm";
+import { ObjectTree } from "./features/tree/ObjectTree";
 
 export function App(): React.JSX.Element {
   const [info, setInfo] = useState<AppInfo>(unknownAppInfo);
+  // The connection whose objects are on screen. Empty until one is opened, and
+  // empty again when it closes: the tree belongs to a connection and there is
+  // nothing to draw without one.
+  const [connectionId, setConnectionId] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -33,7 +38,9 @@ export function App(): React.JSX.Element {
       </header>
 
       <main className="app__main">
-        <ConnectionForm />
+        <ConnectionForm onOpened={setConnectionId} />
+
+        {connectionId !== "" && <ObjectTree connectionId={connectionId} />}
       </main>
 
       {/*

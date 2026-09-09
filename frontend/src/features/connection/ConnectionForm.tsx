@@ -31,7 +31,11 @@ import {
  * failure arrives as a summary, a cause and a next step rather than as a
  * message this component would have to interpret.
  */
-export function ConnectionForm(): React.JSX.Element {
+export function ConnectionForm({
+  onOpened,
+}: {
+  onOpened: (id: string) => void;
+}): React.JSX.Element {
   const [form, setForm] = useState<Form>(emptyForm);
   const [uri, setUri] = useState("");
   const [modes, setModes] = useState<string[]>([]);
@@ -196,6 +200,9 @@ export function ConnectionForm(): React.JSX.Element {
     try {
       const opened = await run(openConnection(form));
       setStatus(opened);
+      // The window above holds the identifier, because the object tree is drawn
+      // from it and this form is not the place that owns what is on screen.
+      onOpened(opened.id);
       setDiagnosis(null);
       // The connection is open and the password has been used. Keeping it in
       // the state of a page that is redrawn and inspected buys nothing, and
@@ -274,6 +281,7 @@ export function ConnectionForm(): React.JSX.Element {
     }
     setStatus(null);
     setAvailable([]);
+    onOpened("");
   }
 
   return (

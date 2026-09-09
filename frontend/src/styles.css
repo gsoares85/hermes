@@ -284,3 +284,87 @@ body {
   color: var(--text-muted);
   font-size: 0.85em;
 }
+
+/*
+  The object tree.
+
+  The scroller has a fixed height and the rows inside it are placed by the
+  virtualiser: the spacer is as tall as every row would be, and only the rows on
+  screen exist. That is why the rows are absolute — they are positioned by
+  transform rather than by flow, and a row in flow would put every one of them
+  back into the layout.
+*/
+.tree {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+  max-width: 42rem;
+}
+
+.tree__scroller {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  contain: strict;
+  height: 24rem;
+  overflow: auto;
+}
+
+.tree__spacer {
+  position: relative;
+  width: 100%;
+}
+
+.tree__row {
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 100%;
+}
+
+.tree__line {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  height: 26px;
+  padding-right: 0.5rem;
+}
+
+.tree__toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8em;
+  padding: 0;
+  width: 1rem;
+}
+
+.tree__toggle:disabled {
+  cursor: default;
+}
+
+.tree__kind {
+  color: var(--text-muted);
+  font-size: 0.75em;
+  min-width: 4.5rem;
+  text-transform: uppercase;
+}
+
+.tree__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree__note,
+.tree__working {
+  color: var(--text-muted);
+}
+
+.tree__error,
+.tree__failed {
+  /* The red the connection status already uses for a server that is down. */
+  color: #e03131;
+  font-size: 0.85em;
+}

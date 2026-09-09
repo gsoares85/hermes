@@ -73,6 +73,28 @@ export interface DiagnosisView {
 }
 
 /**
+ * NodeRef says which node of the tree is being opened.
+ * 
+ * It is a place rather than a query: the frontend names where it is and gets
+ * back what is there. Empty is the server, a database alone is that database,
+ * and a database with a schema is that schema. There is no fourth level in this
+ * version, which is what Expandable says on the way out.
+ */
+export interface NodeRef {
+    "database": string;
+    "schema": string;
+}
+
+/**
+ * NodeView is one row of the object tree.
+ */
+export interface NodeView {
+    "kind": string;
+    "name": string;
+    "expandable": boolean;
+}
+
+/**
  * SavedView is a saved connection as the window lists it.
  * 
  * It is a type of its own rather than ConnectionView with an identifier added,
@@ -105,6 +127,27 @@ export interface StatusView {
     "id": string;
     "state": string;
     "diagnosis": DiagnosisView;
+}
+
+/**
+ * TreeFilter narrows a level before it crosses.
+ * 
+ * It is applied by the server, not here. A level of fifty thousand names
+ * carried across so that most of them could be dropped is the waste the whole
+ * listing exists to avoid — and the pattern travels as an argument beside the
+ * query, never inside it.
+ */
+export interface TreeFilter {
+    /**
+     * Pattern matches a name as a case-insensitive substring.
+     */
+    "pattern": string;
+
+    /**
+     * System includes the schemas PostgreSQL keeps for itself. It means
+     * nothing at the other levels.
+     */
+    "system": boolean;
 }
 
 /**
