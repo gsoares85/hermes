@@ -69,6 +69,25 @@ export function ConnectionForm(): React.JSX.Element {
     };
   }, []);
 
+  // Declared above the effect that calls it, and not below where it reads in
+  // call order. A function declaration hoists, so the call works either way,
+  // and that is the problem: written below, nothing shows that the effect
+  // captures the copy from the first render.
+  async function refreshSaved(): Promise<void> {
+    try {
+      const connections = await savedConnections();
+      if (mounted.current) {
+        setSaved(connections);
+      }
+    } catch (err) {
+      // A file someone broke by hand is reported rather than swallowed: an
+      // empty list would look exactly like never having saved anything.
+      if (mounted.current) {
+        setNotice(String(err));
+      }
+    }
+  }
+
   useEffect(() => {
     let active = true;
 
@@ -103,21 +122,6 @@ export function ConnectionForm(): React.JSX.Element {
       active = false;
     };
   }, []);
-
-  async function refreshSaved(): Promise<void> {
-    try {
-      const connections = await savedConnections();
-      if (mounted.current) {
-        setSaved(connections);
-      }
-    } catch (err) {
-      // A file someone broke by hand is reported rather than swallowed: an
-      // empty list would look exactly like never having saved anything.
-      if (mounted.current) {
-        setNotice(String(err));
-      }
-    }
-  }
 
   /**
    * Waits for a long operation, keeping the handle that stops it.
