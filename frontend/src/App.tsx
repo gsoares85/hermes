@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 
 import { fetchAppInfo, unknownAppInfo, type AppInfo } from "./api/appInfo";
+import type { ObjectRef } from "./api/object";
 import { ConnectionForm } from "./features/connection/ConnectionForm";
+import { ObjectPanel } from "./features/tree/ObjectPanel";
 import { ObjectTree } from "./features/tree/ObjectTree";
 
 export function App(): React.JSX.Element {
@@ -10,6 +12,9 @@ export function App(): React.JSX.Element {
   // empty again when it closes: the tree belongs to a connection and there is
   // nothing to draw without one.
   const [connectionId, setConnectionId] = useState("");
+  // The object whose properties are on screen. Null until one is picked, and
+  // null again when the connection goes, because it belonged to that server.
+  const [selected, setSelected] = useState<ObjectRef | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -38,9 +43,20 @@ export function App(): React.JSX.Element {
       </header>
 
       <main className="app__main">
-        <ConnectionForm onOpened={setConnectionId} />
+        <ConnectionForm
+          onOpened={(id): void => {
+            setConnectionId(id);
+            setSelected(null);
+          }}
+        />
 
-        {connectionId !== "" && <ObjectTree connectionId={connectionId} />}
+        {connectionId !== "" && (
+          <div className="app__browser">
+            <ObjectTree connectionId={connectionId} onSelect={setSelected} />
+
+            {selected !== null && <ObjectPanel connectionId={connectionId} object={selected} />}
+          </div>
+        )}
       </main>
 
       {/*

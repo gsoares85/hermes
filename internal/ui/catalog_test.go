@@ -413,3 +413,47 @@ func TestAskingForTheSystemSchemasChangesTheQuestion(t *testing.T) {
 		t.Error("hiding the system schemas and showing them ask the server the same thing")
 	}
 }
+
+// An object asked for without a name is refused before anything is read.
+//
+// Reading a schema is the expensive question in this product, and asking it for
+// a request that cannot be answered would pay it to say no.
+func TestAnObjectWithoutANameIsRefused(t *testing.T) {
+	t.Parallel()
+
+	held := newSessions()
+	tree, id := openTree(t, treeOpener{sessions: held})
+
+	if _, err := tree.Properties(t.Context(), id, ui.ObjectRef{
+		Database: "app", Schema: "sales",
+	}); err == nil {
+		t.Error("an object with no name answered properties")
+	}
+
+	if _, err := tree.DDL(t.Context(), id, ui.ObjectRef{
+		Database: "app", Schema: "sales",
+	}); err == nil {
+		t.Error("an object with no name answered a script")
+	}
+
+	if held.get("app") != nil {
+		t.Error("it reached the server anyway")
+	}
+}
+
+// A connection nobody opened has no objects either.
+func TestAConnectionThatIsNotOpenHasNoObjects(t *testing.T) {
+	t.Parallel()
+
+	tree, _ := openTree(t, treeOpener{sessions: newSessions()})
+
+	object := ui.ObjectRef{Database: "app", Schema: "sales", Name: "orders"}
+
+	if _, err := tree.Properties(t.Context(), "nothing", object); err == nil {
+		t.Error("a connection that is not open answered properties")
+	}
+
+	if _, err := tree.DDL(t.Context(), "nothing", object); err == nil {
+		t.Error("a connection that is not open answered a script")
+	}
+}

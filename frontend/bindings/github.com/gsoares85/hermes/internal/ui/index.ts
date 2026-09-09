@@ -11,11 +11,14 @@ export {
 };
 
 export type {
+    ColumnView,
     ConnectionForm,
     ConnectionView,
     DiagnosisView,
     NodeRef,
     NodeView,
+    ObjectRef,
+    PropertiesView,
     SavedView,
     StatusView,
     TreeFilter,

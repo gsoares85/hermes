@@ -32,3 +32,23 @@ import * as $models from "./models.js";
 export function Children(id: string, node: $models.NodeRef, filter: $models.TreeFilter): $CancellablePromise<$models.NodeView[] | null> {
     return $Call.ByID(3638715734, id, node, filter);
 }
+
+/**
+ * DDL answers the statements that would build the selected object.
+ * 
+ * Written by the same generator that writes a whole schema, over a model
+ * holding that one object. A second generator for this panel would be two
+ * writers of the same statements, and two writers diverge: the day one of them
+ * learns about a storage parameter, the other is showing a definition that is
+ * quietly wrong while looking exactly as authoritative.
+ */
+export function DDL(id: string, object: $models.ObjectRef): $CancellablePromise<string> {
+    return $Call.ByID(3909871263, id, object);
+}
+
+/**
+ * Properties answers what the selected object is.
+ */
+export function Properties(id: string, object: $models.ObjectRef): $CancellablePromise<$models.PropertiesView> {
+    return $Call.ByID(1896415632, id, object);
+}

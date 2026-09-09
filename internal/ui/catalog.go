@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/gsoares85/hermes/internal/core/catalog"
 	"github.com/gsoares85/hermes/internal/core/conn"
@@ -64,6 +65,11 @@ type CatalogService struct {
 	// returns something from the core layer — a binding is generated from every
 	// exported method, and a pool has no business crossing to the frontend.
 	connection func(id string) (*conn.Connection, error)
+
+	// caches are the metadata caches the panel reads through, one per
+	// connection and database. See cacheOn for why the key is both.
+	caching sync.Mutex
+	caches  map[string]*catalog.Cache
 }
 
 // NewCatalogService creates the service bound to the frontend.

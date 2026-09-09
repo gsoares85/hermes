@@ -10,7 +10,18 @@ import {
   type TreeFilter,
 } from "../../api/tree";
 
-import { around, refOf, rootKey, visibleRows, type Level, type Levels, type Row } from "./rows";
+import type { ObjectRef } from "../../api/object";
+
+import {
+  around,
+  objectOf,
+  refOf,
+  rootKey,
+  visibleRows,
+  type Level,
+  type Levels,
+  type Row,
+} from "./rows";
 
 /**
  * How long typing settles before the levels are asked for again.
@@ -34,7 +45,13 @@ const settleDelay = 300;
  * every repaint, and rewriting it into a flat list later is a rewrite — the
  * flat list is the structure, and depth is a number on a row.
  */
-export function ObjectTree({ connectionId }: { connectionId: string }): React.JSX.Element {
+export function ObjectTree({
+  connectionId,
+  onSelect,
+}: {
+  connectionId: string;
+  onSelect: (object: ObjectRef | null) => void;
+}): React.JSX.Element {
   const [levels, setLevels] = useState<Levels>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [text, setText] = useState("");
@@ -98,6 +115,15 @@ export function ObjectTree({ connectionId }: { connectionId: string }): React.JS
       inFlight.clear();
     };
   }, [ask]);
+
+  const pick = useCallback(
+    (row: Row): void => {
+      // Only an object has properties to show. A database or a schema opens
+      // instead, which is what the click on those already does.
+      onSelect(row.node.expandable ? null : objectOf(row.key));
+    },
+    [onSelect],
+  );
 
   const toggle = useCallback(
     (row: Row): void => {
@@ -245,7 +271,7 @@ export function ObjectTree({ connectionId }: { connectionId: string }): React.JS
                 ref={virtualiser.measureElement}
                 data-index={item.index}
               >
-                <TreeRow row={row} text={text} onToggle={toggle} />
+                <TreeRow row={row} text={text} onToggle={toggle} onPick={pick} />
               </div>
             );
           })}
@@ -260,16 +286,34 @@ function TreeRow({
   row,
   text,
   onToggle,
+  onPick,
 }: {
   row: Row;
   text: string;
   onToggle: (row: Row) => void;
+  onPick: (row: Row) => void;
 }): React.JSX.Element {
   const asking = row.level?.state === "asking";
   const failed = row.level?.state === "failed";
 
   return (
-    <div className="tree__line" style={{ paddingLeft: `${String(row.depth * 16 + 8)}px` }}>
+    <div
+      className="tree__line"
+      style={{ paddingLeft: `${String(row.depth * 16 + 8)}px` }}
+      onClick={(): void => {
+        onPick(row);
+      }}
+      // A row is not a control, but clicking one selects it, and a person who
+      // cannot use a mouse has to be able to do the same thing.
+      onKeyDown={(event): void => {
+        if (event.key === "Enter") {
+          onPick(row);
+        }
+      }}
+      role="treeitem"
+      tabIndex={0}
+      aria-selected={false}
+    >
       <button
         type="button"
         className="tree__toggle"

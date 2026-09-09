@@ -1,3 +1,4 @@
+import type { ObjectRef } from "../../api/object";
 import type { NodeRef, NodeView } from "../../api/tree";
 
 /**
@@ -138,4 +139,21 @@ export function visibleRows(levels: Levels, expanded: ReadonlySet<string>, text:
   };
 
   return walk(rootKey, 0);
+}
+
+/**
+ * The object a key names, for the panel that shows one.
+ *
+ * Three parts: the database, the schema and the object. A key with fewer names
+ * a level rather than an object, and the panel has nothing to show for one.
+ */
+export function objectOf(key: string): ObjectRef | null {
+  const parts = key.split(separator);
+  const [database, schema, name] = parts;
+
+  if (parts.length !== 3 || database === undefined || schema === undefined || name === undefined) {
+    return null;
+  }
+
+  return { database, schema, name };
 }
