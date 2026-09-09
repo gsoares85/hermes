@@ -202,6 +202,50 @@ func (r *Reader) built(ctx context.Context, name string) error {
 	}
 }
 
+// A helper that takes its query first is a carrier like any other.
+//
+// The register of carriers is keyed by name and holds the position the query
+// arrives at, so a helper that takes it first holds the zero a missing key
+// reads as. Registering it only when the position differed from what the map
+// answered therefore never registered it at all: the helper was not a carrier,
+// its callers were not sends, and a query built with a + and handed through it
+// was read by neither check — the exact hole the crossing was written to close,
+// left open for one shape of helper.
+//
+// No helper in the package takes SQL first today, which is why nothing was
+// escaping. It is also why this is written: the crossing is what stands between
+// a new query and nobody reading it, and a gate that depends on nobody writing
+// an ordinary signature is not a gate.
+func TestTheCrossingFollowsAHelperThatTakesItsQueryFirst(t *testing.T) {
+	t.Parallel()
+
+	sent := sends(map[string]*ast.File{"fake.go": parseText(t, `package catalog
+
+const listThings = "SELECT 1"
+
+func (r *Reader) sending(sql string, ctx context.Context) error {
+	return r.server.Exec(ctx, sql)
+}
+
+func (r *Reader) checked(ctx context.Context) error {
+	return r.sending(listThings, ctx)
+}
+
+func (r *Reader) built(ctx context.Context, name string) error {
+	return r.sending("SELECT "+name, ctx)
+}
+`)})
+
+	want := []sending{
+		{name: "listThings", source: "fake.go"},
+		{source: "fake.go"},
+	}
+
+	if !slices.Equal(sent, want) {
+		t.Errorf("the crossing answered %v, want %v", sent, want)
+	}
+}
+
 // A query sent from a function literal held in a var is a send.
 //
 // The crossing descended into declared functions only, on no stated grounds,
@@ -501,7 +545,13 @@ func carriersIn(files map[string]*ast.File) map[string]int {
 				}
 
 				carried, carries := carried(function, carriers)
-				if carries && carriers[function.Name.Name] != carried {
+
+				// Whether it is registered, not what it is registered as: a
+				// helper that takes its query first carries the zero a missing
+				// key answers, and comparing the values alone left that one
+				// shape of helper out of the register for good.
+				registered, known := carriers[function.Name.Name]
+				if carries && (!known || registered != carried) {
 					carriers[function.Name.Name] = carried
 					grew = true
 				}
