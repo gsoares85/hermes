@@ -121,6 +121,15 @@ export function ObjectTree({ connectionId }: { connectionId: string }): React.JS
   const root = levels[rootKey];
 
   const scroller = useRef<HTMLDivElement>(null);
+  // The rule warns that the React Compiler will skip memoizing a component that
+  // calls this, because the virtualiser returns functions that cannot be
+  // memoized safely. Three things make it moot here and one of them is decisive:
+  // this build does not run the compiler at all — the React plugin is
+  // configured without it — the skip would be confined to this component, and
+  // nothing the virtualiser returns is handed to a memoized hook. Left as a
+  // warning it prints a block on every lint run, which is how people learn to
+  // stop reading lint output.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualiser = useVirtualizer({
     count: rows.length,
     getScrollElement: (): HTMLDivElement | null => scroller.current,
