@@ -3,6 +3,7 @@ package catalog_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -268,4 +269,51 @@ func slicesContain(values []any, want any) bool {
 	}
 
 	return false
+}
+
+// Listing costs the same one question whatever the schema holds.
+//
+// The count above says a listing is one query for a schema of three objects.
+// This says the number does not move with the size, which is the property the
+// object tree actually depends on: the failure it guards is not a slow query
+// but a listing that started asking per object, and that one passes every
+// clock. Five thousand round trips against a container on the same machine
+// cost a fraction of a second.
+//
+// The number itself is asserted too, not only that it is stable. Equality alone
+// lets a second fixed query in without anybody noticing, and a second query is
+// a second round trip on every expansion of every node.
+func TestListingCostsTheSameNumberOfQueriesWhateverTheSchemaHolds(t *testing.T) {
+	t.Parallel()
+
+	queriesFor := func(objects int) int {
+		rows := make([][]any, 0, objects)
+		for i := range objects {
+			rows = append(rows, []any{fmt.Sprintf("t_%05d", i), "r"})
+		}
+
+		server := &asked{rows: rows}
+
+		listed, err := catalog.NewLister(server).Objects(t.Context(), catalog.NewName("sales"), "")
+		if err != nil {
+			t.Fatalf("listing %d objects: %v", objects, err)
+		}
+
+		if len(listed) != objects {
+			t.Fatalf("the listing answered %d of %d objects", len(listed), objects)
+		}
+
+		return len(server.sql)
+	}
+
+	one, thousands := queriesFor(1), queriesFor(5000)
+	if one != thousands {
+		t.Errorf("a schema of one object costs %d queries and one of five thousand costs %d;"+
+			" the listing is asking per object", one, thousands)
+	}
+
+	const asks = 1
+	if one != asks {
+		t.Errorf("listing a schema costs %d queries, want %d", one, asks)
+	}
 }

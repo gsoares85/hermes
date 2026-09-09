@@ -31,20 +31,33 @@ func LargeSchema(tb testing.TB, instance *Instance, tables int) string {
 
 	instance.Exec(tb, "CREATE SCHEMA "+schema)
 
-	// One statement for the whole schema rather than one per table. Each Exec
-	// is a process started inside the container, so a thousand of them would
-	// spend minutes on the fixture of a test whose budget is five seconds — and
-	// the server builds the schema far faster than anything can ask it to a
-	// thousand times.
-	statement := strings.NewReplacer(
-		schemaToken, schema,
-		"{tables}", strconv.Itoa(tables),
-	).Replace(largeSchema)
+	// In blocks rather than one statement for the whole schema, and rather than
+	// one statement per table. Each Exec is a process started inside the
+	// container, so a table at a time would spend minutes building the fixture
+	// of a test whose budget is measured in seconds; but a DO block is one
+	// transaction, and every table it creates holds locks on the table, its
+	// index and its sequence until that transaction ends. Five thousand of them
+	// exhausted max_locks_per_transaction on the oldest server in the matrix and
+	// took the fixture down with an error about the server's configuration —
+	// which is a fact about building the fixture and not about anything the
+	// product does.
+	for from := 1; from <= tables; from += blockOfTables {
+		to := min(from+blockOfTables-1, tables)
 
-	instance.Exec(tb, statement)
+		instance.Exec(tb, strings.NewReplacer(
+			schemaToken, schema,
+			"{from}", strconv.Itoa(from),
+			"{to}", strconv.Itoa(to),
+		).Replace(largeSchema))
+	}
 
 	return schema
 }
+
+// blockOfTables is how many tables are created per transaction. It is well
+// under the lock budget of a default server and well over the point where the
+// cost of starting another process inside the container matters.
+const blockOfTables = 500
 
 // largeSchema builds the tables in the server rather than in Go.
 //
@@ -54,10 +67,9 @@ func LargeSchema(tb testing.TB, instance *Instance, tables int) string {
 // package made and not one anybody typed.
 const largeSchema = `DO $$
 DECLARE
-	previous text;
 	present text;
 BEGIN
-	FOR i IN 1..{tables} LOOP
+	FOR i IN {from}..{to} LOOP
 		present := 't_' || i;
 
 		EXECUTE format('CREATE TABLE {schema}.%I (
@@ -69,17 +81,19 @@ BEGIN
 
 		EXECUTE format('CREATE INDEX %I ON {schema}.%I (label)', present || '_label', present);
 
-		IF previous IS NOT NULL THEN
+		-- The table before this one, worked out from the number rather than
+		-- carried in a variable: the blocks are separate statements, so a
+		-- variable would forget the chain at every boundary and the fixture
+		-- would lose one foreign key per block.
+		IF i > 1 THEN
 			EXECUTE format('ALTER TABLE {schema}.%I ADD CONSTRAINT %I
 				FOREIGN KEY (parent) REFERENCES {schema}.%I (id)',
-				present, present || '_parent_fkey', previous);
+				present, present || '_parent_fkey', 't_' || (i - 1));
 		END IF;
 
 		IF i % 10 = 0 THEN
 			EXECUTE format('CREATE VIEW {schema}.%I AS SELECT id, label FROM {schema}.%I',
 				'v_' || i, present);
 		END IF;
-
-		previous := present;
 	END LOOP;
 END $$`

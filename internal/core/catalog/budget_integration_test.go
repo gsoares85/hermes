@@ -97,3 +97,89 @@ func assertLarge(b *testing.B, read catalog.Schema, tables int) {
 			len(read.Dependencies), tables-1)
 	}
 }
+
+// The performance budget of the object tree: a schema of five thousand tables
+// expanded in under a second.
+//
+// It is the number TESTING.md promises and the one the task states, and it is
+// what separates this tree from the tools that fold on a big database. A second
+// is the limit because expanding a node is a direct answer to a click: past
+// that it stops reading as opening and starts reading as waiting.
+//
+// This is the time, and only the time. What guards the shape is
+// TestListingCostsTheSameNumberOfQueriesWhateverTheSchemaHolds, which counts
+// the questions: five thousand round trips against a container on the same
+// machine cost a fraction of a second and would pass here without anybody
+// learning that the listing had started asking per object.
+//
+// Five times the tables of the reading budget and a fifth of its time, because
+// they are different questions. Reading assembles every column, index and
+// constraint of a thousand tables; this carries a name and a kind for five
+// thousand. A listing that ever approached the reading budget would be one that
+// had quietly become a reading.
+//
+// Measured on the oldest server in the matrix, which is the slowest and the one
+// a user is least likely to be able to upgrade.
+func BenchmarkListingFiveThousandTables(b *testing.B) {
+	const (
+		tables = 5000
+		budget = time.Second
+	)
+
+	instance := testsupport.SharedPostgres(b, testsupport.SupportedVersions[0])
+	session := testsupport.Session(b, instance)
+	schema := catalog.NewName(testsupport.LargeSchema(b, instance, tables))
+
+	lister := catalog.NewLister(session)
+
+	var (
+		listed []catalog.Object
+		reads  int
+		err    error
+	)
+
+	for b.Loop() {
+		if listed, err = lister.Objects(b.Context(), schema, ""); err != nil {
+			b.Fatalf("listing %s: %v", schema, err)
+		}
+
+		reads++
+	}
+
+	// Checked after the timing rather than trusted, for the reason the reading
+	// budget states: a budget met by listing an empty schema is the easiest way
+	// for this to go green while meaning nothing.
+	assertListedLarge(b, listed, tables)
+
+	if each := b.Elapsed() / time.Duration(reads); each > budget {
+		b.Fatalf("listing %d tables took %s, over the budget of %s", tables, each, budget)
+	}
+}
+
+// assertListedLarge fails unless the listing really answered the large schema.
+//
+// The large fixture is tables, one identity sequence each, and a view over
+// every tenth — so the listing answers all three kinds, and the count is the
+// sum rather than the tables alone.
+func assertListedLarge(b *testing.B, listed []catalog.Object, tables int) {
+	b.Helper()
+
+	kinds := map[catalog.ObjectKind]int{}
+	for _, object := range listed {
+		kinds[object.Kind]++
+	}
+
+	for _, count := range []struct {
+		what catalog.ObjectKind
+		want int
+	}{
+		{catalog.ObjectTable, tables},
+		{catalog.ObjectSequence, tables},
+		{catalog.ObjectView, tables / 10},
+	} {
+		if kinds[count.what] != count.want {
+			b.Fatalf("the listing answered %d of kind %s, want %d",
+				kinds[count.what], count.what, count.want)
+		}
+	}
+}
