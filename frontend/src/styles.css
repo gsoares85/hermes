@@ -368,3 +368,28 @@ body {
   color: #e03131;
   font-size: 0.85em;
 }
+
+.tree__filter {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.tree__filter input[type="search"] {
+  flex: 1;
+}
+
+.tree__system {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  font-size: 0.85em;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.tree__name mark {
+  background: #ffd43b55;
+  border-radius: 2px;
+  color: inherit;
+}

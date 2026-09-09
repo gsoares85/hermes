@@ -377,3 +377,39 @@ func TestAConnectionThatIsNotOpenHasNoTree(t *testing.T) {
 		t.Error("a connection that is not open answered a tree")
 	}
 }
+
+// Asking for the system schemas changes what is asked of the server.
+//
+// The checkbox that shows them is worth nothing if the level comes back the
+// same either way, and nothing between the window and the query would say so:
+// the filter crosses as a value, is turned into a catalog filter, and only
+// there does it decide which query runs. This is the one place that can see
+// both ends.
+func TestAskingForTheSystemSchemasChangesTheQuestion(t *testing.T) {
+	t.Parallel()
+
+	asked := func(filter ui.TreeFilter) string {
+		held := newSessions()
+		tree, id := openTree(t, treeOpener{sessions: held, rows: [][]any{{"public"}}})
+
+		if _, err := tree.Children(t.Context(), id, ui.NodeRef{Database: "app"}, filter); err != nil {
+			t.Fatalf("expanding the database app: %v", err)
+		}
+
+		session := held.get("app")
+		if session == nil {
+			t.Fatal("no session was checked out against the database app")
+		}
+
+		sql, _ := session.asked()
+		if len(sql) != 1 {
+			t.Fatalf("the level asked %d questions, want 1", len(sql))
+		}
+
+		return sql[0]
+	}
+
+	if hidden, shown := asked(ui.TreeFilter{}), asked(ui.TreeFilter{System: true}); hidden == shown {
+		t.Error("hiding the system schemas and showing them ask the server the same thing")
+	}
+}

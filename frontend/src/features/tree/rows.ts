@@ -65,36 +65,77 @@ export function refOf(key: string): NodeRef {
 }
 
 /**
- * The rows a person can see, in order, given what has been loaded and what is
- * open.
+ * Whether a name matches what somebody typed.
+ *
+ * A plain case-insensitive substring, which is what the server matches too. Two
+ * definitions of matching would disagree the first time one of them learned
+ * something the other had not, and the one people would notice is the tree
+ * hiding a row the server had just sent.
+ */
+export function matches(name: string, text: string): boolean {
+  return text === "" || name.toLowerCase().includes(text.toLowerCase());
+}
+
+/**
+ * A name split around what matched, so the middle can be marked.
+ *
+ * Three parts and not a list of them: the match is a single substring, and a
+ * caller that has to loop is a caller that could put the marks in the wrong
+ * place.
+ */
+export function around(
+  name: string,
+  text: string,
+): { before: string; match: string; after: string } {
+  const at = text === "" ? -1 : name.toLowerCase().indexOf(text.toLowerCase());
+  if (at < 0) {
+    return { before: name, match: "", after: "" };
+  }
+
+  return {
+    before: name.slice(0, at),
+    match: name.slice(at, at + text.length),
+    after: name.slice(at + text.length),
+  };
+}
+
+/**
+ * The rows a person can see, in order, given what has been loaded, what is open
+ * and what has been typed.
  *
  * Walks depth first from the root and descends only into open nodes whose
  * children have arrived. A node that is open and still being asked for
  * contributes itself and nothing else, which is what lets the row show that it
  * is working without the tree jumping about when the answer lands.
+ *
+ * The typed text hides rows here, over what is already loaded, because it has
+ * to answer every keystroke and a round trip per key is not a filter but a
+ * wait. A node stays when it matches or when something under it does — hiding a
+ * schema whose table somebody just found would hide the answer along with the
+ * noise.
  */
-export function visibleRows(levels: Levels, expanded: ReadonlySet<string>): Row[] {
-  const rows: Row[] = [];
-
-  const walk = (parentKey: string, depth: number): void => {
+export function visibleRows(levels: Levels, expanded: ReadonlySet<string>, text: string): Row[] {
+  const walk = (parentKey: string, depth: number): Row[] => {
     const level = levels[parentKey];
     if (level === undefined) {
-      return;
+      return [];
     }
+
+    const rows: Row[] = [];
 
     for (const node of level.nodes) {
       const key = keyOf(parentKey, node.name);
       const open = expanded.has(key);
+      const below = open ? walk(key, depth + 1) : [];
 
-      rows.push({ key, node, depth, expanded: open, level: levels[key] });
-
-      if (open) {
-        walk(key, depth + 1);
+      if (matches(node.name, text) || below.length > 0) {
+        rows.push({ key, node, depth, expanded: open, level: levels[key] });
+        rows.push(...below);
       }
     }
+
+    return rows;
   };
 
-  walk(rootKey, 0);
-
-  return rows;
+  return walk(rootKey, 0);
 }
