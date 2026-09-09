@@ -100,7 +100,7 @@ about.
 
 ### From source
 
-Requires [Go 1.25+](https://go.dev/dl/), [Node.js 22.12+](https://nodejs.org/), and the
+Requires [Go 1.25+](https://go.dev/dl/), [Node.js 22.13+](https://nodejs.org/), and the
 [Wails v3](https://wails.io/) CLI.
 
 ```sh
