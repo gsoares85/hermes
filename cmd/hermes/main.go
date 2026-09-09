@@ -94,6 +94,16 @@ func run() error {
 		return err
 	}
 
+	// Built here rather than inline among the services because the object tree
+	// is drawn over the connections this holds: one of them is the root of
+	// every node the tree opens.
+	connectionService := ui.NewConnectionService(ui.Dependencies{
+		Opener:      postgres.New(),
+		Store:       filestore.NewConnections(connections),
+		Vault:       opened,
+		VaultStatus: vaultStatus(opened),
+	})
+
 	app := application.New(application.Options{
 		Name:        "Hermes",
 		Description: "A native, open source database manager for PostgreSQL",
@@ -104,12 +114,8 @@ func run() error {
 			// Every implementation is chosen here and nowhere else: the UI and
 			// the core both program against the contracts, and this is the
 			// outermost place that can name a driver, a keychain or a file.
-			application.NewService(ui.NewConnectionService(ui.Dependencies{
-				Opener:      postgres.New(),
-				Store:       filestore.NewConnections(connections),
-				Vault:       opened,
-				VaultStatus: vaultStatus(opened),
-			})),
+			application.NewService(connectionService),
+			application.NewService(ui.NewCatalogService(connectionService)),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(frontend.Dist()),
