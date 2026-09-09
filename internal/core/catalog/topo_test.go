@@ -271,6 +271,15 @@ func TestAnEdgeToAnObjectTheSchemaDoesNotHoldIsNotAnOrder(t *testing.T) {
 //
 // It checks the order as well as the survival. A walk that came back with the
 // wrong answer quickly would be no better than one that crashed.
+//
+// The chain runs against the order the objects are visited in, and that is the
+// whole of what makes it deep. Objects are walked as the schema holds them, so
+// t_000000 is reached first: with each table needing the one before it, that
+// first object closes with nothing under it and every object after it finds
+// what it needs already closed — a walk two steps deep, fifty thousand times,
+// which a recursive implementation passes without noticing. Each table needs
+// the one after it instead, so reaching the first opens all fifty thousand
+// before any of them closes. Which is also why the order comes out reversed.
 func TestALongChainIsOrderedWithoutRecursion(t *testing.T) {
 	t.Parallel()
 
@@ -283,8 +292,8 @@ func TestALongChainIsOrderedWithoutRecursion(t *testing.T) {
 
 		if i > 0 {
 			schema.Dependencies = append(schema.Dependencies, catalog.Dependency{
-				Object: table(named(i)),
-				Needs:  table(named(i - 1)),
+				Object: table(named(i - 1)),
+				Needs:  table(named(i)),
 				Reason: catalog.ReasonForeignKey,
 			})
 		}
@@ -301,10 +310,11 @@ func TestALongChainIsOrderedWithoutRecursion(t *testing.T) {
 	}
 
 	// Every object after the one it needs, which for a chain means the order is
-	// the chain itself.
+	// the chain itself, and this chain is held the other way round.
 	for i := range length {
-		if got := order.Objects[i].Name.String(); got != named(i) {
-			t.Fatalf("position %d holds %s, want %s", i, got, named(i))
+		want := named(length - 1 - i)
+		if got := order.Objects[i].Name.String(); got != want {
+			t.Fatalf("position %d holds %s, want %s", i, got, want)
 		}
 	}
 }
