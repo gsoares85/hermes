@@ -51,11 +51,11 @@ type TLSInstance struct {
 // an entrypoint that fixes their ownership. Copying them by hand leaves them
 // owned by root, and the server refuses to start on a certificate it cannot
 // read.
-func StartPostgresTLS(t *testing.T, version string) *TLSInstance {
-	t.Helper()
+func StartPostgresTLS(tb testing.TB, version string) *TLSInstance {
+	tb.Helper()
 
-	certs := NewCertificates(t)
-	ctx := t.Context()
+	certs := NewCertificates(tb)
+	ctx := tb.Context()
 	image := "postgres:" + version + "-alpine"
 
 	container, err := postgres.Run(ctx, image,
@@ -63,7 +63,7 @@ func StartPostgresTLS(t *testing.T, version string) *TLSInstance {
 		postgres.WithUsername(User),
 		postgres.WithPassword(Password),
 		postgres.WithSSLCert(certs.CACert, certs.serverCert, certs.serverKey),
-		postgres.WithConfigFile(writeSSLConfig(t)),
+		postgres.WithConfigFile(writeSSLConfig(tb)),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
 				WithOccurrence(2).
@@ -71,18 +71,18 @@ func StartPostgresTLS(t *testing.T, version string) *TLSInstance {
 		),
 	)
 	if err != nil {
-		t.Fatalf("starting %s with TLS: %v", image, err)
+		tb.Fatalf("starting %s with TLS: %v", image, err)
 	}
 
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
-			t.Errorf("terminating %s: %v", image, terminateErr)
+			tb.Errorf("terminating %s: %v", image, terminateErr)
 		}
 	})
 
 	dsn, err := container.ConnectionString(ctx, "sslmode=require")
 	if err != nil {
-		t.Fatalf("reading the connection string of %s: %v", image, err)
+		tb.Fatalf("reading the connection string of %s: %v", image, err)
 	}
 
 	return &TLSInstance{
@@ -91,12 +91,12 @@ func StartPostgresTLS(t *testing.T, version string) *TLSInstance {
 	}
 }
 
-func writeSSLConfig(t *testing.T) string {
-	t.Helper()
+func writeSSLConfig(tb testing.TB) string {
+	tb.Helper()
 
-	path := filepath.Join(t.TempDir(), "postgresql.conf")
+	path := filepath.Join(tb.TempDir(), "postgresql.conf")
 	if err := os.WriteFile(path, []byte(sslConfig), 0o600); err != nil {
-		t.Fatalf("writing the server configuration: %v", err)
+		tb.Fatalf("writing the server configuration: %v", err)
 	}
 
 	return path

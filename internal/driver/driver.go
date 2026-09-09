@@ -104,6 +104,49 @@ type Row interface {
 	Scan(dest ...any) error
 }
 
+// Rows is a result set being read one row at a time.
+//
+// It is this package's own interface for the same reason Row is: a pgx result
+// set must never cross the seam. It is also the first thing on this contract
+// that is a resource rather than a value — reading it holds the connection the
+// session checked out — so the rules below are part of the contract, not advice.
+//
+// The shape is the one Go has settled on for cursors, and it has a trap the
+// godoc has to name: Next answers false both for "no more rows" and for
+// "something broke", and only Err tells the two apart. A loop that reads Next
+// and never reads Err reports an empty result for a connection that died, which
+// is the difference between "this schema has no tables" and "the server is
+// gone".
+//
+//	rows := session.Query(ctx, sql)
+//	defer rows.Close()
+//
+//	for rows.Next() {
+//	    if err := rows.Scan(&name); err != nil { return err }
+//	}
+//
+//	return rows.Err()
+type Rows interface {
+	// Next advances to the next row and reports whether there is one. It
+	// answers false at the end of the result and on failure alike; Err says
+	// which happened.
+	Next() bool
+
+	// Scan reads the current row into destinations the caller owns. It is only
+	// valid after Next has answered true.
+	Scan(dest ...any) error
+
+	// Err answers the failure that ended the read, and nil when the result was
+	// read to the end. It has to be checked after the loop.
+	Err() error
+
+	// Close releases the result and the connection it was holding. The caller
+	// closes, always, and a deferred Close is the only shape that survives an
+	// early return. It is safe to call more than once, and safe to call after
+	// the result has been read to the end.
+	Close()
+}
+
 // Session is one connection checked out of a pool, with a transaction scope of
 // its own.
 //
@@ -111,6 +154,14 @@ type Row interface {
 // the connection otherwise. Closing a session with a transaction still open
 // rolls it back: leaving the decision to the server's disconnect handling would
 // make the outcome depend on timing.
+//
+// One caller at a time. Its own fields are guarded, so concurrent use is not a
+// data race — but a connection carries one conversation, and two callers sharing
+// a session get the consequences of that rather than an error. Two statements
+// overlap on one wire; two transactions cannot both be the one in force; and
+// anything that borrows session state for the length of its work, as reading a
+// schema borrows the search path, has it changed underneath. A caller that needs
+// two things at once needs two sessions.
 type Session interface {
 	// Exec runs a statement that returns no rows.
 	Exec(ctx context.Context, sql string, args ...any) error
@@ -119,10 +170,43 @@ type Session interface {
 	// any, surfaces from Scan.
 	QueryRow(ctx context.Context, sql string, args ...any) Row
 
+	// Query runs a query that returns many rows.
+	//
+	// There is no error to return, for the same reason QueryRow has none: a
+	// failure to send the query is a failure of the result, and giving it two
+	// ways out would let a caller check one and miss the other. It surfaces
+	// from Err, which the contract on Rows requires reading anyway.
+	//
+	// The result holds this session's connection until it is closed. Reading a
+	// second result before closing the first is not two queries in parallel —
+	// there is one connection — so a caller that needs both at once needs two
+	// sessions.
+	Query(ctx context.Context, sql string, args ...any) Rows
+
 	// Begin opens a transaction. It fails with ErrTransactionActive if one is
 	// already open: nested transactions are a different feature, and silently
 	// reusing the outer one would make a rollback undo more than it should.
 	Begin(ctx context.Context) error
+
+	// BeginSnapshot opens a transaction in which every statement sees one
+	// state of the database, and which cannot write.
+	//
+	// It exists because reading a schema is many statements and the answer has
+	// to be of one moment. Without it, a table listed by the first statement
+	// and dropped before the second comes back with no columns at all — a
+	// model nobody can tell from a table that lost them, which is the false
+	// positive the whole comparison is built to avoid. Ordinary Begin is not
+	// enough: it gives each statement its own view, which is the right default
+	// for work that writes and the wrong one for work that has to agree with
+	// itself.
+	//
+	// Read-only is part of it rather than a precaution. Introspection writes
+	// nothing, saying so lets the server refuse anything that tries, and a
+	// reader that has declared it cannot become a writer by mistake.
+	//
+	// It fails with ErrTransactionActive like Begin, which is how a caller that
+	// already has a transaction is told its own is the one in force.
+	BeginSnapshot(ctx context.Context) error
 
 	// Commit and Rollback close the transaction, and fail with
 	// ErrNoTransaction when there is none.

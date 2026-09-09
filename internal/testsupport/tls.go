@@ -43,35 +43,35 @@ const (
 
 // NewCertificates builds a throwaway CA and issues a server and a client
 // certificate from it.
-func NewCertificates(t *testing.T) Certificates {
-	t.Helper()
+func NewCertificates(tb testing.TB) Certificates {
+	tb.Helper()
 
-	dir := t.TempDir()
-	caCert, caKey := issueCA(t)
+	dir := tb.TempDir()
+	caCert, caKey := issueCA(tb)
 
 	certs := Certificates{
-		CACert:     write(t, dir, "ca.crt", encodeCert(caCert.Raw)),
+		CACert:     write(tb, dir, "ca.crt", encodeCert(caCert.Raw)),
 		serverCert: "",
 		serverKey:  "",
 	}
 
-	serverDER, serverKey := issue(t, caCert, caKey, "server", []string{CertifiedHost})
-	certs.serverCert = write(t, dir, "server.crt", encodeCert(serverDER))
-	certs.serverKey = write(t, dir, "server.key", encodeKey(serverKey))
+	serverDER, serverKey := issue(tb, caCert, caKey, "server", []string{CertifiedHost})
+	certs.serverCert = write(tb, dir, "server.crt", encodeCert(serverDER))
+	certs.serverKey = write(tb, dir, "server.key", encodeKey(serverKey))
 
-	clientDER, clientKey := issue(t, caCert, caKey, User, nil)
-	certs.ClientCert = write(t, dir, "client.crt", encodeCert(clientDER))
-	certs.ClientKey = write(t, dir, "client.key", encodeKey(clientKey))
+	clientDER, clientKey := issue(tb, caCert, caKey, User, nil)
+	certs.ClientCert = write(tb, dir, "client.crt", encodeCert(clientDER))
+	certs.ClientKey = write(tb, dir, "client.key", encodeKey(clientKey))
 
 	return certs
 }
 
-func issueCA(t *testing.T) (*x509.Certificate, *rsa.PrivateKey) {
-	t.Helper()
+func issueCA(tb testing.TB) (*x509.Certificate, *rsa.PrivateKey) {
+	tb.Helper()
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("generating the CA key: %v", err)
+		tb.Fatalf("generating the CA key: %v", err)
 	}
 
 	template := &x509.Certificate{
@@ -86,12 +86,12 @@ func issueCA(t *testing.T) (*x509.Certificate, *rsa.PrivateKey) {
 
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
-		t.Fatalf("issuing the CA certificate: %v", err)
+		tb.Fatalf("issuing the CA certificate: %v", err)
 	}
 
 	parsed, err := x509.ParseCertificate(der)
 	if err != nil {
-		t.Fatalf("parsing the CA certificate: %v", err)
+		tb.Fatalf("parsing the CA certificate: %v", err)
 	}
 
 	return parsed, key
@@ -100,12 +100,12 @@ func issueCA(t *testing.T) (*x509.Certificate, *rsa.PrivateKey) {
 // issue signs a leaf certificate. The common name doubles as the PostgreSQL
 // role for the client certificate, which is what makes certificate
 // authentication line up with the user in the connection.
-func issue(t *testing.T, ca *x509.Certificate, caKey *rsa.PrivateKey, commonName string, hosts []string) ([]byte, *rsa.PrivateKey) {
-	t.Helper()
+func issue(tb testing.TB, ca *x509.Certificate, caKey *rsa.PrivateKey, commonName string, hosts []string) ([]byte, *rsa.PrivateKey) {
+	tb.Helper()
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("generating the key for %s: %v", commonName, err)
+		tb.Fatalf("generating the key for %s: %v", commonName, err)
 	}
 
 	template := &x509.Certificate{
@@ -126,7 +126,7 @@ func issue(t *testing.T, ca *x509.Certificate, caKey *rsa.PrivateKey, commonName
 
 	der, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
 	if err != nil {
-		t.Fatalf("issuing the certificate for %s: %v", commonName, err)
+		tb.Fatalf("issuing the certificate for %s: %v", commonName, err)
 	}
 
 	return der, key
@@ -143,12 +143,12 @@ func encodeKey(key *rsa.PrivateKey) []byte {
 // write puts a file where the client can read it. The mode is 0600 because
 // libpq refuses a client key with any group or world access, exactly as the
 // server does with its own.
-func write(t *testing.T, dir, name string, content []byte) string {
-	t.Helper()
+func write(tb testing.TB, dir, name string, content []byte) string {
+	tb.Helper()
 
 	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
-		t.Fatalf("writing %s: %v", name, err)
+		tb.Fatalf("writing %s: %v", name, err)
 	}
 
 	return path
