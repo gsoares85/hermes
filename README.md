@@ -355,13 +355,13 @@ Once a connection is open, its object tree appears: **server → databases → s
 views and sequences.**
 
 ```
-[-] analytics                 database
-  [-] reporting               schema
-        daily_revenue         table
-        customer_lifetime     view
-        invoice_id_seq        sequence
-  [+] public                  schema
-[+] postgres                  database
+▾ analytics                   database
+  ▾ reporting                 schema
+      · daily_revenue         table
+      · customer_lifetime     view
+      · invoice_id_seq        sequence
+  ▸ public                    schema
+▸ postgres                    database
 ```
 
 **Every level is read when you open it, and never before.** Expanding a schema asks one
@@ -447,6 +447,12 @@ wherever the search path points — which is what lets the same text be read her
 somewhere else. It is the script the product would run, not a rendering of it made for reading:
 a test requires this tab to be **identical** to what the generator produces for the same
 object, rather than similar, so the screen can never quietly become a second DDL generator.
+
+The tab shows one object, so a statement can name something that is not in it: a sequence owned
+by a table is written with the `OWNED BY` that says so, and the table it names is not part of
+the script. That is the object described truthfully rather than a script you can paste
+anywhere — the whole-schema script the structure sync produces is a different thing, and it
+carries everything it refers to.
 
 ### Failures that tell you what to do
 
