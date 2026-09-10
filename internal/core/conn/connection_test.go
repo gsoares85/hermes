@@ -61,6 +61,13 @@ func (s *stubPool) Close() {
 	s.closed = true
 }
 
+func (s *stubPool) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.closed
+}
+
 func (s *stubPool) fail(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

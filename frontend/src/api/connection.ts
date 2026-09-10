@@ -52,6 +52,11 @@ export const emptyForm: ConnectionForm = {
   rootCert: "",
   cert: "",
   key: "",
+  // Neither is chosen for anybody. Most connections are not worth labelling,
+  // and read-only is a promise someone makes deliberately rather than one they
+  // find already made on their behalf.
+  environment: "",
+  readOnly: false,
 };
 
 /**
@@ -113,6 +118,17 @@ export async function databases(id: string): Promise<string[]> {
  */
 export async function sslModes(): Promise<string[]> {
   return (await ConnectionService.SSLModes()) ?? [];
+}
+
+/**
+ * The environment labels the Go side offers.
+ *
+ * Retyping the three of them here would put the value that marks a production
+ * server in two places, and the copy that drifts is the one that quietly stops
+ * marking it.
+ */
+export async function environments(): Promise<string[]> {
+  return (await ConnectionService.Environments()) ?? [];
 }
 
 /**
@@ -178,6 +194,8 @@ export function formFromSaved(saved: SavedView): ConnectionForm {
     rootCert: saved.rootCert,
     cert: saved.cert,
     key: saved.key,
+    environment: saved.environment,
+    readOnly: saved.readOnly,
     password: "",
   };
 }
@@ -199,6 +217,9 @@ export function applyParsed(form: ConnectionForm, parsed: ConnectionView): Conne
     rootCert: parsed.rootCert,
     cert: parsed.cert,
     key: parsed.key,
+    // Left alone rather than cleared. A connection URI has no way of saying
+    // that a server is production or that it must not be written to, so
+    // pasting one over a form must not answer either question with "no".
     // Never filled from the URI: the Go side does not send it back.
     password: "",
   };

@@ -2,6 +2,22 @@ package conn
 
 import "github.com/gsoares85/hermes/internal/driver"
 
+// readOnlyParam is the session parameter that makes the server refuse writes.
+//
+// It is where the read-only mark actually lives. The alternative — deciding in
+// the client whether a statement writes — needs a SQL parser and is wrong about
+// the first function that writes inside itself, so the mark is stated once on
+// connect and enforced by the only thing that can enforce it.
+//
+// What it is not is a lock. It is the default of each transaction, and it is
+// USERSET: a session that runs SET default_transaction_read_only = off, or
+// opens a transaction with BEGIN READ WRITE, is writing again. Nothing in this
+// product sends arbitrary SQL today, so today the mark holds — but whatever
+// gains that ability has to refuse those two statements on a marked connection
+// itself. This is where the guarantee stops, and it stops here rather than
+// somewhere nobody wrote down.
+const readOnlyParam = "default_transaction_read_only"
+
 // Target reduces a saved connection to what the engine needs to reach a server.
 //
 // The conversion is where the product layer stops and the driver seam begins:
@@ -24,6 +40,18 @@ func (c Config) Target() driver.Target {
 
 	target.Params = copyOf(c.Params)
 	target.Options = copyOf(c.Options)
+
+	// After the copy, so the mark never reaches the configuration the caller
+	// keeps, and over the top of whatever was there, so it cannot be turned off
+	// by a session parameter further down the same form. An unmarked connection
+	// says nothing at all rather than saying off: a server, a database or a role
+	// deliberately left read-only is not something Hermes should override.
+	if c.ReadOnly {
+		if target.Params == nil {
+			target.Params = make(map[string]string, 1)
+		}
+		target.Params[readOnlyParam] = "on"
+	}
 
 	return target
 }

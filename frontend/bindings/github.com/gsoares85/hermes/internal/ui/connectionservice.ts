@@ -53,9 +53,27 @@ export function Databases(id: string): $CancellablePromise<string[] | null> {
  * Both, because a secret left behind is an item in the keychain of the person
  * that nothing will ever look for again: invisible litter that outlives the
  * application.
+ * 
+ * The password goes first, which is the mirror of the order Save uses and the
+ * same argument. Either order can fail halfway, so the question is which
+ * half-done state a person can get out of. Removing the connection first fails
+ * into a secret nothing points at any more — unreachable from here, with no
+ * second Forget to press, because the connection it belonged to is gone.
+ * Removing the password first fails into a connection that is still listed and
+ * still has its Forget button: the operation can simply be repeated, and the
+ * second attempt finds no secret and says so is normal.
  */
 export function Delete(id: string): $CancellablePromise<void> {
     return $Call.ByID(1974899595, id);
+}
+
+/**
+ * Environments lists the labels the form offers, for the same reason SSLModes
+ * does: a window that retypes the list drifts from what the file will accept,
+ * and the value that drifts is the one marking a production server.
+ */
+export function Environments(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(3513473366);
 }
 
 /**

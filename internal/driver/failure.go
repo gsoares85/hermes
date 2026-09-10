@@ -41,6 +41,12 @@ const (
 	FailureNotAuthorized FailureClass = "not-authorized"
 	// FailureMissingDatabase is a database name the server does not know.
 	FailureMissingDatabase FailureClass = "missing-database"
+	// FailureReadOnly is a statement the server refused because the
+	// transaction cannot write. It is not a failure of the connection — the
+	// connection is working — and it is the outcome a connection marked
+	// read-only is supposed to produce, which is why it is classified rather
+	// than left to the layer above to recognise from a message.
+	FailureReadOnly FailureClass = "read-only"
 )
 
 // Failure is a classified connection failure.

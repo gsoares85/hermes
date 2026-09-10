@@ -68,6 +68,9 @@ func TestNothingReturnedCarriesACredential(t *testing.T) {
 		ui.StatusView{},
 		ui.SavedView{},
 		ui.VaultView{},
+		ui.NodeView{},
+		ui.PropertiesView{},
+		ui.ColumnView{},
 	}
 
 	// The walk itself is checked before it is trusted. A password is planted in
@@ -380,4 +383,66 @@ func TestTheFormNeverPrintsThePassword(t *testing.T) {
 			t.Errorf("the form printed by %s is %q, want it to still name the host", how, text)
 		}
 	}
+}
+
+// The environments belong in one place for the same reason the modes do: a
+// window that retypes the list drifts from what the file will accept, and the
+// value that drifts is the one marking a production server.
+func TestEnvironmentsComeFromTheCore(t *testing.T) {
+	t.Parallel()
+
+	got := service(stubOpener{}).Environments()
+	if len(got) != 3 {
+		t.Fatalf("Environments() has %d entries, want three: %v", len(got), got)
+	}
+	for _, want := range []string{"dev", "staging", "prod"} {
+		if !slicesContains(got, want) {
+			t.Errorf("Environments() = %v, missing %q", got, want)
+		}
+	}
+}
+
+// The label is a fact about the connection, and every tab drawing that
+// connection is handed it.
+//
+// "Unmistakable in any tab" is not something a tab can arrange for itself: it
+// can only draw what it was given, so the state it draws has to carry the
+// environment and the read-only mark and not just a state word.
+func TestTheStateOfAConnectionCarriesItsLabel(t *testing.T) {
+	t.Parallel()
+
+	service := service(stubOpener{})
+
+	marked := form()
+	marked.Name = "billing — production"
+	marked.Environment = "prod"
+	marked.ReadOnly = true
+
+	opened, err := service.Open(t.Context(), marked)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+
+	for _, status := range []ui.StatusView{opened, statusOf(t, service, opened.ID)} {
+		if status.Name != "billing — production" {
+			t.Errorf("Name = %q, want the name of the connection", status.Name)
+		}
+		if status.Environment != "prod" {
+			t.Errorf("Environment = %q, want prod", status.Environment)
+		}
+		if !status.ReadOnly {
+			t.Error("the state of a connection marked read-only does not say so")
+		}
+	}
+}
+
+func statusOf(t *testing.T, service *ui.ConnectionService, id string) ui.StatusView {
+	t.Helper()
+
+	status, err := service.Status(id)
+	if err != nil {
+		t.Fatalf("Status returned error: %v", err)
+	}
+
+	return status
 }

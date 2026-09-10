@@ -28,6 +28,7 @@ func TestEveryClassIsDiagnosed(t *testing.T) {
 		driver.FailureAuth,
 		driver.FailureNotAuthorized,
 		driver.FailureMissingDatabase,
+		driver.FailureReadOnly,
 	}
 
 	seen := make(map[string]driver.FailureClass, len(classes))
@@ -184,5 +185,28 @@ func TestDiagnosisReadsAsOneLine(t *testing.T) {
 	got := conn.Diagnose(failure(driver.FailureRefused), sample())
 	if !strings.Contains(got.String(), got.Summary) {
 		t.Errorf("String() = %q, want it to carry the summary", got.String())
+	}
+}
+
+// A refused write is two different problems wearing one SQLSTATE, and they are
+// fixed in different places. Hermes marked the connection read-only, so the fix
+// is a checkbox in this window; or it did not, and the server itself refuses
+// writes — a standby, or a role left with the parameter on — and nothing in
+// this window will change that.
+func TestAMarkedConnectionIsToldItMarkedItself(t *testing.T) {
+	t.Parallel()
+
+	marked := sample()
+	marked.ReadOnly = true
+
+	mine := conn.Diagnose(failure(driver.FailureReadOnly), marked)
+	theirs := conn.Diagnose(failure(driver.FailureReadOnly), sample())
+
+	if !strings.Contains(strings.ToLower(mine.Summary+mine.Cause+mine.NextStep), "read-only") {
+		t.Errorf("the diagnosis of a marked connection never says read-only: %+v", mine)
+	}
+	if mine.NextStep == theirs.NextStep {
+		t.Errorf("a connection Hermes marked and a server that refuses writes suggest the same next step: %q",
+			mine.NextStep)
 	}
 }

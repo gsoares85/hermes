@@ -29,14 +29,15 @@ The bet is focus: do for **one** engine what the competition tries to do for twe
 ## Project status
 
 **Pre-alpha — under active development.** You can connect to a server, save the connection with
-its password in your system keychain, and see the databases you have access to; there is no
-object tree, no SQL editor and no backup yet. This README grows with every feature shipped:
-anything documented below with an example works. Anything in the *Roadmap* section does not.
+its password in your system keychain, mark it as production or as read-only, and browse what is
+on it — databases, schemas, tables, views and sequences, with an object's properties and its
+DDL beside the tree. There is no SQL editor and no backup yet. This README grows with every
+feature shipped: anything documented below with an example works. Anything in the *Roadmap*
+section does not.
 
-Work is under way on reading a schema out of `pg_catalog` and writing it back as DDL, which is
-what the structure diff will be built on. It has no command and no screen yet, so there is
-nothing here to show you: it is named under *Roadmap*, not under *Features*, and it moves when
-there is something you can run.
+Reading a schema out of `pg_catalog` and writing it back as DDL is what the *DDL* tab shows,
+and it is what the structure diff will be built on. The diff itself does not exist yet: it is
+named under *Roadmap*, not under *Features*, and it moves when there is something you can run.
 
 ## Principles
 
@@ -178,7 +179,7 @@ The settings go in a file you can read, version and copy between machines:
 | Windows | `%AppData%\hermes\connections.toml` |
 
 ```toml
-version = 1
+version = 2
 
 [[connection]]
 id = 'b7f0c6e1-1a4d-4f2f-9d6a-2a1c8e0b3f55'
@@ -189,6 +190,8 @@ database = 'analytics'
 user = 'reporting'
 sslmode = 'verify-full'
 sslrootcert = '/etc/ssl/ca.pem'
+environment = 'prod'
+read_only = true
 
 [connection.params]
 application_name = 'hermes'
@@ -214,9 +217,11 @@ The `id` is what the password is filed under in your keychain, which is why it i
 identifier rather than the name: renaming a connection, or moving it to a different host, keeps
 the password attached to it.
 
-`version = 1` is read before anything else. A file from a newer Hermes is refused with a clear
-message instead of being half-understood — the file says how you reach production, and guessing
-at it is not an option.
+`version` is read before anything else. This Hermes reads versions 1 and 2 and always writes 2,
+so a file saved by an older build keeps working — it comes back with no environment and not
+read-only, which is what a file with no field for either one means. A file from a newer Hermes
+is refused with a message about the version rather than half-understood, because the file says
+how you reach production and guessing at it is not an option.
 
 ### Where your password is kept
 
@@ -278,6 +283,176 @@ sudo dnf install gnome-keyring
 # KDE
 sudo apt install kwalletmanager
 ```
+
+### Marking production, and connecting read-only
+
+A connection can say what it is — `dev`, `staging` or `prod` — and whether it is allowed to
+write at all:
+
+```
+Environment  [ prod                                                    v ]
+Read-only    [x] The server is asked to refuse every statement that writes.
+```
+
+The form shows the value that goes in the file; the window draws it in words. A connection
+labelled `prod` marks the **window** and not a panel: a band across the top and a **PRODUCTION**
+badge in a coloured header, both of which stay put while you move between the tree, an object's
+properties and its DDL. The mark belongs to the connection rather than to the screen showing
+it, so it looks the same everywhere the connection appears — in the list of saved connections,
+beside the state of the open one, and above everything you do with it.
+
+**Read-only is enforced by the server, not by the window.** A connection marked read-only is
+opened with `default_transaction_read_only` on, so PostgreSQL is what refuses. Nothing Hermes
+forgets to check can go around it, and nothing has to guess whether a statement writes by
+reading the SQL — which is what any client-side version of this would have to do, and it would
+be wrong about the first function that writes inside itself. Browsing to another database on
+the same server opens a second connection, and it carries the mark with it. A connection that
+sets the same parameter in its own session settings is refused rather than silently
+overridden, because a protection you can argue with from two places is not one.
+
+What the setting is not is a lock. It is the default of each transaction, so a session that
+ran `SET default_transaction_read_only = off` would be writing again. Nothing in Hermes sends
+arbitrary SQL today; the SQL editor, when it arrives, will have to refuse those statements on a
+marked connection itself.
+
+There is no SQL editor yet, so nothing in Hermes sends a write today: the gate is what that
+editor will run into, and it is already proved against real servers rather than promised. The
+test opens a marked connection, sends an `INSERT`, and requires both the server's refusal and
+the explanation you would read:
+
+```
+This connection is marked read-only, so the server refused a statement that writes.
+
+Hermes opens a connection marked read-only with default_transaction_read_only on, and the
+server refuses every insert, update, delete and DDL inside it. The refusal comes from the
+server, so nothing in this window went around it.
+
+Clear the read-only mark on this connection and open it again, if writing to
+db.example.com:5432 is what you meant to do.
+```
+
+A write refused on a connection you did **not** mark is a different message, because it is
+fixed somewhere else: a standby accepts no writes, and a server, a database or a role can be
+left with `default_transaction_read_only` on.
+
+Both settings belong to the connection, so they go in the file with it and are still there
+after a restart:
+
+```toml
+[[connection]]
+id = 'b7f0c6e1-1a4d-4f2f-9d6a-2a1c8e0b3f55'
+name = 'production — read only'
+host = 'db.example.com'
+port = 5432
+user = 'reporting'
+environment = 'prod'    # dev | staging | prod, omitted for a connection nobody labelled
+read_only = true
+```
+
+### Browsing objects
+
+Once a connection is open, its object tree appears: **server → databases → schemas → tables,
+views and sequences.**
+
+```
+▾ analytics                   database
+  ▾ reporting                 schema
+      · daily_revenue         table
+      · customer_lifetime     view
+      · invoice_id_seq        sequence
+  ▸ public                    schema
+▸ postgres                    database
+```
+
+**Every level is read when you open it, and never before.** Expanding a schema asks one
+question about that schema — names and kinds, no columns, no indexes, no constraints — so a
+schema with five thousand tables opens as quickly as one with ten, and nothing is loaded on the
+chance that you might look at it. The budget is a test rather than an intention: expanding a
+schema of 5,000 tables in under a second, checked in CI against the oldest server in the
+matrix, alongside a test that counts the queries a level costs so that "fast on my laptop"
+cannot hide a query per object.
+
+Expanding never freezes the window. The node that is loading says so, the rest of the tree
+stays live, and collapsing a node stops the request instead of waiting for an answer nobody
+wants. The rows are virtualised from the first line, so the window draws what fits on screen
+whatever the level holds.
+
+Type in **Filter by name** and the tree narrows as you type, highlighting the part that matched:
+
+```
+Filter by name  [ invoice        ]   [ ] System schemas
+```
+
+What is already on screen is filtered on every keystroke, so the box keeps up with typing. Once
+the typing settles, the same text goes back to the server, so the objects of the schemas you
+open next are narrowed there too — a level of fifty thousand names is never carried across just
+to be thrown away here. Schemas themselves are never narrowed by it: hiding the schema that
+holds the table you are looking for would hide the answer along with the noise.
+
+PostgreSQL's own schemas — `pg_catalog`, `information_schema`, `pg_toast` — are hidden until you
+tick **System schemas**, which re-reads that level rather than revealing something already
+fetched. Names are shown exactly as they were created, accents, spaces, capitals and all: a
+schema called `Relatórios Mensais` reads as `Relatórios Mensais`, without the quotes SQL would
+need. A database your role may not open reports why on its own node, and the databases beside it
+stay usable.
+
+Selecting an object opens a panel beside the tree, with two tabs:
+
+**Properties** — the columns with their types and what is declared on them, the constraints and
+the indexes, and the facts that are not a column: that a table is unlogged, that it is a
+partition, that row security is on.
+
+```
+daily_revenue
+analytics · reporting
+
+[ Properties ]  [ DDL ]
+
+Column         Type      Null       Default
+id             bigint    not null
+captured_on    date      not null
+gross_cents    bigint    not null   0
+note           text
+
+Constraints
+  daily_revenue_pkey: PRIMARY KEY (id)
+  daily_revenue_positive: CHECK ((gross_cents >= 0))
+
+Indexes
+  CREATE INDEX daily_revenue_captured_on_idx ON reporting.daily_revenue USING btree (captured_on)
+```
+
+**DDL** — the statements that would build the object, written by the same generator the
+structure sync is built on:
+
+```sql
+-- Every name below is written bare, so this builds into whatever
+-- schema the search path names. Change the line below to build elsewhere.
+SET search_path TO "reporting";
+
+CREATE TABLE "daily_revenue" (
+    "id" bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+    "captured_on" date NOT NULL,
+    "gross_cents" bigint DEFAULT 0 NOT NULL,
+    "note" text,
+    CONSTRAINT "daily_revenue_pkey" PRIMARY KEY (id),
+    CONSTRAINT "daily_revenue_positive" CHECK ((gross_cents >= 0))
+);
+
+CREATE INDEX daily_revenue_captured_on_idx ON reporting.daily_revenue USING btree (captured_on);
+```
+
+Every identifier is quoted and no statement names a schema, so the script builds the object
+wherever the search path points — which is what lets the same text be read here and applied
+somewhere else. It is the script the product would run, not a rendering of it made for reading:
+a test requires this tab to be **identical** to what the generator produces for the same
+object, rather than similar, so the screen can never quietly become a second DDL generator.
+
+The tab shows one object, so a statement can name something that is not in it: a sequence owned
+by a table is written with the `OWNED BY` that says so, and the table it names is not part of
+the script. That is the object described truthfully rather than a script you can paste
+anywhere — the whole-schema script the structure sync produces is a different thing, and it
+carries everything it refers to.
 
 ### Failures that tell you what to do
 
@@ -348,8 +523,8 @@ passwords in the keychain of the system
 
 What is being built, in order:
 
-**Foundation** — lazy object-tree navigation and a cancelable job engine with progress
-reporting. Connecting, actionable failure diagnostics and keychain-backed passwords are done.
+**Foundation** — a cancelable job engine with progress reporting. Connecting, actionable failure
+diagnostics, keychain-backed passwords and lazy object-tree navigation are done.
 
 **Query and data** — SQL editor with cancelable execution, a virtualized grid using keyset
 pagination (no `OFFSET` on large tables), and inline editing that shows the `UPDATE` before it

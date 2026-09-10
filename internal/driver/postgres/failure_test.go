@@ -41,6 +41,12 @@ func TestClassifyReadsTheSQLState(t *testing.T) {
 		"backend terminated":    {"57P01", "terminating connection due to administrator command", driver.FailureDropped},
 		"another backend crash": {"57P02", "terminating connection because of crash of another server process", driver.FailureDropped},
 
+		// A statement refused because the transaction cannot write. It is the
+		// code a connection Hermes marked read-only comes back with, and the
+		// layer above turns it into the sentence saying where the mark is
+		// cleared — which it can only do if the code is read here first.
+		"read-only transaction": {"25006", "cannot execute INSERT in a read-only transaction", driver.FailureReadOnly},
+
 		"anything else": {"53300", "too many connections", driver.FailureUnknown},
 	}
 

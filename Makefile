@@ -57,8 +57,20 @@ lint-frontend: ## Run the frontend linters
 	cd frontend && npm run lint
 
 .PHONY: test
-test: ## Run the unit tests
+test: test-go test-frontend ## Run the unit tests
+
+.PHONY: test-go
+test-go: ## Run the Go unit tests
 	$(GO) test $(RACE) ./...
+
+# The window is drawn from logic that is deliberately pure — which rows are
+# visible, what a level may do next — and none of it was covered until a runner
+# existed to cover it. It runs in node rather than in a browser environment for
+# the same reason: a test that had to mount a component to ask whether a
+# collapsed node may be asked for again would be testing React.
+.PHONY: test-frontend
+test-frontend: ## Run the frontend unit tests
+	cd frontend && npm test
 
 # How many test binaries may talk to Docker at once. Unset means one per core,
 # which is what go test does on its own, and is the normal way to run this.

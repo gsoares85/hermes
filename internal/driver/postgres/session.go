@@ -92,8 +92,13 @@ func (s *session) Exec(ctx context.Context, sql string, args ...any) error {
 		return driver.ErrSessionClosed
 	}
 
+	// Classified like Query beside it, and for a reason Exec has of its own:
+	// the statements that write are the ones that come back refused, and the
+	// layer above can only explain a refusal it can recognise. Unwrapped, a
+	// read-only server is a driver message nobody above here can tell from any
+	// other server error.
 	if _, err := run.Exec(ctx, sql, args...); err != nil {
-		return fmt.Errorf("running the statement: %w", err)
+		return classify(fmt.Errorf("running the statement: %w", err))
 	}
 
 	return nil

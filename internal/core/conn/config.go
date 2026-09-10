@@ -65,6 +65,50 @@ func SSLModes() []SSLMode {
 	return []SSLMode{SSLDisable, SSLAllow, SSLPrefer, SSLRequire, SSLVerifyCA, SSLVerifyFull}
 }
 
+// Environment is what a connection is: somebody's laptop, a staging server, or
+// the one that must not be broken.
+//
+// It is a closed set rather than free text because the window draws it, and a
+// mark drawn from free text is a mark that quietly disappears the day somebody
+// types "prd". What it never is, is a rule: naming a connection production
+// changes nothing about how it connects — it changes what the person looking at
+// the window can see about where they are.
+type Environment string
+
+// The three environments, from the one where a mistake costs nothing to the one
+// where it costs the most. An empty environment means the connection was never
+// labelled, which is the ordinary case and not a fourth value.
+const (
+	EnvironmentDevelopment Environment = "dev"
+	EnvironmentStaging     Environment = "staging"
+	EnvironmentProduction  Environment = "prod"
+)
+
+// Environments returns every label, in the order a form should offer them.
+func Environments() []Environment {
+	return []Environment{EnvironmentDevelopment, EnvironmentStaging, EnvironmentProduction}
+}
+
+// validate accepts the empty label, for the same reason the empty mode is
+// accepted: not labelling a connection is different from labelling it something
+// that does not exist.
+func (e Environment) validate() error {
+	if e == "" {
+		return nil
+	}
+
+	for _, known := range Environments() {
+		if e == known {
+			return nil
+		}
+	}
+
+	return InvalidField{
+		Field:   "environment",
+		Problem: fmt.Sprintf("environment %q is not one of %v", e, Environments()),
+	}
+}
+
 // TLS is the transport security of a connection: the mode and the files that
 // verify_ca and verify-full need. The fields hold paths, never key material.
 type TLS struct {
@@ -127,6 +171,24 @@ type Config struct {
 	// protect the connection, silently removes the protection.
 	Options map[string]string
 
+	// Environment is what this connection is: development, staging or
+	// production. It changes nothing about how the connection is made and
+	// everything about how it is drawn.
+	Environment Environment
+
+	// ReadOnly asks the server to refuse every statement that writes.
+	//
+	// It is a request made once, on connect, and honoured by the server for
+	// the life of the connection — see Target, which also says where the
+	// guarantee stops. Deciding here whether a statement writes would mean
+	// parsing SQL, and would be wrong about the first function that writes
+	// inside itself.
+	//
+	// Validate refuses a marked connection that also carries the parameter in
+	// its own settings, so the mark cannot be argued with from the one place
+	// this side controls.
+	ReadOnly bool
+
 	// Archived hides the connection from the usual listing without deleting
 	// it. Archiving is reversible; deleting is not.
 	Archived bool
@@ -177,6 +239,10 @@ func (c Config) Validate() error {
 		return err
 	}
 
+	if err := c.Environment.validate(); err != nil {
+		return err
+	}
+
 	// The two free-form maps are where the promise that this format holds no
 	// password would otherwise end. Params and Options are maps of text, and
 	// password is a keyword libpq honours, so without this a secret written
@@ -188,7 +254,57 @@ func (c Config) Validate() error {
 		return err
 	}
 
-	return c.noCredentials("options", c.Options)
+	if err := c.noCredentials("options", c.Options); err != nil {
+		return err
+	}
+
+	return c.oneOpinionOnWriting()
+}
+
+// oneOpinionOnWriting refuses a connection that says two things about whether
+// it may write.
+//
+// Params and Options are free-form text that the person types, the file keeps
+// and the server is handed, so both can carry a second opinion about the one
+// setting the read-only mark exists to state: the parameter itself, or a libpq
+// options string carrying -c default_transaction_read_only=off. As it happens
+// the server applies them in the order that keeps the mark winning, which is an
+// internal detail of PostgreSQL that nothing here fixes and nobody should have
+// to know to trust the mark.
+//
+// Refused rather than quietly overridden in either direction. Someone who typed
+// it believes it is taking effect, and a protection that depends on which of
+// two settings the server reads first is not a protection.
+func (c Config) oneOpinionOnWriting() error {
+	if !c.ReadOnly {
+		return nil
+	}
+
+	for key := range c.Params {
+		if strings.EqualFold(strings.TrimSpace(key), readOnlyParam) {
+			return InvalidField{
+				Field: "params." + key,
+				Problem: fmt.Sprintf(
+					"this connection is marked read-only, so params.%s would be a second answer to the same question — clear one of them",
+					key),
+			}
+		}
+	}
+
+	for key, value := range c.Options {
+		if !strings.Contains(strings.ToLower(value), readOnlyParam) {
+			continue
+		}
+
+		return InvalidField{
+			Field: "options." + key,
+			Problem: fmt.Sprintf(
+				"this connection is marked read-only, so options.%s must not set %s as well — clear one of them",
+				key, readOnlyParam),
+		}
+	}
+
+	return nil
 }
 
 // noCredentials refuses a secret smuggled in under a free-form key.
@@ -249,6 +365,8 @@ func (c Config) LogValue() slog.Value {
 		slog.String("database", c.Database),
 		slog.String("user", c.User),
 		slog.String("sslmode", string(c.TLS.Mode)),
+		slog.String("environment", string(c.Environment)),
+		slog.Bool("readonly", c.ReadOnly),
 		slog.Bool("archived", c.Archived),
 	)
 }

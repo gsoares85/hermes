@@ -403,3 +403,81 @@ func (t Table) Clone() Table {
 
 	return copied
 }
+
+// Only answers a schema holding one object, and whether it was there.
+//
+// It exists so that the DDL of a single object is written by the same generator
+// that writes the DDL of a schema. The alternative is a second writer for the
+// panel that shows one table, and two writers of the same statements diverge —
+// the day one of them learns about a storage parameter, the other is showing a
+// definition that is quietly wrong.
+//
+// A table brings the sequences it owns, because a sequence a column defaults to
+// is part of what that table is: without it the definition reads as calling
+// something that does not exist. Nothing else follows. A foreign key pointing
+// out of the slice is left on the table exactly as it was declared — it is what
+// the object says about itself, and rewriting it to fit the slice would be
+// showing somebody a definition their server does not hold.
+//
+// The dependencies come along only when both ends survive, which is the rule
+// the ordering already applies to a model whose edges name something it does
+// not hold.
+func (s Schema) Only(name Name) (Schema, bool) {
+	slice := Schema{Name: s.Name}
+
+	for _, table := range s.Tables {
+		if table.Name == name {
+			slice.Tables = []Table{table.Clone()}
+			slice.Sequences = ownedBy(s.Sequences, name)
+		}
+	}
+
+	for _, view := range s.Views {
+		if view.Name == name {
+			copied := view
+			copied.Options = slices.Clone(view.Options)
+			slice.Views = []View{copied}
+		}
+	}
+
+	for _, sequence := range s.Sequences {
+		if sequence.Name == name && len(slice.Sequences) == 0 {
+			slice.Sequences = []Sequence{sequence}
+		}
+	}
+
+	if len(slice.Tables) == 0 && len(slice.Views) == 0 && len(slice.Sequences) == 0 {
+		return Schema{}, false
+	}
+
+	slice.Dependencies = dependenciesWithin(s.Dependencies, objectsOf(slice))
+	slice.Sort()
+
+	return slice, true
+}
+
+// ownedBy answers copies of the sequences a table owns.
+func ownedBy(sequences []Sequence, table Name) []Sequence {
+	var owned []Sequence
+
+	for _, sequence := range sequences {
+		if sequence.OwnedBy.Table == table {
+			owned = append(owned, sequence)
+		}
+	}
+
+	return owned
+}
+
+// dependenciesWithin answers the edges whose both ends are in the slice.
+func dependenciesWithin(edges []Dependency, held map[Object]bool) []Dependency {
+	var within []Dependency
+
+	for _, edge := range edges {
+		if held[edge.Object] && held[edge.Needs] {
+			within = append(within, edge)
+		}
+	}
+
+	return within
+}

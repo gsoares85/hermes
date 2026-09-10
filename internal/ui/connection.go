@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -55,6 +56,12 @@ type ConnectionForm struct {
 	RootCert string `json:"rootCert"`
 	Cert     string `json:"cert"`
 	Key      string `json:"key"`
+
+	// Environment is what this connection is — dev, staging or prod — and
+	// empty for one nobody labelled. ReadOnly asks the server to refuse every
+	// statement that writes.
+	Environment string `json:"environment"`
+	ReadOnly    bool   `json:"readOnly"`
 }
 
 // String describes the connection without describing the credential.
@@ -77,6 +84,8 @@ func (f ConnectionForm) LogValue() slog.Value {
 		slog.String("database", f.Database),
 		slog.String("user", f.User),
 		slog.String("sslmode", f.SSLMode),
+		slog.String("environment", f.Environment),
+		slog.Bool("readonly", f.ReadOnly),
 		// Whether there is one, never what it is: the difference between a
 		// form that will authenticate and one that will not is worth logging.
 		slog.Bool("hasPassword", f.Password != ""),
@@ -129,6 +138,9 @@ type SavedView struct {
 	Cert     string `json:"cert"`
 	Key      string `json:"key"`
 
+	Environment string `json:"environment"`
+	ReadOnly    bool   `json:"readOnly"`
+
 	Archived bool `json:"archived"`
 }
 
@@ -153,11 +165,20 @@ type DiagnosisView struct {
 	Detail   string `json:"detail"`
 }
 
-// StatusView is the state of an open connection.
+// StatusView is the state of an open connection, and who that connection is.
+//
+// The three fields after the state are the ones that make a production server
+// unmistakable in every tab. A tab cannot arrange that for itself — it can only
+// draw what it was handed — so the label travels with the state rather than
+// being looked up separately by whoever remembers to.
 type StatusView struct {
 	ID        string        `json:"id"`
 	State     string        `json:"state"`
 	Diagnosis DiagnosisView `json:"diagnosis"`
+
+	Name        string `json:"name"`
+	Environment string `json:"environment"`
+	ReadOnly    bool   `json:"readOnly"`
 }
 
 // ConnectionStore is where saved connections live between runs.
@@ -207,6 +228,15 @@ type ConnectionService struct {
 	mu   sync.Mutex
 	open map[string]*conn.Connection
 
+	// closing is what to tell when a connection goes.
+	//
+	// A list of functions rather than an interface, and unexported for a
+	// reason that is not style: a binding is generated from every exported
+	// method of this type, and one taking a callback would cross to the
+	// frontend as something it could call. Whoever wires two services together
+	// is in this package, which is where the registration belongs.
+	closing []func(id string)
+
 	// saved serialises the read-modify-write of the connections file. Two
 	// saves at once would otherwise each write the list they read, and the
 	// second would delete the connection the first had just added.
@@ -221,6 +251,36 @@ func NewConnectionService(deps Dependencies) *ConnectionService {
 		vault:       deps.Vault,
 		vaultStatus: deps.VaultStatus,
 		open:        make(map[string]*conn.Connection),
+	}
+}
+
+// whenClosed registers something to tell when a connection is released.
+//
+// It exists because a service built on top of a connection has no other way to
+// learn that the connection has gone. The catalog cache found out by accident —
+// a later lookup failing — and a lookup for a closed connection never arrives,
+// because the window is handed a fresh identifier by every Open.
+func (s *ConnectionService) whenClosed(tell func(id string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.closing = append(s.closing, tell)
+}
+
+// announceClosed tells everyone registered, outside the lock.
+//
+// Outside because what is registered is somebody else's code taking somebody
+// else's lock, and holding this one across it is how two services that only
+// know each other through a callback deadlock.
+func (s *ConnectionService) announceClosed(ids ...string) {
+	s.mu.Lock()
+	listeners := slices.Clone(s.closing)
+	s.mu.Unlock()
+
+	for _, tell := range listeners {
+		for _, id := range ids {
+			tell(id)
+		}
 	}
 }
 
@@ -577,7 +637,7 @@ func (s *ConnectionService) Open(ctx context.Context, form ConnectionForm) (Stat
 	}
 	s.open[id] = connection
 
-	return statusView(id, status), nil
+	return statusView(id, config, status), nil
 }
 
 // Status returns the last known state without contacting the server, which is
@@ -588,7 +648,7 @@ func (s *ConnectionService) Status(id string) (StatusView, error) {
 		return StatusView{}, err
 	}
 
-	return statusView(id, connection.Status()), nil
+	return statusView(id, connection.Config(), connection.Status()), nil
 }
 
 // Check contacts the server and returns the state it found.
@@ -598,7 +658,7 @@ func (s *ConnectionService) Check(ctx context.Context, id string) (StatusView, e
 		return StatusView{}, err
 	}
 
-	return statusView(id, connection.Check(ctx)), nil
+	return statusView(id, connection.Config(), connection.Check(ctx)), nil
 }
 
 // Close releases a connection.
@@ -613,6 +673,7 @@ func (s *ConnectionService) Close(id string) error {
 	}
 
 	connection.Close()
+	s.announceClosed(id)
 
 	return nil
 }
@@ -628,6 +689,19 @@ func (s *ConnectionService) Databases(ctx context.Context, id string) ([]string,
 	databases, err := connection.Databases(ctx)
 
 	return databases, secret.Error(err)
+}
+
+// Environments lists the labels the form offers, for the same reason SSLModes
+// does: a window that retypes the list drifts from what the file will accept,
+// and the value that drifts is the one marking a production server.
+func (s *ConnectionService) Environments() []string {
+	environments := conn.Environments()
+	names := make([]string, 0, len(environments))
+	for _, environment := range environments {
+		names = append(names, string(environment))
+	}
+
+	return names
 }
 
 // SSLModes lists the modes the form offers, so that the list lives in one place
@@ -647,8 +721,10 @@ func (s *ConnectionService) SSLModes() []string {
 func (s *ConnectionService) CloseAll() {
 	s.mu.Lock()
 	open := make([]*conn.Connection, 0, len(s.open))
+	closed := make([]string, 0, len(s.open))
 	for id, connection := range s.open {
 		open = append(open, connection)
+		closed = append(closed, id)
 		delete(s.open, id)
 	}
 	s.mu.Unlock()
@@ -656,6 +732,8 @@ func (s *ConnectionService) CloseAll() {
 	for _, connection := range open {
 		connection.Close()
 	}
+
+	s.announceClosed(closed...)
 }
 
 // newID returns an unguessable handle. Sequential ones would be fine for what
@@ -706,8 +784,10 @@ func configOf(form ConnectionForm) conn.Config {
 			Cert:     form.Cert,
 			Key:      form.Key,
 		},
-		Params:  form.Params,
-		Options: form.Options,
+		Environment: conn.Environment(form.Environment),
+		ReadOnly:    form.ReadOnly,
+		Params:      form.Params,
+		Options:     form.Options,
 	}
 }
 
@@ -730,19 +810,21 @@ func viewOf(config conn.Config) ConnectionView {
 
 func savedView(config conn.Config) SavedView {
 	return SavedView{
-		ID:       config.ID,
-		Name:     config.Name,
-		Host:     config.Host,
-		Port:     config.Port,
-		Database: config.Database,
-		User:     config.User,
-		SSLMode:  string(config.TLS.Mode),
-		RootCert: config.TLS.RootCert,
-		Cert:     config.TLS.Cert,
-		Key:      config.TLS.Key,
-		Params:   config.Params,
-		Options:  config.Options,
-		Archived: config.Archived,
+		ID:          config.ID,
+		Name:        config.Name,
+		Host:        config.Host,
+		Port:        config.Port,
+		Database:    config.Database,
+		User:        config.User,
+		SSLMode:     string(config.TLS.Mode),
+		RootCert:    config.TLS.RootCert,
+		Cert:        config.TLS.Cert,
+		Key:         config.TLS.Key,
+		Params:      config.Params,
+		Options:     config.Options,
+		Environment: string(config.Environment),
+		ReadOnly:    config.ReadOnly,
+		Archived:    config.Archived,
 	}
 }
 
@@ -757,10 +839,13 @@ func diagnosisView(d conn.Diagnosis) DiagnosisView {
 	}
 }
 
-func statusView(id string, status conn.Status) StatusView {
+func statusView(id string, config conn.Config, status conn.Status) StatusView {
 	return StatusView{
-		ID:        id,
-		State:     string(status.State),
-		Diagnosis: diagnosisView(status.Diagnosis),
+		ID:          id,
+		State:       string(status.State),
+		Diagnosis:   diagnosisView(status.Diagnosis),
+		Name:        config.Name,
+		Environment: string(config.Environment),
+		ReadOnly:    config.ReadOnly,
 	}
 }

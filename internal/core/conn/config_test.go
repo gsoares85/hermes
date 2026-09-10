@@ -310,3 +310,101 @@ func TestOrdinarySettingsAreStillValid(t *testing.T) {
 		t.Errorf("Validate() = %v, want nil", err)
 	}
 }
+
+// The environment is a closed set, and a value outside it is refused rather
+// than kept. "prd" typed into the field of a production server would draw no
+// mark at all, and an unmarked production server is exactly what this label
+// exists to prevent.
+func TestAnUnknownEnvironmentIsRefused(t *testing.T) {
+	t.Parallel()
+
+	config := sample()
+	config.Environment = "prd"
+
+	err := config.Validate()
+
+	var invalid conn.InvalidField
+	if !errors.As(err, &invalid) || invalid.Field != "environment" {
+		t.Errorf("Validate() = %v, want a fault naming the environment field", err)
+	}
+}
+
+// Not choosing is not the same as choosing something that does not exist: most
+// connections are neither production nor staging, and they have to validate.
+func TestEveryEnvironmentTheFormOffersIsAccepted(t *testing.T) {
+	t.Parallel()
+
+	for _, environment := range append([]conn.Environment{""}, conn.Environments()...) {
+		t.Run(string(environment), func(t *testing.T) {
+			t.Parallel()
+
+			config := sample()
+			config.Environment = environment
+
+			if err := config.Validate(); err != nil {
+				t.Errorf("Validate() = %v, want the environment %q accepted", err, environment)
+			}
+		})
+	}
+}
+
+// The read-only mark and the free-form maps cannot both be in charge.
+//
+// Params and Options are text the person types and the file keeps, and both
+// reach the server: a default_transaction_read_only under params, or a
+// libpq options string carrying -c default_transaction_read_only=off, is a
+// second opinion about the one setting the mark exists to state. Today the
+// server happens to apply them in the order that keeps the mark winning — an
+// internal detail of PostgreSQL that nothing here fixes and nobody should have
+// to know. Refused rather than silently overridden in either direction: someone
+// who typed it believes it is taking effect.
+func TestAReadOnlyConnectionRefusesASecondOpinionAboutIt(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		field string
+		apply func(*conn.Config)
+	}{
+		"as a session parameter": {"params.default_transaction_read_only", func(c *conn.Config) {
+			c.Params = map[string]string{"default_transaction_read_only": "off"}
+		}},
+		"however it is spelled": {"params.Default_Transaction_Read_Only", func(c *conn.Config) {
+			c.Params = map[string]string{"Default_Transaction_Read_Only": "on"}
+		}},
+		"smuggled through the libpq options": {"options.options", func(c *conn.Config) {
+			c.Options = map[string]string{"options": "-c default_transaction_read_only=off"}
+		}},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			config := sample()
+			config.ReadOnly = true
+			tc.apply(&config)
+
+			err := config.Validate()
+
+			var invalid conn.InvalidField
+			if !errors.As(err, &invalid) || invalid.Field != tc.field {
+				t.Errorf("Validate() = %v, want a fault naming %s", err, tc.field)
+			}
+		})
+	}
+}
+
+// A connection nobody marked is left alone. Somebody who deliberately sets the
+// parameter on a connection they did not mark is saying something coherent, and
+// refusing it would be this layer having an opinion about a setting it was not
+// asked about.
+func TestAnUnmarkedConnectionMaySetTheParameterItself(t *testing.T) {
+	t.Parallel()
+
+	config := sample()
+	config.Params = map[string]string{"default_transaction_read_only": "on"}
+
+	if err := config.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want an unmarked connection to be left alone", err)
+	}
+}

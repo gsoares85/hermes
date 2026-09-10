@@ -118,6 +118,24 @@ func explain(class driver.FailureClass, c Config) Diagnosis {
 			NextStep: fmt.Sprintf("Add a pg_hba.conf line covering %q from this address and reload the server. This is a change on the server, not in these settings.", c.User),
 		}
 
+	case driver.FailureReadOnly:
+		// Two problems wearing one SQLSTATE, fixed in two different places. The
+		// mark is a checkbox in this window; a server that refuses writes on
+		// its own is somebody else's server, and nothing here will change it.
+		if c.ReadOnly {
+			return Diagnosis{
+				Summary:  "This connection is marked read-only, so the server refused a statement that writes.",
+				Cause:    "Hermes opens a connection marked read-only with default_transaction_read_only on, and the server refuses every insert, update, delete and DDL inside it. The refusal comes from the server, so nothing in this window went around it.",
+				NextStep: fmt.Sprintf("Clear the read-only mark on this connection and open it again, if writing to %s is what you meant to do.", address),
+			}
+		}
+
+		return Diagnosis{
+			Summary:  fmt.Sprintf("%s refused a statement that writes.", address),
+			Cause:    "This connection is not marked read-only here, so the refusal is the server's own: a standby accepts no writes, and a server, a database or a role can be left with default_transaction_read_only on.",
+			NextStep: fmt.Sprintf("Check whether %s is a replica, and whether default_transaction_read_only is set on the server, on the database or on the role %q.", c.Host, c.User),
+		}
+
 	case driver.FailureMissingDatabase:
 		// Blaming a name the user never typed is how a message stops being
 		// useful. When no database was named, what is missing is the default.

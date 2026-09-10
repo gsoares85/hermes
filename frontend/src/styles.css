@@ -12,6 +12,16 @@
   --text-muted: #5f6169;
   --border: rgb(0 0 0 / 12%);
 
+  /* The environment marks. Production is the one that has to stop somebody
+     mid-keystroke, so it is the only one that is red, and the other two are
+     quiet enough that a window full of them stays readable. */
+  --dev: #0b6bcb;
+  --dev-surface: #e8f1fd;
+  --staging: #9a5b00;
+  --staging-surface: #fdf3e3;
+  --production: #b42318;
+  --production-surface: #fdeceb;
+
   font-family:
     system-ui,
     -apple-system,
@@ -27,6 +37,13 @@
     --text: #e7e8ec;
     --text-muted: #a1a4ad;
     --border: rgb(255 255 255 / 14%);
+
+    --dev: #8ec0f5;
+    --dev-surface: #12283f;
+    --staging: #e8b269;
+    --staging-surface: #3a2a12;
+    --production: #ff9a92;
+    --production-surface: #401713;
   }
 }
 
@@ -44,7 +61,87 @@ body {
 }
 
 .app__header {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
   padding: 1.5rem 1.5rem 0;
+}
+
+/*
+ * The permanent mark of a production connection.
+ *
+ * It is on the window and not on a panel because the requirement is that a
+ * production server be unmistakable wherever the person is looking, and every
+ * panel is inside this. A band across the top and a coloured header are what
+ * survive being ignored: neither scrolls away, and neither has to be redrawn by
+ * whichever screen is on top.
+ */
+.app--production {
+  border-top: 4px solid var(--production);
+}
+
+.app--production .app__header {
+  background: var(--production-surface);
+  padding-bottom: 1rem;
+}
+
+.app__connection {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.app__connection-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/*
+ * The marks themselves, drawn the same wherever a connection appears: in the
+ * header, in the list of saved connections, and beside the state of the open
+ * one. Same shape and same colour in all three, because a mark that changes
+ * with its surroundings is one more thing to recognise rather than one thing.
+ */
+.marks {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  vertical-align: middle;
+}
+
+.mark {
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+  padding: 0 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1.5rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.mark--dev {
+  background: var(--dev-surface);
+  color: var(--dev);
+}
+
+.mark--staging {
+  background: var(--staging-surface);
+  color: var(--staging);
+}
+
+.mark--prod {
+  background: var(--production-surface);
+  color: var(--production);
+}
+
+.mark--read-only {
+  background: var(--surface-raised);
+  color: var(--text-muted);
 }
 
 .app__header h1 {
@@ -124,6 +221,28 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+}
+
+/*
+ * The read-only checkbox and the sentence beside it. The sentence is not
+ * decoration: the mark is a request the server honours, not a rule this window
+ * applies, and a checkbox with no explanation would be trusted for something it
+ * cannot do.
+ */
+.connection__check-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.connection__check input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.connection__hint {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
 }
 
 .connection__field span {
@@ -277,10 +396,232 @@ body {
 }
 
 .connection__saved-name {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
   font-weight: 600;
 }
 
 .connection__saved-target {
   color: var(--text-muted);
   font-size: 0.85em;
+}
+
+/*
+  The object tree.
+
+  The scroller has a fixed height and the rows inside it are placed by the
+  virtualiser: the spacer is as tall as every row would be, and only the rows on
+  screen exist. That is why the rows are absolute — they are positioned by
+  transform rather than by flow, and a row in flow would put every one of them
+  back into the layout.
+*/
+.tree {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+  max-width: 42rem;
+}
+
+.tree__scroller {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  contain: strict;
+  height: 24rem;
+  overflow: auto;
+}
+
+.tree__spacer {
+  position: relative;
+  width: 100%;
+}
+
+.tree__row {
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 100%;
+}
+
+.tree__line {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  height: 26px;
+  padding-right: 0.5rem;
+}
+
+.tree__toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8em;
+  padding: 0;
+  width: 1rem;
+}
+
+.tree__toggle:disabled {
+  cursor: default;
+}
+
+.tree__kind {
+  color: var(--text-muted);
+  font-size: 0.75em;
+  min-width: 4.5rem;
+  text-transform: uppercase;
+}
+
+.tree__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree__note,
+.tree__working {
+  color: var(--text-muted);
+}
+
+.tree__error,
+.tree__failed {
+  /* The red the connection status already uses for a server that is down. */
+  color: #e03131;
+  font-size: 0.85em;
+}
+
+.tree__filter {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.tree__filter input[type="search"] {
+  flex: 1;
+}
+
+.tree__system {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  font-size: 0.85em;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.tree__name mark {
+  background: #ffd43b55;
+  border-radius: 2px;
+  color: inherit;
+}
+
+/*
+  The browser: the tree on the left and what is selected on the right. It
+  collapses to one column when the window is narrow, because a panel squeezed
+  beside a tree shows neither.
+*/
+.app__browser {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: minmax(0, 1fr);
+  margin-top: 1.5rem;
+}
+
+@media (min-width: 60rem) {
+  .app__browser {
+    grid-template-columns: minmax(0, 24rem) minmax(0, 1fr);
+  }
+}
+
+.tree {
+  margin-top: 0;
+  max-width: none;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.panel__header {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.panel__refresh {
+  flex: none;
+}
+
+.panel__header h3 {
+  margin: 0;
+}
+
+.panel__where {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  margin: 0.15rem 0 0;
+}
+
+.panel__tabs {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.panel__tabs button.is-selected {
+  border-color: var(--text);
+}
+
+.panel__note {
+  color: var(--text-muted);
+}
+
+.panel__error {
+  color: #e03131;
+}
+
+.panel__columns {
+  border-collapse: collapse;
+  font-size: 0.9em;
+  width: 100%;
+}
+
+.panel__columns th,
+.panel__columns td {
+  border-bottom: 1px solid var(--border);
+  padding: 0.25rem 0.5rem 0.25rem 0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.panel__notes,
+.panel__listing ul {
+  color: var(--text-muted);
+  font-size: 0.9em;
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.panel__listing h4 {
+  margin: 0 0 0.25rem;
+}
+
+/* The script is read as code and copied out of the window, so it wraps rather
+   than scrolling sideways: a statement cut off at the right edge is one nobody
+   can check before running. */
+.panel__ddl {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85em;
+  margin: 0;
+  max-height: 24rem;
+  overflow: auto;
+  padding: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
