@@ -104,9 +104,13 @@ export async function closeConnection(id: string): Promise<void> {
  * A call of its own rather than a field on the state, because it reaches the
  * server and reading the state must not: a window repaints far more often than
  * a server changes version. Asked once, when a connection opens.
+ *
+ * Handed back cancellable, like every other call here that reaches a server.
+ * Awaiting it would hide the handle behind a plain promise, and closing the
+ * tab that asked would leave the query running until its own timeout.
  */
-export async function serverVersion(id: string): Promise<string> {
-  return await ConnectionService.ServerVersion(id);
+export function serverVersion(id: string): CancellablePromise<string> {
+  return ConnectionService.ServerVersion(id);
 }
 
 /**

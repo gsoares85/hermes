@@ -136,20 +136,25 @@ export function App(): React.JSX.Element {
 
     let active = true;
     const asked = connection.id;
+    const request = serverVersion(asked);
 
-    serverVersion(asked)
+    request
       .then((reported): void => {
         if (active) {
           setVersions((held): ReadonlyMap<string, string> => new Map(held).set(asked, reported));
         }
       })
       .catch((): void => {
-        // The server did not answer. The rest of the window still works, and
-        // the footer says nothing rather than saying something wrong.
+        // The server did not answer, or the question was abandoned. The rest
+        // of the window still works, and the footer says nothing rather than
+        // saying something wrong.
       });
 
     return (): void => {
       active = false;
+      // The question is abandoned with the tab that asked it: it reaches the
+      // server, and a flag alone only stops the answer being used.
+      void request.cancel();
     };
   }, [connection, versions]);
 

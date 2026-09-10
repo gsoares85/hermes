@@ -118,6 +118,32 @@ async function connectTo(name: string): Promise<void> {
   await screen.findByRole("tab", { name: new RegExp(name) });
 }
 
+describe("asking what the server is", () => {
+  /**
+   * The question is abandoned with the tab that asked it.
+   *
+   * It reaches the server, and the binding is cancellable the whole way down.
+   * Awaiting it throws the handle away, so closing the tab left the query
+   * running on the Go side until its own timeout — the pattern every other
+   * call in api/connection is deliberately written to avoid.
+   */
+  it("stops asking when the tab that asked is closed", async () => {
+    const abandon = vi.fn(() => Promise.resolve());
+    backend.serverVersion.mockReturnValue(
+      Object.assign(new Promise<string>((): void => {}), { cancel: abandon }),
+    );
+
+    render(<App />);
+    await connectTo("First");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close First" }));
+
+    await waitFor((): void => {
+      expect(abandon).toHaveBeenCalled();
+    });
+  });
+});
+
 describe("closing a tab", () => {
   /**
    * The tab goes first, and the connection is released behind it.
