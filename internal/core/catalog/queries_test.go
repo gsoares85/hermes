@@ -446,18 +446,31 @@ func (q query) String() string { return "the identifier " + q.name + " in " + q.
 func catalogQueries(t *testing.T) map[string]query {
 	t.Helper()
 
+	queries := queryConstantsIn(t, ".")
+	if len(queries) == 0 {
+		t.Fatal("no query constant was found, so every check that reads them is vacuous")
+	}
+
+	return queries
+}
+
+// queryConstantsIn answers the query constants of one package directory.
+//
+// The directory is a parameter because the rule these checks enforce belongs to
+// the query and not to the package that happens to hold it: the engine adapter
+// keeps one of its own, and a guard that stopped at the package boundary would
+// leave it the only query nothing reads.
+func queryConstantsIn(t *testing.T, dir string) map[string]query {
+	t.Helper()
+
 	queries := map[string]query{}
 
-	for source, file := range sources(t) {
+	for source, file := range sourcesIn(t, dir) {
 		for name, value := range constantsIn(t, file) {
 			if strings.Contains(value, "SELECT") {
 				queries[name] = query{name: name, source: source, sql: value}
 			}
 		}
-	}
-
-	if len(queries) == 0 {
-		t.Fatal("no query constant was found, so every check that reads them is vacuous")
 	}
 
 	return queries
@@ -700,7 +713,13 @@ func sqlArgument(call *ast.CallExpr, carriers map[string]int) (int, bool) {
 func sources(t *testing.T) map[string]*ast.File {
 	t.Helper()
 
-	found, err := filepath.Glob("*.go")
+	return sourcesIn(t, ".")
+}
+
+func sourcesIn(t *testing.T, dir string) map[string]*ast.File {
+	t.Helper()
+
+	found, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
 		t.Fatalf("looking for the sources: %v", err)
 	}
@@ -802,5 +821,35 @@ func stringOf(expression ast.Expr) (string, bool) {
 		return left + right, leftIsText && rightIsText
 	default:
 		return "", false
+	}
+}
+
+// The queries of the engine adapter are held to the same rule as these.
+//
+// They live in another package because they are the driver's own: the list of
+// databases comes from a system catalog, and which catalog that is belongs to
+// the engine. The rule is not the driver's, though — a name resolved without
+// pg_catalog in front of it is resolved against a schema somebody else can
+// write to, whichever package the string sits in, and the list of databases is
+// the first SELECT of every browsing session and the root of the object tree.
+//
+// The guard follows the query rather than the package. It was written for this
+// package because the CVE regressed here twice, and the one query that stayed
+// outside its reach was the one that runs first.
+func TestNothingInAnEngineQueryResolvesByName(t *testing.T) {
+	t.Parallel()
+
+	const engine = "../../driver/postgres"
+
+	queries := queryConstantsIn(t, engine)
+	if len(queries) == 0 {
+		t.Fatalf("no query constant was found in %s, so this check is vacuous", engine)
+	}
+
+	for _, query := range queries {
+		for _, found := range unqualified(query.sql) {
+			t.Errorf("%s resolves %s by name; a schema on the search path can declare"+
+				" one that beats the catalog's", query, found)
+		}
 	}
 }

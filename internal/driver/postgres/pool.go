@@ -142,10 +142,23 @@ func (p *connPool) Close() {
 // template0 and template1, which are there to be copied rather than opened; and
 // has_database_privilege is what makes the answer specific to who is asking
 // instead of a list of names most of which would be refused.
-const listDatabases = `SELECT datname FROM pg_database
-	WHERE datallowconn AND NOT datistemplate
-	  AND has_database_privilege(current_user, datname, 'CONNECT')
-	ORDER BY datname`
+//
+// Every name is written with pg_catalog in front of it, and the function is the
+// reason rather than the relation. pg_catalog.has_database_privilege takes
+// (name, text, text), so a has_database_privilege(name, name, text) declared in
+// any schema on the search path is an exact match and wins outright — no
+// ordering required. It would then decide, as the role that just connected,
+// which databases that role is told it may open. That is CVE-2018-1058, and
+// this is the first SELECT of every browsing session: the root of the object
+// tree is drawn from whatever it answers.
+//
+// current_user stays bare because it is not a name at all: the parser turns the
+// keyword into a value expression, so there is nothing for a schema to shadow
+// and nothing to qualify — pg_catalog.current_user is a syntax error.
+const listDatabases = `SELECT d.datname FROM pg_catalog.pg_database d
+	WHERE d.datallowconn AND NOT d.datistemplate
+	  AND pg_catalog.has_database_privilege(current_user, d.datname, 'CONNECT')
+	ORDER BY d.datname`
 
 func (p *connPool) Databases(ctx context.Context) ([]string, error) {
 	rows, err := p.pool.Query(ctx, listDatabases)
