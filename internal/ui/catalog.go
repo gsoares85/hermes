@@ -2,12 +2,14 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/gsoares85/hermes/internal/core/catalog"
 	"github.com/gsoares85/hermes/internal/core/conn"
 	"github.com/gsoares85/hermes/internal/core/secret"
+	"github.com/gsoares85/hermes/internal/driver"
 )
 
 // NodeRef says which node of the tree is being opened.
@@ -117,7 +119,7 @@ func (s *CatalogService) Children(ctx context.Context, id string, node NodeRef,
 func (s *CatalogService) databases(ctx context.Context, connection *conn.Connection) ([]NodeView, error) {
 	found, err := connection.Databases(ctx)
 	if err != nil {
-		return nil, secret.Error(err)
+		return nil, explain(connection, err)
 	}
 
 	children := make([]NodeView, 0, len(found))
@@ -208,8 +210,32 @@ func (s *CatalogService) listerOn(ctx context.Context, connection *conn.Connecti
 
 	session, err := on.Session(ctx)
 	if err != nil {
-		return nil, nil, secret.Error(err)
+		return nil, nil, explain(on, err)
 	}
 
 	return catalog.NewLister(session), session.Close, nil
+}
+
+// explain turns a failure to reach a database into something a person reads.
+//
+// The node of a database this role may not open is where somebody meets that
+// refusal, and it used to arrive there as the driver's own text wrapped twice —
+// "checking out a session: reaching the server: … SQLSTATE 3D000" — in the
+// tooltip of a row. The reason is already written down for every class the
+// engine can report, and the whole product turns on not showing the driver's
+// message instead of it.
+//
+// Only a failure the engine classified. Everything else is a failure of this
+// application rather than of a server — a connection closed while a node was
+// opening, most of all — and dressing one of those as a connection diagnosis
+// would have the tree report an outage every time somebody disconnects.
+func explain(connection *conn.Connection, err error) error {
+	if _, classified := driver.ClassOf(err); !classified {
+		return secret.Error(err)
+	}
+
+	// The driver's own text is deliberately dropped rather than appended. It is
+	// kept on a Diagnosis for a bug report, and a row of a tree is not one; what
+	// is left is three sentences this product wrote.
+	return errors.New(conn.Diagnose(err, connection.Config()).String())
 }

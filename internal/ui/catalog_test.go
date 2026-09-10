@@ -112,10 +112,11 @@ func (t *treeSession) isClosed() bool {
 // treePool hands out one session per database, so a test can say which database
 // a question was asked of.
 type treePool struct {
-	database string
-	sessions *sessions
-	rows     [][]any
-	err      error
+	database   string
+	sessions   *sessions
+	rows       [][]any
+	err        error
+	sessionErr error
 }
 
 func (t treePool) Ping(context.Context) error                    { return nil }
@@ -123,6 +124,10 @@ func (t treePool) ServerVersion(context.Context) (string, error) { return "16.2"
 func (t treePool) Databases(context.Context) ([]string, error)   { return []string{"app", "hermes"}, nil }
 func (t treePool) Close()                                        {}
 func (t treePool) Session(context.Context) (driver.Session, error) {
+	if t.sessionErr != nil {
+		return nil, t.sessionErr
+	}
+
 	return t.sessions.of(t.database, t.rows, t.err), nil
 }
 
@@ -159,10 +164,20 @@ type treeOpener struct {
 	sessions *sessions
 	rows     [][]any
 	err      error
+	// sessionErr fails the checkout itself, which is what a database this role
+	// may not open looks like: the pool is built without contacting anything,
+	// and the refusal arrives at the first thing that actually asks.
+	sessionErr error
 }
 
 func (t treeOpener) Open(_ context.Context, target driver.Target) (driver.Pool, error) {
-	return treePool{database: target.Database, sessions: t.sessions, rows: t.rows, err: t.err}, nil
+	return treePool{
+		database:   target.Database,
+		sessions:   t.sessions,
+		rows:       t.rows,
+		err:        t.err,
+		sessionErr: t.sessionErr,
+	}, nil
 }
 
 // openTree opens a connection through the real connection service and answers
@@ -506,5 +521,59 @@ func TestTheFilterNarrowsObjectsAndNotSchemas(t *testing.T) {
 
 	if !carries(ui.NodeRef{Database: "app", Schema: "sales"}) {
 		t.Error("the objects of a schema were not narrowed by the pattern, so a level of fifty thousand names crosses whole")
+	}
+}
+
+// A node that cannot be opened says why in words, not in SQLSTATE.
+//
+// "Hermes does not show you the driver's message" is the principle the whole
+// diagnosis layer exists for, and the tree was the one screen that broke it: a
+// database this role may not open answered with the driver's own text, wrapped
+// twice, straight into the tooltip of the node. The reason is already written
+// down for every class the engine can report — it just was not being asked for.
+func TestANodeThatCannotBeOpenedSaysWhyInWords(t *testing.T) {
+	t.Parallel()
+
+	refused := &driver.Failure{
+		Class:    driver.FailureNotAuthorized,
+		SQLState: "28000",
+		Err:      errors.New(`FATAL: no pg_hba.conf entry for host "10.0.0.1" (SQLSTATE 28000)`),
+	}
+
+	tree, id := openTree(t, treeOpener{sessions: newSessions(), sessionErr: refused})
+
+	_, err := tree.Children(t.Context(), id, ui.NodeRef{Database: "app"}, ui.TreeFilter{})
+	if err == nil {
+		t.Fatal("a database that cannot be opened answered a level")
+	}
+
+	if strings.Contains(err.Error(), "SQLSTATE") {
+		t.Errorf("the node carries the driver's own message: %v", err)
+	}
+
+	// The explanation of this class, which names the file the fix is in. A
+	// different class would name a different place, which is the whole reason
+	// the failure is classified before it is explained.
+	if !strings.Contains(err.Error(), "pg_hba") {
+		t.Errorf("the node does not explain the refusal: %v", err)
+	}
+}
+
+// The failures that are not the server's are left alone. A connection closed
+// while a node was opening is not a diagnosis about a host — it is work that
+// was given up on, and dressing it as a connection failure would have the tree
+// report an outage every time somebody disconnects.
+func TestAFailureThatIsNotTheServersIsNotDiagnosedAsOne(t *testing.T) {
+	t.Parallel()
+
+	tree, id := openTree(t, treeOpener{sessions: newSessions()})
+
+	if err := tree.Refresh(id, ui.ObjectRef{Database: "app", Schema: "sales"}); err != nil {
+		t.Fatalf("Refresh() = %v", err)
+	}
+
+	_, err := tree.Children(t.Context(), id, ui.NodeRef{Database: "app", Schema: ""}, ui.TreeFilter{})
+	if err != nil {
+		t.Fatalf("expanding a database that works: %v", err)
 	}
 }
