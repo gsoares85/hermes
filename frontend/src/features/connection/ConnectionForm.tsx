@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   applyParsed,
-  closeConnection,
   databases as listDatabases,
   deleteConnection,
   emptyForm,
@@ -261,20 +260,6 @@ export function ConnectionForm({
     }
   }
 
-  async function onClose(): Promise<void> {
-    if (status === null) {
-      return;
-    }
-    try {
-      await closeConnection(status.id);
-    } catch (err) {
-      setNotice(String(err));
-    }
-    setStatus(null);
-    setAvailable([]);
-    onOpened(null);
-  }
-
   return (
     <section className="connection">
       <h2>Connect</h2>
@@ -430,11 +415,6 @@ export function ConnectionForm({
         >
           Connect
         </button>
-        {status !== null && (
-          <button type="button" onClick={(): void => void onClose()}>
-            Disconnect
-          </button>
-        )}
         <button type="button" onClick={(): void => void onSave()} disabled={busy}>
           {form.id === "" ? "Save connection" : "Save changes"}
         </button>

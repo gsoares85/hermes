@@ -10,12 +10,12 @@ import {
 import type { ObjectRef } from "./api/object";
 import { ConnectionDialog } from "./features/connection/ConnectionDialog";
 import { ConnectionForm } from "./features/connection/ConnectionForm";
-import { ConnectionMarks } from "./features/connection/ConnectionMarks";
 import { SavedConnections } from "./features/connection/SavedConnections";
 import { ObjectPanel } from "./features/tree/ObjectPanel";
 import { ObjectTree } from "./features/tree/ObjectTree";
 import type { Pane, Side } from "./features/workspace/panes";
 import { rememberedPanes, rememberPanes } from "./features/workspace/remembered";
+import { Toolbar } from "./features/workspace/Toolbar";
 import { showing } from "./features/workspace/regions";
 import { Workspace } from "./features/workspace/Workspace";
 
@@ -96,6 +96,31 @@ export function App(): React.JSX.Element {
   // belongs to an open connection, the production mark most of all.
   const shown = showing(connection, selected);
 
+  function openDialog(on: SavedView | null): void {
+    setEditing(on);
+    setOpened((times): number => times + 1);
+    setDialog(true);
+  }
+
+  // Releasing it is what closing the pools and the cached catalog on the Go
+  // side depends on, so the state goes to null whether or not the call worked:
+  // the only way it fails is the connection being gone already, and leaving the
+  // window pointing at one that is not there would be worse than either.
+  async function disconnect(): Promise<void> {
+    if (connection === null) {
+      return;
+    }
+
+    try {
+      await closeConnection(connection.id);
+    } catch {
+      // Already closed. Nothing to say and nothing to go back to.
+    }
+
+    setConnection(null);
+    setSelected(null);
+  }
+
   return (
     <Workspace
       production={shown.production}
@@ -109,21 +134,15 @@ export function App(): React.JSX.Element {
         });
       }}
       toolbar={
-        <>
-          <span className="workspace__brand">Hermes</span>
-
-          {connection !== null && (
-            <p className="workspace__connection">
-              {connection.name !== "" && (
-                <span className="workspace__connection-name">{connection.name}</span>
-              )}
-              <ConnectionMarks
-                environment={connection.environment}
-                readOnly={connection.readOnly}
-              />
-            </p>
-          )}
-        </>
+        <Toolbar
+          connection={connection}
+          onNew={(): void => {
+            openDialog(null);
+          }}
+          onDisconnect={(): void => {
+            void disconnect();
+          }}
+        />
       }
       objects={
         <>
@@ -131,15 +150,9 @@ export function App(): React.JSX.Element {
             connections={saved}
             openId={connection?.id ?? ""}
             notice={savedNotice}
-            onPick={(pick): void => {
-              setEditing(pick);
-              setOpened((times): number => times + 1);
-              setDialog(true);
-            }}
+            onPick={openDialog}
             onNew={(): void => {
-              setEditing(null);
-              setOpened((times): number => times + 1);
-              setDialog(true);
+              openDialog(null);
             }}
           />
 

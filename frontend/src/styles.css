@@ -738,3 +738,27 @@ body {
 .dialog::backdrop {
   background: rgb(0 0 0 / 45%);
 }
+
+/*
+ * The buttons of the toolbar. Quiet by default and lit on hover, because the
+ * strip is above everything and a row of loud buttons across the top of a
+ * window is a row people stop seeing.
+ */
+.workspace__toolbar button {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  padding: 0.25rem 0.6rem;
+}
+
+.workspace__toolbar button:hover {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.workspace--production .workspace__toolbar button:hover {
+  background: rgb(0 0 0 / 8%);
+}
