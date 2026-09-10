@@ -555,14 +555,31 @@ body {
   gap: 0.3rem;
 }
 
+/*
+ * Where the object is, then what it is called. That order and not the other,
+ * because the pane is read after a row was clicked: the name is already known
+ * and the schema it came from is the part that answers "which one".
+ */
+.panel__title {
+  min-width: 0;
+}
+
 .panel__header h3 {
+  font-family: var(--font-mono);
+  font-size: 1rem;
   margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panel__where {
   color: var(--text-muted);
-  font-size: 0.85em;
-  margin: 0.15rem 0 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin: 0 0 0.1rem;
+  text-transform: uppercase;
 }
 
 .panel__tabs {
@@ -583,32 +600,120 @@ body {
   color: #e03131;
 }
 
-.panel__columns {
-  font-family: var(--font-mono);
-  border-collapse: collapse;
-  font-size: 0.9em;
-  width: 100%;
+/*
+ * What the model read about this object, as three numbers in a box.
+ *
+ * Three and not five: the design also counts rows and measures the table on
+ * disk, and both come from the statistics of the server rather than from its
+ * catalog. A card with a dash where a number belongs is worse than a smaller
+ * card.
+ */
+.panel__stats {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  overflow: hidden;
 }
 
-.panel__columns th,
-.panel__columns td {
-  border-bottom: 1px solid var(--border);
-  padding: 0.25rem 0.5rem 0.25rem 0;
-  text-align: left;
-  vertical-align: top;
+.panel__stat {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.4rem 0.25rem;
+}
+
+.panel__stat + .panel__stat {
+  border-left: 1px solid var(--border);
+}
+
+.panel__stat-label {
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.panel__stat-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The label above a list. Small and quiet: it names a group, and a heading that
+   competes with the rows under it makes the pane a list of headings. */
+.panel__section h4 {
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin: 0 0 0.2rem;
+  text-transform: uppercase;
+}
+
+/*
+ * A column is a name on the left and its type on the right, which is the shape
+ * of the question: you scan the names to find one, and read the type of the one
+ * you found. A table of four columns made both of them a scan.
+ */
+.panel__columns {
+  font-family: var(--font-mono);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.panel__columns li {
+  align-items: baseline;
+  border-radius: 4px;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: space-between;
+  padding: 0.15rem 0.3rem;
+}
+
+.panel__columns li:hover {
+  background: var(--surface-raised);
+}
+
+.panel__column-name {
+  align-items: center;
+  display: flex;
+  gap: 0.4rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel__column-name .icon {
+  color: var(--text-muted);
+}
+
+/* The key is the one thing about a column that changes how the rest of the
+   table is read, so it is the one glyph in the pane with a colour of its own. */
+.panel__key {
+  color: #e0a800;
+}
+
+.panel__column-type {
+  color: var(--text-muted);
+  flex: none;
+  font-size: 0.85em;
+}
+
+.panel__flag {
+  opacity: 0.75;
 }
 
 .panel__notes,
 .panel__listing ul {
-  font-family: var(--font-mono);
   color: var(--text-muted);
-  font-size: 0.9em;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
   margin: 0;
   padding-left: 1.1rem;
-}
-
-.panel__listing h4 {
-  margin: 0 0 0.25rem;
 }
 
 /* The script is read as code and copied out of the window, so it wraps rather
@@ -1137,4 +1242,50 @@ body {
 .workspace__mark .icon {
   height: 1rem;
   width: 1rem;
+}
+
+/*
+ * The scrollbars.
+ *
+ * The ones the platform draws are sized for a page: on a pane of 252 pixels a
+ * default scrollbar is a visible fraction of the width, and three of them in
+ * one window is a window of scrollbars. Eight pixels, a thumb that is a shade
+ * of the border rather than a colour of its own, and no track at all.
+ *
+ * WebKit and WebView2 both read these; a browser that reads neither gets its
+ * own, which is the right fallback and needs no second rule.
+ */
+::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* The panes have a ground of their own, so a section inside one needs room of
+   its own rather than the padding of the pane doing for everything. */
+.panel__section {
+  display: flex;
+  flex-direction: column;
+}
+
+.panel__properties {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
 }

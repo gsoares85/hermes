@@ -59,6 +59,15 @@ const glyphs = {
   ),
   /** What the foot of the navigator says: this is the server you are on. */
   plug: <path d="M9 2.5v6M15 2.5v6M6 8.5h12v3.5a6 6 0 0 1-12 0ZM12 18v3.5" />,
+  /** A column of words. */
+  text: <path d="M4 6.5V5h16v1.5M12 5v14M9 19h6" />,
+  /** A column of a moment. */
+  calendar: (
+    <>
+      <rect x="3.5" y="5" width="17" height="15" rx="2" />
+      <path d="M3.5 10h17M8 3v4M16 3v4" />
+    </>
+  ),
   /** The column a table is keyed on. */
   key: (
     <>
@@ -77,6 +86,12 @@ const glyphs = {
  * and a flag on the component would be a caller deciding how a glyph is drawn.
  */
 const solids = {
+  /** The key of a table, which is the one thing in the pane worth a solid mark. */
+  keyFill: (
+    <>
+      <path d="M8 11.5a4.5 4.5 0 1 0 3.9 6.7l.3-.5h1.6v-1.8h1.8v-1.8h1.6l3.3-3.3-3-3-6.6 6.6A4.5 4.5 0 0 0 8 11.5Zm-1.2 6.8a1.4 1.4 0 1 1 0-2.8 1.4 1.4 0 0 1 0 2.8Z" />
+    </>
+  ),
   databaseFill: (
     <>
       <path d="M12 2.2c3.9 0 7 1.3 7 2.9s-3.1 2.9-7 2.9-7-1.3-7-2.9 3.1-2.9 7-2.9Z" />

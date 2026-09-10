@@ -5,6 +5,16 @@
  * ColumnView is one column as the panel shows it.
  */
 export interface ColumnView {
+    /**
+     * PrimaryKey says the column is part of the key of its table.
+     * 
+     * It is a fact handed over rather than one the window works out. The
+     * alternative is reading "PRIMARY KEY (id)" out of the text of a constraint
+     * and matching names against it, which is the frontend interpreting SQL —
+     * the one thing this boundary exists to prevent, and wrong the first time a
+     * column is called `id, note`.
+     */
+    "primaryKey": boolean;
     "name": string;
     "type": string;
     "notNull": boolean;

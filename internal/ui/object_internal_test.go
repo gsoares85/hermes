@@ -544,3 +544,87 @@ func TestTheCacheOfADatabaseIsBuiltOnce(t *testing.T) {
 		t.Errorf("%d caches were built for one database", len(caches))
 	}
 }
+
+// The panel says which column is the key, and it is told rather than left to
+// work it out.
+//
+// The alternative is the window reading "PRIMARY KEY (id)" out of the text of a
+// constraint and matching names against it — the frontend interpreting SQL,
+// which is the one thing the boundary exists to stop. What crosses is a fact
+// about a column.
+func TestAColumnSaysWhetherItIsTheKey(t *testing.T) {
+	t.Parallel()
+
+	shown := tableProperties(catalog.Table{
+		Name: catalog.NewName("orders"),
+		Columns: []catalog.Column{
+			{Name: catalog.NewName("id"), Position: 1, Type: catalog.NewTypeName("bigint")},
+			{Name: catalog.NewName("placed_at"), Position: 2, Type: catalog.NewTypeName("date")},
+		},
+		Constraints: []catalog.Constraint{{
+			Name:       catalog.NewName("orders_pkey"),
+			Kind:       catalog.ConstraintPrimaryKey,
+			Columns:    []catalog.Name{catalog.NewName("id")},
+			Definition: "PRIMARY KEY (id)",
+		}},
+	})
+
+	if len(shown.Columns) != 2 {
+		t.Fatalf("the table came back with %d columns, want 2", len(shown.Columns))
+	}
+	if !shown.Columns[0].PrimaryKey {
+		t.Error("the column the key is on does not say so")
+	}
+	if shown.Columns[1].PrimaryKey {
+		t.Error("a column that is not part of the key says it is")
+	}
+}
+
+// A key over two columns marks both, because it is one key and both are in it.
+func TestEveryColumnOfACompositeKeyIsMarked(t *testing.T) {
+	t.Parallel()
+
+	shown := tableProperties(catalog.Table{
+		Name: catalog.NewName("memberships"),
+		Columns: []catalog.Column{
+			{Name: catalog.NewName("person"), Position: 1, Type: catalog.NewTypeName("bigint")},
+			{Name: catalog.NewName("team"), Position: 2, Type: catalog.NewTypeName("bigint")},
+			{Name: catalog.NewName("joined"), Position: 3, Type: catalog.NewTypeName("date")},
+		},
+		Constraints: []catalog.Constraint{{
+			Name: catalog.NewName("memberships_pkey"),
+			Kind: catalog.ConstraintPrimaryKey,
+			Columns: []catalog.Name{
+				catalog.NewName("person"),
+				catalog.NewName("team"),
+			},
+		}},
+	})
+
+	for i, want := range []bool{true, true, false} {
+		if shown.Columns[i].PrimaryKey != want {
+			t.Errorf("column %s says key=%v, want %v",
+				shown.Columns[i].Name, shown.Columns[i].PrimaryKey, want)
+		}
+	}
+}
+
+// A table with no key at all marks nothing — and a unique constraint is not a
+// key, however much it looks like one.
+func TestAUniqueConstraintIsNotAKey(t *testing.T) {
+	t.Parallel()
+
+	shown := tableProperties(catalog.Table{
+		Name:    catalog.NewName("invitations"),
+		Columns: []catalog.Column{{Name: catalog.NewName("code"), Position: 1, Type: catalog.NewTypeName("text")}},
+		Constraints: []catalog.Constraint{{
+			Name:    catalog.NewName("invitations_code_key"),
+			Kind:    catalog.ConstraintUnique,
+			Columns: []catalog.Name{catalog.NewName("code")},
+		}},
+	})
+
+	if shown.Columns[0].PrimaryKey {
+		t.Error("a unique constraint was read as the primary key")
+	}
+}

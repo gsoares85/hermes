@@ -4,11 +4,12 @@ import {
   ddl,
   properties,
   refreshObject,
+  type ColumnView,
   type ObjectRef,
   type PropertiesView,
 } from "../../api/object";
 import { wasCancelled, type CancellablePromise } from "../../api/tree";
-import { Icon } from "../../ui/Icon";
+import { Icon, type IconName } from "../../ui/Icon";
 
 type Tab = "properties" | "ddl";
 
@@ -128,11 +129,11 @@ export function ObjectPanel({
   return (
     <section className="panel" aria-label={object.name}>
       <header className="panel__header">
-        <div>
-          <h3>{object.name}</h3>
+        <div className="panel__title">
           <p className="panel__where">
             {object.database} · {object.schema}
           </p>
+          <h3>{object.name}</h3>
         </div>
         {/*
           The tree reads the server every time a node is opened and this panel
@@ -190,10 +191,53 @@ function TabButton({
   );
 }
 
+/**
+ * What glyph stands beside a column.
+ *
+ * The key first, because it is the one thing about a column that changes how
+ * you read the rest of the table. After that it is only the shape of the value:
+ * a moment, a number, or words. Guessing from the name of a type is presentation
+ * and stays here — nothing branches on it, and a type this does not recognise
+ * gets the glyph for words, which is what an unknown type usually holds.
+ */
+function glyphOf(column: ColumnView): IconName {
+  if (column.primaryKey) {
+    return "keyFill";
+  }
+
+  const type = column.type.toLowerCase();
+
+  if (/date|time|interval/.test(type)) {
+    return "calendar";
+  }
+
+  if (/int|numeric|decimal|real|double|serial|money|float/.test(type)) {
+    return "sequence";
+  }
+
+  return "text";
+}
+
 /** The columns and everything else declared on the object. */
 function Properties({ shown }: { shown: PropertiesView }): React.JSX.Element {
+  const columns = shown.columns ?? [];
+  const constraints = shown.constraints ?? [];
+  const indexes = shown.indexes ?? [];
+
   return (
     <div className="panel__properties">
+      {/*
+        What the model actually read. The design this is drawn from also counts
+        rows and measures the table on disk; those come from the statistics of
+        the server rather than from its catalog, and a card that showed a dash
+        where a number belongs would be worse than a card with three facts on it.
+      */}
+      <div className="panel__stats">
+        <Stat label="Columns" value={columns.length} />
+        <Stat label="Keys" value={constraints.length} />
+        <Stat label="Indexes" value={indexes.length} />
+      </div>
+
       {shown.notes !== null && shown.notes.length > 0 && (
         <ul className="panel__notes">
           {shown.notes.map((note) => (
@@ -202,31 +246,41 @@ function Properties({ shown }: { shown: PropertiesView }): React.JSX.Element {
         </ul>
       )}
 
-      {shown.columns !== null && shown.columns.length > 0 && (
-        <table className="panel__columns">
-          <thead>
-            <tr>
-              <th>Column</th>
-              <th>Type</th>
-              <th>Null</th>
-              <th>Default</th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.columns.map((column) => (
-              <tr key={column.name}>
-                <td>{column.name}</td>
-                <td>{column.type}</td>
-                <td>{column.notNull ? "not null" : ""}</td>
-                <td>{column.generated === "" ? column.default : column.generated}</td>
-              </tr>
+      {columns.length > 0 && (
+        <div className="panel__section">
+          <h4>Columns</h4>
+          <ul className="panel__columns">
+            {columns.map((column) => (
+              <li key={column.name}>
+                <span className="panel__column-name">
+                  {column.primaryKey ? (
+                    <Icon name={glyphOf(column)} className="panel__key" />
+                  ) : (
+                    <Icon name={glyphOf(column)} />
+                  )}
+                  {column.name}
+                </span>
+                <span className="panel__column-type">
+                  {column.type}
+                  {column.notNull && <span className="panel__flag"> not null</span>}
+                </span>
+              </li>
             ))}
-          </tbody>
-        </table>
+          </ul>
+        </div>
       )}
 
       <Listing title="Constraints" items={shown.constraints} />
       <Listing title="Indexes" items={shown.indexes} />
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }): React.JSX.Element {
+  return (
+    <div className="panel__stat">
+      <span className="panel__stat-label">{label}</span>
+      <span className="panel__stat-value">{value}</span>
     </div>
   );
 }
@@ -243,7 +297,7 @@ function Listing({
   }
 
   return (
-    <div className="panel__listing">
+    <div className="panel__section panel__listing">
       <h4>{title}</h4>
       <ul>
         {items.map((item) => (
