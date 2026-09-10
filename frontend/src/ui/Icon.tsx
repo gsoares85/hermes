@@ -112,8 +112,25 @@ const solids = {
 
 export type IconName = keyof typeof glyphs | keyof typeof solids;
 
+/**
+ * Asks the map, not everything the map inherits.
+ *
+ * `name in solids` walks the prototype chain, so "toString" passes it and the
+ * lookup answers with a function for React to render — which it does by
+ * throwing. Every caller passes a literal and the union type forbids anything
+ * else, but a type is erased at runtime and is the only thing standing here.
+ */
 function isSolid(name: IconName): name is keyof typeof solids {
-  return name in solids;
+  return Object.hasOwn(solids, name);
+}
+
+/** Nothing at all for a name neither map holds, rather than whatever it inherits. */
+function shapeOf(name: IconName): React.ReactNode {
+  if (isSolid(name)) {
+    return solids[name];
+  }
+
+  return Object.hasOwn(glyphs, name) ? glyphs[name] : null;
 }
 
 export function Icon({
@@ -137,7 +154,7 @@ export function Icon({
       aria-hidden="true"
       focusable="false"
     >
-      {solid ? solids[name] : glyphs[name]}
+      {shapeOf(name)}
     </svg>
   );
 }
