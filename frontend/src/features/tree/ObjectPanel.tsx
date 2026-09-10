@@ -4,14 +4,13 @@ import {
   ddl,
   properties,
   refreshObject,
-  type ColumnView,
   type ObjectRef,
   type PropertiesView,
 } from "../../api/object";
 import { wasCancelled, type CancellablePromise } from "../../api/tree";
-import { Icon, type IconName } from "../../ui/Icon";
+import { Icon } from "../../ui/Icon";
 
-import { saidOf } from "./columns";
+import { glyphOf, saidOf } from "./columns";
 
 type Tab = "properties" | "ddl";
 
@@ -191,33 +190,6 @@ function TabButton({
       {children}
     </button>
   );
-}
-
-/**
- * What glyph stands beside a column.
- *
- * The key first, because it is the one thing about a column that changes how
- * you read the rest of the table. After that it is only the shape of the value:
- * a moment, a number, or words. Guessing from the name of a type is presentation
- * and stays here — nothing branches on it, and a type this does not recognise
- * gets the glyph for words, which is what an unknown type usually holds.
- */
-function glyphOf(column: ColumnView): IconName {
-  if (column.primaryKey) {
-    return "keyFill";
-  }
-
-  const type = column.type.toLowerCase();
-
-  if (/date|time|interval/.test(type)) {
-    return "calendar";
-  }
-
-  if (/int|numeric|decimal|real|double|serial|money|float/.test(type)) {
-    return "sequence";
-  }
-
-  return "text";
 }
 
 /*
