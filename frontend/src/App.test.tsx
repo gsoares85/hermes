@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SavedView, StatusView } from "./api/connection";
@@ -264,5 +265,36 @@ describe("the connection dialog", () => {
 
     expect(screen.queryByLabelText("Password")).toBeNull();
     expect(document.body.innerHTML).not.toContain("s3cr3t");
+  });
+});
+
+/**
+ * The widths are written once per change, from an effect.
+ *
+ * They were written inside the updater passed to setState. An updater has to
+ * be pure, and StrictMode enforces that by calling it twice in development —
+ * so every arrow key on the divider was two synchronous writes to storage,
+ * and key repeat is about thirty of them a second.
+ */
+describe("remembering how wide the panes are", () => {
+  it("writes them once for one change", async () => {
+    const wrote = vi.spyOn(Storage.prototype, "setItem");
+
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+
+    const divider = await screen.findByRole("separator", { name: "Navigator width" });
+    wrote.mockClear();
+
+    fireEvent.keyDown(divider, { key: "ArrowRight" });
+
+    await waitFor((): void => {
+      expect(wrote).toHaveBeenCalledTimes(1);
+    });
+
+    wrote.mockRestore();
   });
 });

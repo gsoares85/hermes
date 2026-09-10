@@ -158,6 +158,26 @@ export function App(): React.JSX.Element {
     };
   }, [connection, versions]);
 
+  // Written from an effect rather than from inside the updater above.
+  //
+  // An updater has to be pure, and StrictMode calls it twice in development to
+  // say so — which made every arrow key on a divider two synchronous writes to
+  // storage, with key repeat running at about thirty a second.
+  //
+  // Not on the first render: what is in state then is what was just read out of
+  // storage, and writing it straight back is a write that says nothing.
+  const remembered = useRef(true);
+
+  useEffect((): void => {
+    if (remembered.current) {
+      remembered.current = false;
+
+      return;
+    }
+
+    rememberPanes(panes);
+  }, [panes]);
+
   // One answer for the three questions the markup below would otherwise ask
   // separately, because they are not independent: everything on the sides
   // belongs to an open connection, the production mark most of all.
@@ -296,12 +316,7 @@ export function App(): React.JSX.Element {
       production={shown.production}
       panes={panes}
       onPane={(side, pane): void => {
-        setPanes((held): Record<Side, Pane> => {
-          const next = { ...held, [side]: pane };
-          rememberPanes(next);
-
-          return next;
-        });
+        setPanes((held): Record<Side, Pane> => ({ ...held, [side]: pane }));
       }}
       toolbar={
         <Toolbar
