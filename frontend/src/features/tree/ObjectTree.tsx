@@ -13,12 +13,14 @@ import {
 import type { ObjectRef } from "../../api/object";
 
 import {
+  abandoned,
   around,
+  asking,
+  needsAsking,
   objectOf,
   refOf,
   rootKey,
   visibleRows,
-  type Level,
   type Levels,
   type Row,
 } from "./rows";
@@ -65,12 +67,27 @@ export function ObjectTree({
   // stops work nobody is waiting for any more.
   const running = useRef(new Map<string, CancellablePromise<NodeView[]>>());
 
+  // How many times each node has been asked about.
+  //
+  // A handler writes the level only when its own request is still the current
+  // one for that node. Without it, replacing a request lets the older one's
+  // rejection land after the newer one has already set the level, and the level
+  // ends up describing a question nobody asked.
+  const era = useRef(new Map<string, number>());
+
   const ask = useCallback(
     (key: string, filter: TreeFilter): void => {
       const inFlight = running.current;
-      if (inFlight.has(key)) {
-        return;
-      }
+
+      // A request already running for this node is replaced rather than left to
+      // win. Dropping the new one was the earlier shape, and it meant that
+      // widening the filter — deleting a character — left the level holding the
+      // answer to the narrower question until the next keystroke.
+      void inFlight.get(key)?.cancel();
+
+      const mine = (era.current.get(key) ?? 0) + 1;
+      era.current.set(key, mine);
+      const current = (): boolean => era.current.get(key) === mine;
 
       setLevels((held): Levels => ({ ...held, [key]: asking(held[key]) }));
 
@@ -79,10 +96,22 @@ export function ObjectTree({
 
       request
         .then((nodes): void => {
-          setLevels((held): Levels => ({ ...held, [key]: { state: "ready", nodes, error: "" } }));
+          if (current()) {
+            setLevels((held): Levels => ({ ...held, [key]: { state: "ready", nodes, error: "" } }));
+          }
         })
         .catch((err: unknown): void => {
+          if (!current()) {
+            return;
+          }
+
+          // Nobody is waiting for this any more. The level must not be left
+          // saying it is still being asked for: reopening the node would find
+          // it neither missing nor failed, ask for nothing, and show a spinner
+          // for the rest of the session.
           if (wasCancelled(err)) {
+            setLevels((held): Levels => giveUp(held, key));
+
             return;
           }
 
@@ -92,7 +121,9 @@ export function ObjectTree({
           }));
         })
         .finally((): void => {
-          inFlight.delete(key);
+          if (inFlight.get(key) === request) {
+            inFlight.delete(key);
+          }
         });
     },
     [connectionId],
@@ -152,7 +183,7 @@ export function ObjectTree({
       // Asked when it is opened, and asked again when what is there failed
       // last time: reopening a node that could not be read is how a person
       // retries, and answering the old failure would make the tree look stuck.
-      if (!expanded.has(row.key) && (row.level === undefined || row.level.state === "failed")) {
+      if (!expanded.has(row.key) && needsAsking(row.level)) {
         ask(row.key, settled);
       }
     },
@@ -373,6 +404,15 @@ function Marked({ name, text }: { name: string; text: string }): React.JSX.Eleme
  * What was already there is kept: a node being refreshed shows what it held
  * until the answer lands, instead of emptying and filling again.
  */
-function asking(held: Level | undefined): Level {
-  return { state: "asking", nodes: held?.nodes ?? [], error: "" };
+/** Applies to the map what a level becomes once nobody is waiting for it. */
+function giveUp(held: Levels, key: string): Levels {
+  const level = abandoned(held[key]);
+  if (level !== undefined) {
+    return { ...held, [key]: level };
+  }
+
+  // Rebuilt without the key rather than deleted out of a copy. What makes the
+  // node ask again is there being no level for it at all, and the linter is
+  // right that a computed delete is a poor way to say so.
+  return Object.fromEntries(Object.entries(held).filter(([held]): boolean => held !== key));
 }

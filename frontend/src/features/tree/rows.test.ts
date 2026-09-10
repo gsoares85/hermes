@@ -2,7 +2,19 @@ import { describe, expect, it } from "vitest";
 
 import type { NodeView } from "../../api/tree";
 
-import { around, keyOf, matches, objectOf, refOf, rootKey, visibleRows, type Levels } from "./rows";
+import {
+  abandoned,
+  around,
+  asking,
+  keyOf,
+  matches,
+  needsAsking,
+  objectOf,
+  refOf,
+  rootKey,
+  visibleRows,
+  type Levels,
+} from "./rows";
 
 function node(name: string, expandable = false): NodeView {
   return { kind: expandable ? "schema" : "table", name, expandable };
@@ -153,5 +165,44 @@ describe("visible rows", () => {
 
   it("is empty until the root has arrived", () => {
     expect(names({}, [], "")).toEqual([]);
+  });
+});
+
+describe("what a level may do next", () => {
+  it("keeps the rows it already had while the next answer is on the way", () => {
+    const held = ready([node("daily_revenue")]);
+
+    expect(asking(held)).toEqual({ state: "asking", nodes: [node("daily_revenue")], error: "" });
+    expect(asking(undefined)).toEqual({ state: "asking", nodes: [], error: "" });
+  });
+
+  it("asks for a level nobody has asked for, and for one that failed last time", () => {
+    expect(needsAsking(undefined)).toBe(true);
+    expect(needsAsking({ state: "failed", nodes: [], error: "no" })).toBe(true);
+  });
+
+  it("does not ask again for a level it already has", () => {
+    expect(needsAsking(ready([node("daily_revenue")]))).toBe(false);
+  });
+
+  // The bug this pair exists for. Collapsing a node stops the request, and a
+  // level left saying it is still being fetched is a level nothing will ever
+  // ask for again: reopening the node finds it neither missing nor failed, so
+  // it asks for nothing and the row shows a spinner for the rest of the
+  // session.
+  it("never leaves a level saying it is still being asked for", () => {
+    expect(needsAsking(asking(undefined))).toBe(false);
+    expect(abandoned(asking(undefined))).toBeUndefined();
+    expect(needsAsking(abandoned(asking(undefined)))).toBe(true);
+  });
+
+  // What was already on screen is not thrown away for having been abandoned.
+  // The rows are still the ones the server sent; only the answer nobody waited
+  // for is gone.
+  it("goes back to the rows it had when there were some", () => {
+    const abandonedLevel = abandoned(asking(ready([node("daily_revenue")])));
+
+    expect(abandonedLevel).toEqual({ state: "ready", nodes: [node("daily_revenue")], error: "" });
+    expect(needsAsking(abandonedLevel)).toBe(false);
   });
 });

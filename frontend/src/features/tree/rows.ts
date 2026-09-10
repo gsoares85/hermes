@@ -157,3 +157,45 @@ export function objectOf(key: string): ObjectRef | null {
 
   return { database, schema, name };
 }
+
+/**
+ * The level a node is in while its children are on the way.
+ *
+ * Whatever it already held stays: a level that emptied itself to say it was
+ * working would make the tree jump every time somebody changed the filter, and
+ * the rows it is showing are still the ones the server sent last time.
+ */
+export function asking(held: Level | undefined): Level {
+  return { state: "asking", nodes: held?.nodes ?? [], error: "" };
+}
+
+/**
+ * What a level becomes when nobody is waiting for it any more.
+ *
+ * Collapsing a node stops the request it had in flight, and the answer never
+ * arrives — so something has to take the level out of "asking", or it stays
+ * there for the rest of the session. A level left that way is worse than a
+ * failed one: needsAsking finds it neither missing nor failed, so reopening the
+ * node asks for nothing at all and the row shows a spinner forever.
+ *
+ * A level that had rows keeps them and goes back to ready; one that never had
+ * any is dropped, so that opening the node asks again.
+ */
+export function abandoned(held: Level | undefined): Level | undefined {
+  if (held === undefined || held.nodes.length === 0) {
+    return undefined;
+  }
+
+  return { state: "ready", nodes: held.nodes, error: "" };
+}
+
+/**
+ * Whether the children of a node have to be asked for.
+ *
+ * A level nobody has asked for, and one whose last attempt failed — reopening a
+ * node that could not be read is how a person retries, and answering the old
+ * failure would make the tree look stuck.
+ */
+export function needsAsking(level: Level | undefined): boolean {
+  return level === undefined || level.state === "failed";
+}
