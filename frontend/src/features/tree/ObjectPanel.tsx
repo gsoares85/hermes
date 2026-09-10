@@ -11,6 +11,8 @@ import {
 import { wasCancelled, type CancellablePromise } from "../../api/tree";
 import { Icon, type IconName } from "../../ui/Icon";
 
+import { saidOf } from "./columns";
+
 type Tab = "properties" | "ddl";
 
 /**
@@ -262,7 +264,12 @@ function Properties({ shown }: { shown: PropertiesView }): React.JSX.Element {
                 </span>
                 <span className="panel__column-type">
                   {column.type}
-                  {column.notNull && <span className="panel__flag"> not null</span>}
+                  {saidOf(column).map((said) => (
+                    <span key={said} className="panel__flag">
+                      {" "}
+                      {said}
+                    </span>
+                  ))}
                 </span>
               </li>
             ))}
