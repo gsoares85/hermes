@@ -11,6 +11,7 @@ import {
   matches,
   needsAsking,
   objectOf,
+  parentOf,
   refOf,
   rootKey,
   toggling,
@@ -295,5 +296,30 @@ describe("what to ask again when typing settles", () => {
 
   it("asks a root that was never loaded", () => {
     expect(askAgain(new Map(), new Set())).toEqual([rootKey]);
+  });
+});
+
+describe("moving up a level", () => {
+  // Arrow Left on a closed row moves to the row that holds it, which in a flat
+  // list is the nearest row above at a smaller depth. There is no parent
+  // pointer to follow: the tree is a list and nesting is a number on a row.
+  const rows = (): Row[] =>
+    visibleRows(loaded(), new Set(["analytics", keyOf("analytics", "reporting")]), "");
+
+  it("finds the row that holds a child", () => {
+    const shown = rows();
+
+    // analytics · reporting · daily_revenue · invoice_id_seq · public
+    expect(parentOf(shown, 2)).toBe(1);
+    expect(parentOf(shown, 3)).toBe(1);
+    expect(parentOf(shown, 1)).toBe(0);
+  });
+
+  it("leaves a row at the top level where it is", () => {
+    expect(parentOf(rows(), 0)).toBe(0);
+  });
+
+  it("answers the index it was given when there is no such row", () => {
+    expect(parentOf([], 3)).toBe(3);
   });
 });

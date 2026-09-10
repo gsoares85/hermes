@@ -250,3 +250,30 @@ export function toggling(row: Row, expanded: ReadonlySet<string>): Toggling {
 export function needsAsking(level: Level | undefined): boolean {
   return level === undefined || level.state === "failed";
 }
+
+/**
+ * The row that holds the one at this index, for moving up a level.
+ *
+ * The nearest row above it at a smaller depth. There is no parent pointer to
+ * follow, and that is the shape rather than an omission: the tree is a flat list
+ * and nesting is a number on a row, which is what lets a virtualiser count what
+ * it can skip.
+ *
+ * A row already at the top level, and an index naming no row, answer themselves
+ * — the caller moves nowhere rather than off the ends.
+ */
+export function parentOf(rows: readonly Row[], index: number): number {
+  const row = rows[index];
+  if (row === undefined) {
+    return index;
+  }
+
+  for (let above = index - 1; above >= 0; above--) {
+    const candidate = rows[above];
+    if (candidate !== undefined && candidate.depth < row.depth) {
+      return above;
+    }
+  }
+
+  return index;
+}

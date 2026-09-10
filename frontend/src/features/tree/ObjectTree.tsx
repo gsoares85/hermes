@@ -18,6 +18,7 @@ import {
   askAgain,
   asking,
   objectOf,
+  parentOf,
   refOf,
   rootKey,
   toggling,
@@ -268,6 +269,17 @@ export function ObjectTree({
   const rows = useMemo((): Row[] => visibleRows(levels, expanded, text), [levels, expanded, text]);
   const root = levels.get(rootKey);
 
+  // The row the keyboard is on. Only rendered rows exist in the DOM, so Tab
+  // cannot reach an offscreen one and every row being tabbable would mean
+  // tabbing through a schema of five thousand: one row is tabbable, the arrows
+  // move which, and the virtualiser is told to render the target first.
+  const [active, setActive] = useState(0);
+  const focused = rows.length === 0 ? -1 : Math.min(active, rows.length - 1);
+
+  // Set when the keyboard moved, so that focus follows the row rather than
+  // being stolen from wherever somebody clicked.
+  const following = useRef(false);
+
   const scroller = useRef<HTMLDivElement>(null);
   // The rule warns that the React Compiler will skip memoizing a component that
   // calls this, because the virtualiser returns functions that cannot be
@@ -284,6 +296,101 @@ export function ObjectTree({
     estimateSize: (): number => 26,
     overscan: 12,
   });
+
+  const moveTo = useCallback(
+    (index: number): void => {
+      if (rows.length === 0) {
+        return;
+      }
+
+      const bounded = Math.max(0, Math.min(index, rows.length - 1));
+
+      following.current = true;
+      setActive(bounded);
+      virtualiser.scrollToIndex(bounded);
+    },
+    [rows.length, virtualiser],
+  );
+
+  // Runs after every render rather than on a change of the active row, and that
+  // is what makes it work: scrolling to a row that was offscreen renders it one
+  // or more paints later, and an effect that only watched the index would look
+  // for it before it existed. The flag is what stops this stealing focus back
+  // on every unrelated render.
+  useEffect((): void => {
+    if (!following.current) {
+      return;
+    }
+
+    const line = scroller.current?.querySelector<HTMLElement>(
+      `[data-index="${String(focused)}"] .tree__line`,
+    );
+
+    if (line) {
+      following.current = false;
+      line.focus();
+    }
+  });
+
+  const onKey = useCallback(
+    (event: React.KeyboardEvent, row: Row, index: number): void => {
+      const move = (to: number): void => {
+        event.preventDefault();
+        moveTo(to);
+      };
+
+      switch (event.key) {
+        case "Enter":
+        case " ":
+          event.preventDefault();
+          pick(row);
+
+          return;
+        case "ArrowDown":
+          move(index + 1);
+
+          return;
+        case "ArrowUp":
+          move(index - 1);
+
+          return;
+        case "Home":
+          move(0);
+
+          return;
+        case "End":
+          move(rows.length - 1);
+
+          return;
+        case "ArrowRight":
+          event.preventDefault();
+
+          // Opens a closed node, and steps into an open one — which is the row
+          // below it, because a child follows its parent in the list.
+          if (row.expanded) {
+            moveTo(index + 1);
+          } else {
+            toggle(row);
+          }
+
+          return;
+        case "ArrowLeft":
+          event.preventDefault();
+
+          // Closes an open node, and steps out of a closed one.
+          if (row.expanded) {
+            toggle(row);
+          } else {
+            moveTo(parentOf(rows, index));
+          }
+
+          return;
+        default:
+          return;
+      }
+    },
+    [moveTo, pick, rows, toggle],
+  );
 
   return (
     <section className="tree" aria-label="Objects">
@@ -347,8 +454,15 @@ export function ObjectTree({
                   row={row}
                   text={text}
                   selected={row.key === picked}
+                  tabbable={item.index === focused}
                   onToggle={toggle}
-                  onPick={pick}
+                  onPick={(picking): void => {
+                    setActive(item.index);
+                    pick(picking);
+                  }}
+                  onKey={(event): void => {
+                    onKey(event, row, item.index);
+                  }}
                 />
               </div>
             );
@@ -364,14 +478,18 @@ function TreeRow({
   row,
   text,
   selected,
+  tabbable,
   onToggle,
   onPick,
+  onKey,
 }: {
   row: Row;
   text: string;
   selected: boolean;
+  tabbable: boolean;
   onToggle: (row: Row) => void;
   onPick: (row: Row) => void;
+  onKey: (event: React.KeyboardEvent) => void;
 }): React.JSX.Element {
   const asking = row.level?.state === "asking";
   const failed = row.level?.state === "failed";
@@ -384,14 +502,11 @@ function TreeRow({
         onPick(row);
       }}
       // A row is not a control, but clicking one selects it, and a person who
-      // cannot use a mouse has to be able to do the same thing.
-      onKeyDown={(event): void => {
-        if (event.key === "Enter") {
-          onPick(row);
-        }
-      }}
+      // cannot use a mouse has to be able to do the same thing — and to reach
+      // every row, including the ones the virtualiser has not drawn.
+      onKeyDown={onKey}
       role="treeitem"
-      tabIndex={0}
+      tabIndex={tabbable ? 0 : -1}
       aria-level={row.depth + 1}
       aria-selected={selected}
     >
