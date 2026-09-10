@@ -75,6 +75,22 @@ type CatalogService struct {
 	// connection and database. See cacheOn for why the key is both.
 	caching sync.Mutex
 	caches  map[string]*catalog.Cache
+
+	// listed is the databases each connection may open, as the server last
+	// said, and it is what stops a name invented on the other side of this
+	// boundary becoming a pool.
+	//
+	// Opening a database contacts nothing — the promise the connection layer
+	// makes and keeps — so an invented name lands in the connection's map with
+	// a live pool behind it: a health-check goroutine and up to four
+	// connections against somebody's server, per name, until the connection is
+	// closed. A loop on the frontend grows that without limit.
+	//
+	// Refreshed whenever the root of the tree is drawn, which is where the list
+	// comes from anyway, so a database created after Hermes started is
+	// browsable as soon as somebody looks at the server again.
+	listing sync.Mutex
+	listed  map[string]map[string]bool
 }
 
 // NewCatalogService creates the service bound to the frontend.
@@ -107,20 +123,24 @@ func (s *CatalogService) Children(ctx context.Context, id string, node NodeRef,
 	case node.Database == "" && node.Schema != "":
 		return nil, fmt.Errorf("the schema %s was asked for without a database", node.Schema)
 	case node.Database == "":
-		return s.databases(ctx, connection)
+		return s.databases(ctx, id, connection)
 	case node.Schema == "":
-		return s.schemas(ctx, connection, node.Database, filter)
+		return s.schemas(ctx, id, connection, node.Database, filter)
 	default:
-		return s.objects(ctx, connection, node, filter)
+		return s.objects(ctx, id, connection, node, filter)
 	}
 }
 
 // databases answers the databases of the server, which is the root of the tree.
-func (s *CatalogService) databases(ctx context.Context, connection *conn.Connection) ([]NodeView, error) {
+func (s *CatalogService) databases(ctx context.Context, id string,
+	connection *conn.Connection,
+) ([]NodeView, error) {
 	found, err := connection.Databases(ctx)
 	if err != nil {
 		return nil, explain(connection, err)
 	}
+
+	s.record(id, found)
 
 	children := make([]NodeView, 0, len(found))
 	for _, database := range found {
@@ -130,16 +150,64 @@ func (s *CatalogService) databases(ctx context.Context, connection *conn.Connect
 	return children, nil
 }
 
+// record keeps what this connection may open, replacing what was there: the
+// list is the server's answer, and a database dropped since the last look is
+// one nobody should be able to browse into either.
+func (s *CatalogService) record(id string, found []string) {
+	known := make(map[string]bool, len(found))
+	for _, database := range found {
+		known[database] = true
+	}
+
+	s.listing.Lock()
+	defer s.listing.Unlock()
+
+	if s.listed == nil {
+		s.listed = map[string]map[string]bool{}
+	}
+	s.listed[id] = known
+}
+
+// opens refuses a database this connection cannot open.
+//
+// The list is the server's, asked for once per connection and refreshed every
+// time the root of the tree is drawn. A connection nobody has expanded yet is
+// asked here rather than refused, so that a window which opens a panel before
+// it opens the tree still works.
+func (s *CatalogService) opens(ctx context.Context, id string,
+	connection *conn.Connection, database string,
+) error {
+	s.listing.Lock()
+	known, asked := s.listed[id]
+	s.listing.Unlock()
+
+	if !asked {
+		if _, err := s.databases(ctx, id, connection); err != nil {
+			return err
+		}
+
+		s.listing.Lock()
+		known = s.listed[id]
+		s.listing.Unlock()
+	}
+
+	if !known[database] {
+		return fmt.Errorf("this connection cannot open a database called %q", database)
+	}
+
+	return nil
+}
+
 // schemas answers the schemas of one database.
 //
 // Of that database and not of the one the connection was opened on: PostgreSQL
 // does not reach across databases, so this goes through the connection the
 // database has of its own. Asking the first one would answer the schemas of the
 // wrong database, and nothing about the answer would say so.
-func (s *CatalogService) schemas(ctx context.Context, connection *conn.Connection,
+func (s *CatalogService) schemas(ctx context.Context, id string, connection *conn.Connection,
 	database string, filter TreeFilter,
 ) ([]NodeView, error) {
-	lister, done, err := s.listerOn(ctx, connection, database)
+	lister, done, err := s.listerOn(ctx, id, connection, database)
 	if err != nil {
 		return nil, err
 	}
@@ -172,10 +240,10 @@ func (s *CatalogService) schemas(ctx context.Context, connection *conn.Connectio
 //
 // Nothing is expandable: this version has no level below an object, and an
 // arrow that opens onto nothing is worse than no arrow.
-func (s *CatalogService) objects(ctx context.Context, connection *conn.Connection,
+func (s *CatalogService) objects(ctx context.Context, id string, connection *conn.Connection,
 	node NodeRef, filter TreeFilter,
 ) ([]NodeView, error) {
-	lister, done, err := s.listerOn(ctx, connection, node.Database)
+	lister, done, err := s.listerOn(ctx, id, connection, node.Database)
 	if err != nil {
 		return nil, err
 	}
@@ -200,9 +268,13 @@ func (s *CatalogService) objects(ctx context.Context, connection *conn.Connectio
 // The session is held for one level and no longer. A session kept is a
 // connection out of the pool, and a tree that leaks one per expansion runs a
 // server out of connections by being browsed.
-func (s *CatalogService) listerOn(ctx context.Context, connection *conn.Connection,
+func (s *CatalogService) listerOn(ctx context.Context, id string, connection *conn.Connection,
 	database string,
 ) (*catalog.Lister, func(), error) {
+	if err := s.opens(ctx, id, connection, database); err != nil {
+		return nil, nil, err
+	}
+
 	on, err := connection.Database(ctx, database)
 	if err != nil {
 		return nil, nil, secret.Error(err)

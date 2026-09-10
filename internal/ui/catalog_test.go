@@ -577,3 +577,47 @@ func TestAFailureThatIsNotTheServersIsNotDiagnosedAsOne(t *testing.T) {
 		t.Fatalf("expanding a database that works: %v", err)
 	}
 }
+
+// The window may only browse into a database this boundary said exists.
+//
+// Opening a database contacts nothing — that is the promise the connection
+// layer makes and keeps — so a name invented on the other side of the boundary
+// lands in the connection's map with a live pool behind it: a health-check
+// goroutine and up to four connections against somebody's server, per name,
+// until the connection is closed. A loop on the frontend, bug or otherwise,
+// grows that without limit and nothing here would have said no.
+func TestBrowsingIntoADatabaseThatDoesNotExistIsRefused(t *testing.T) {
+	t.Parallel()
+
+	held := newSessions()
+	tree, id := openTree(t, treeOpener{sessions: held, rows: [][]any{{"public"}}})
+
+	invented := ui.NodeRef{Database: "not a database of this server"}
+
+	if _, err := tree.Children(t.Context(), id, invented, ui.TreeFilter{}); err == nil {
+		t.Error("a database the server never listed answered a level")
+	}
+
+	if held.get(invented.Database) != nil {
+		t.Error("a pool was opened against a database the server never listed")
+	}
+
+	if _, err := tree.Properties(t.Context(), id, ui.ObjectRef{
+		Database: invented.Database, Schema: "sales", Name: "orders",
+	}); err == nil {
+		t.Error("a database the server never listed answered properties")
+	}
+}
+
+// And into one it did. The check is worth nothing if it refuses everything, and
+// this is the assertion that would fail if it did.
+func TestBrowsingIntoADatabaseThatExistsIsAllowed(t *testing.T) {
+	t.Parallel()
+
+	held := newSessions()
+	tree, id := openTree(t, treeOpener{sessions: held, rows: [][]any{{"public"}}})
+
+	if _, err := tree.Children(t.Context(), id, ui.NodeRef{Database: "app"}, ui.TreeFilter{}); err != nil {
+		t.Errorf("expanding a database the server listed: %v", err)
+	}
+}

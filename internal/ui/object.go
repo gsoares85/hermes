@@ -178,6 +178,10 @@ func (s *CatalogService) cacheOn(ctx context.Context, id, database string) (*cat
 		return nil, err
 	}
 
+	if err = s.opens(ctx, id, connection, database); err != nil {
+		return nil, err
+	}
+
 	on, err := connection.Database(ctx, database)
 	if err != nil {
 		return nil, secret.Error(err)
@@ -211,6 +215,10 @@ func (s *CatalogService) cacheOn(ctx context.Context, id, database string) (*cat
 // reason, and what it holds is every column, index and view definition of every
 // schema somebody looked at.
 func (s *CatalogService) forget(id string) {
+	s.listing.Lock()
+	delete(s.listed, id)
+	s.listing.Unlock()
+
 	s.caching.Lock()
 	defer s.caching.Unlock()
 
