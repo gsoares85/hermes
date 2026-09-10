@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 
+import { Icon } from "../../ui/Icon";
+
 /**
  * The frame the connection form is shown in.
  *
@@ -55,6 +57,16 @@ export function ConnectionDialog({
         }
       }}
     >
+      {/*
+        Escape closes it and so does a click on the backdrop, and neither of
+        those is on screen. A modal with no visible way out is a modal somebody
+        looks for a way out of — and the two that exist are things you have to
+        already know.
+      */}
+      <button type="button" className="dialog__close" aria-label="Close" onClick={onClose}>
+        <Icon name="close" />
+      </button>
+
       {children}
     </dialog>
   );
