@@ -209,23 +209,31 @@ export function App(): React.JSX.Element {
     void connectingWith.current?.cancel();
   }
 
-  // Closing the tab is what closes the connection: the pools per database and
-  // the cached catalog on the Go side go with it. The tab goes whether or not
-  // the call worked — the only way it fails is the connection being gone
-  // already, and a tab pointing at one that is not there is worse than either.
-  async function close(id: string): Promise<void> {
-    try {
-      await closeConnection(id);
-    } catch {
-      // Already closed. Nothing to say and nothing to go back to.
-    }
-
+  /**
+   * Closing the tab is what closes the connection: the pools per database and
+   * the cached catalog on the Go side go with it.
+   *
+   * The tab goes first, and the connection is released behind it. Close is not
+   * cancellable and closes the pools, which blocks until the connections in use
+   * come back — so waiting for it would leave the × doing nothing visible for
+   * as long as a listing of a large schema takes to finish, on the interaction
+   * people do fastest.
+   *
+   * Nothing is waited for afterwards either. The only way releasing fails is
+   * the connection being gone already, and a tab pointing at one that is not
+   * there is worse than either.
+   */
+  function close(id: string): void {
     setTabs((held): Tabs => closed(held, id));
     setPicked((held): ReadonlyMap<string, ObjectRef> => {
       const next = new Map(held);
       next.delete(id);
 
       return next;
+    });
+
+    closeConnection(id).catch((): void => {
+      // Already closed. Nothing to say and nothing to go back to.
     });
   }
 
@@ -249,7 +257,7 @@ export function App(): React.JSX.Element {
           }}
           onDisconnect={(): void => {
             if (connection !== null) {
-              void close(connection.id);
+              close(connection.id);
             }
           }}
         />
@@ -327,7 +335,7 @@ export function App(): React.JSX.Element {
                 setTabs((held): Tabs => ({ ...held, activeId: id }));
               }}
               onClose={(id): void => {
-                void close(id);
+                close(id);
               }}
             />
           )}
