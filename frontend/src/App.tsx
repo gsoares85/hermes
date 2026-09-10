@@ -1,10 +1,17 @@
 import { useEffect, useState } from "react";
 
 import { fetchAppInfo, unknownAppInfo, type AppInfo } from "./api/appInfo";
-import { closeConnection, type StatusView } from "./api/connection";
+import {
+  closeConnection,
+  savedConnections,
+  type SavedView,
+  type StatusView,
+} from "./api/connection";
 import type { ObjectRef } from "./api/object";
+import { ConnectionDialog } from "./features/connection/ConnectionDialog";
 import { ConnectionForm } from "./features/connection/ConnectionForm";
 import { ConnectionMarks } from "./features/connection/ConnectionMarks";
+import { SavedConnections } from "./features/connection/SavedConnections";
 import { ObjectPanel } from "./features/tree/ObjectPanel";
 import { ObjectTree } from "./features/tree/ObjectTree";
 import type { Pane, Side } from "./features/workspace/panes";
@@ -31,6 +38,39 @@ export function App(): React.JSX.Element {
   // of it. Read lazily: it touches storage, and doing that on every render to
   // throw the answer away is work for nothing.
   const [panes, setPanes] = useState<Record<Side, Pane>>(rememberedPanes);
+  // The saved connections, listed in the sidebar. They live here rather than in
+  // the form because the sidebar shows them and the form changes them, and two
+  // copies of a list are two answers to the same question.
+  const [saved, setSaved] = useState<SavedView[]>([]);
+  const [savedNotice, setSavedNotice] = useState("");
+  // The connection the dialog is about, and the number of times it has been
+  // opened. The count is the key of the form, so opening the dialog on another
+  // connection builds a fresh one rather than trying to keep fields somebody is
+  // typing into in step with a prop.
+  const [editing, setEditing] = useState<SavedView | null>(null);
+  const [opened, setOpened] = useState(0);
+  const [dialog, setDialog] = useState(false);
+
+  // Declared above the effect that calls it for the reason the chain below is
+  // written out rather than awaited: a function declaration hoists, so written
+  // underneath nothing would show that the effect captures the copy from the
+  // first render.
+  function reload(): Promise<void> {
+    return savedConnections()
+      .then((connections): void => {
+        setSaved(connections);
+        setSavedNotice("");
+      })
+      .catch((err: unknown): void => {
+        // A file somebody broke by hand is reported rather than swallowed: an
+        // empty list looks exactly like never having saved anything.
+        setSavedNotice(String(err));
+      });
+  }
+
+  useEffect(() => {
+    void reload();
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -86,33 +126,64 @@ export function App(): React.JSX.Element {
         </>
       }
       objects={
-        shown.objects && connection !== null ? (
-          <ObjectTree connectionId={connection.id} onSelect={setSelected} />
-        ) : null
+        <>
+          <SavedConnections
+            connections={saved}
+            openId={connection?.id ?? ""}
+            notice={savedNotice}
+            onPick={(pick): void => {
+              setEditing(pick);
+              setOpened((times): number => times + 1);
+              setDialog(true);
+            }}
+            onNew={(): void => {
+              setEditing(null);
+              setOpened((times): number => times + 1);
+              setDialog(true);
+            }}
+          />
+
+          {shown.objects && connection !== null && (
+            <ObjectTree connectionId={connection.id} onSelect={setSelected} />
+          )}
+        </>
       }
       main={
-        <ConnectionForm
-          onOpened={(opened): void => {
-            // The one that was open is released rather than dropped. Replacing
-            // the state alone would leave it open on the Go side, with its pools
-            // per database and its cached catalog, and nothing left out here
-            // holding the identifier that could close it. The form disables
-            // Connect while one is open, so this is the belt to that braces —
-            // and it is the half that does not depend on a second component
-            // agreeing about what is open.
-            setConnection((held): StatusView | null => {
-              if (held !== null && held.id !== opened?.id) {
-                void closeConnection(held.id).catch((): void => {
-                  // Already gone, or the window is closing. There is nothing
-                  // useful to say and nothing to go back to.
-                });
-              }
-
-              return opened;
-            });
-            setSelected(null);
+        <ConnectionDialog
+          open={dialog}
+          onClose={(): void => {
+            setDialog(false);
           }}
-        />
+        >
+          <ConnectionForm
+            key={opened}
+            editing={editing}
+            connection={connection}
+            onChanged={(): void => {
+              void reload();
+            }}
+            onOpened={(status): void => {
+              // The one that was open is released rather than dropped. Replacing
+              // the state alone would leave it open on the Go side, with its pools
+              // per database and its cached catalog, and nothing left out here
+              // holding the identifier that could close it. The form disables
+              // Connect while one is open, so this is the belt to that braces —
+              // and it is the half that does not depend on a second component
+              // agreeing about what is open.
+              setConnection((held): StatusView | null => {
+                if (held !== null && held.id !== status?.id) {
+                  void closeConnection(held.id).catch((): void => {
+                    // Already gone, or the window is closing. There is nothing
+                    // useful to say and nothing to go back to.
+                  });
+                }
+
+                return status;
+              });
+              setSelected(null);
+            }}
+          />
+        </ConnectionDialog>
       }
       details={
         shown.details && connection !== null && selected !== null ? (
