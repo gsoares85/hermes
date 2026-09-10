@@ -1,3 +1,5 @@
+import { useEffect, useRef } from "react";
+
 import { Icon } from "../../ui/Icon";
 import { ConnectionMarks } from "../connection/ConnectionMarks";
 
@@ -10,6 +12,18 @@ import { moved, type Tabs } from "./tabs";
  * told this is a tablist expects the arrows to move between the tabs and only
  * one of them to be a stop on the way through the window. Saying `tablist` and
  * leaving every tab tabbable would be an announcement the strip does not honour.
+ *
+ * The two halves of that promise are easy to keep separately and wrong apart.
+ * A tab needs a wrapper — its close control cannot live inside it, because a
+ * button inside a button is not markup a browser will give you — and a wrapper
+ * with no role of its own comes between the tablist and the tab, so the strip
+ * stops owning them and a reader stops being told "tab 2 of 3".
+ *
+ * And in a roving tabindex the focus has to travel with the selection. Moving
+ * one without the other leaves the focus ring on a tab that has just been given
+ * tabIndex -1 while a different tab is selected, so the next Tab press leaves
+ * the strip from somewhere nobody chose. It is the half nobody sees: the
+ * selection visibly moves, which is what a checklist looks at.
  */
 export function TabBar({
   tabs,
@@ -20,18 +34,45 @@ export function TabBar({
   onPick: (id: string) => void;
   onClose: (id: string) => void;
 }): React.JSX.Element {
+  const buttons = useRef(new Map<string, HTMLButtonElement>());
+  // Whether the selection last moved because of a key. Clicking already put
+  // the focus where the person put it, and taking it again would move it for
+  // somebody who never asked.
+  const byKey = useRef(false);
+
+  useEffect((): void => {
+    if (!byKey.current) {
+      return;
+    }
+
+    byKey.current = false;
+    buttons.current.get(tabs.activeId)?.focus();
+  }, [tabs.activeId]);
+
   return (
     <div className="tabs" role="tablist" aria-label="Open connections">
       {tabs.open.map((tab): React.JSX.Element => {
         const active = tab.id === tabs.activeId;
+        const name = tab.name === "" ? tab.host : tab.name;
 
         return (
-          <div key={tab.id} className={active ? "tabs__tab is-active" : "tabs__tab"}>
+          <div
+            key={tab.id}
+            role="presentation"
+            className={active ? "tabs__tab is-active" : "tabs__tab"}
+          >
             <button
               type="button"
               role="tab"
               aria-selected={active}
               tabIndex={active ? 0 : -1}
+              ref={(element): void => {
+                if (element === null) {
+                  buttons.current.delete(tab.id);
+                } else {
+                  buttons.current.set(tab.id, element);
+                }
+              }}
               onClick={(): void => {
                 onPick(tab.id);
               }}
@@ -42,11 +83,12 @@ export function TabBar({
                 }
 
                 event.preventDefault();
+                byKey.current = true;
                 onPick(to);
               }}
             >
               <Icon name="database" />
-              <span className="tabs__name">{tab.name === "" ? tab.host : tab.name}</span>
+              <span className="tabs__name">{name}</span>
               <ConnectionMarks environment={tab.environment} readOnly={tab.readOnly} />
             </button>
 
@@ -58,7 +100,7 @@ export function TabBar({
             <button
               type="button"
               className="tabs__close"
-              aria-label={`Close ${tab.name === "" ? tab.host : tab.name}`}
+              aria-label={`Close ${name}`}
               onClick={(): void => {
                 onClose(tab.id);
               }}
