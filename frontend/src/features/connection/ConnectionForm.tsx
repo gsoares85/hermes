@@ -217,6 +217,18 @@ export function ConnectionForm({
       // The identifier comes back on a connection that had none, and keeping it
       // is what makes the next save an edit instead of a second copy.
       update("id", stored.id);
+
+      // A connection opened before it was saved came back with no saved
+      // identifier, because there was nothing saved to point at. Now there is,
+      // and the tab has to be told: without this the row that has just appeared
+      // in the sidebar belongs to a server that is already open and nothing
+      // knows it, so clicking it opens a second connection with a second pool
+      // and a second cached catalog.
+      if (status !== null && status.savedId !== stored.id) {
+        const linked = { ...status, savedId: stored.id };
+        setStatus(linked);
+        onOpened(linked);
+      }
       // The password is in the keychain now. Leaving it in the state of a page
       // that is redrawn and inspected buys nothing.
       update("password", "");

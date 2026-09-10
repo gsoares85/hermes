@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SavedView, StatusView } from "./api/connection";
@@ -169,5 +169,45 @@ describe("opening a server that already has a tab", () => {
     });
 
     expect(screen.getAllByRole("tab", { name: /First/ })).toHaveLength(1);
+  });
+});
+
+/**
+ * A connection opened before it was saved.
+ *
+ * The state that comes back from opening one carries no saved identifier —
+ * there was nothing saved to point at. Saving it afterwards mints one, and if
+ * the tab is not told, the row that has just appeared in the sidebar belongs to
+ * a server that is already open and nothing knows it: clicking it opens a
+ * second connection, a second pool and a second tab.
+ */
+describe("saving a connection that was opened first", () => {
+  it("tells the tab which saved connection it came from", async () => {
+    backend.saved.mockReturnValue(cancellable([]));
+    backend.open.mockReturnValue(cancellable(status("c-new", "", "Ad hoc")));
+    backend.save.mockReturnValue(cancellable(saved("s9", "Ad hoc")));
+
+    render(<App />);
+
+    // The toolbar's, not the one at the head of the sidebar list.
+    fireEvent.click(
+      within(await screen.findByRole("banner")).getByRole("button", { name: "New connection" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }));
+    await screen.findByRole("tab", { name: /Ad hoc/ });
+
+    backend.saved.mockReturnValue(cancellable([saved("s9", "Ad hoc")]));
+    fireEvent.click(screen.getByRole("button", { name: "Save connection" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Close" }));
+
+    const row = await screen.findByRole("button", { name: /^Ad hoc/ });
+    backend.open.mockClear();
+    fireEvent.click(row);
+
+    await waitFor((): void => {
+      expect(screen.getAllByRole("tab", { name: /Ad hoc/ })).toHaveLength(1);
+    });
+    expect(backend.open).not.toHaveBeenCalled();
   });
 });
