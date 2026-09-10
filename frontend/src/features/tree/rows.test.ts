@@ -13,6 +13,7 @@ import {
   refOf,
   rootKey,
   visibleRows,
+  type Level,
   type Levels,
 } from "./rows";
 
@@ -20,17 +21,17 @@ function node(name: string, expandable = false): NodeView {
   return { kind: expandable ? "schema" : "table", name, expandable };
 }
 
-function ready(nodes: NodeView[]): Levels[string] {
+function ready(nodes: NodeView[]): Level {
   return { state: "ready", nodes, error: "" };
 }
 
 /** The tree the rest of these tests walk: one database, two schemas, one table. */
 function loaded(): Levels {
-  return {
-    [rootKey]: ready([node("analytics", true)]),
-    analytics: ready([node("reporting", true), node("public", true)]),
-    [keyOf("analytics", "reporting")]: ready([node("daily_revenue"), node("invoice_id_seq")]),
-  };
+  return new Map([
+    [rootKey, ready([node("analytics", true)])],
+    ["analytics", ready([node("reporting", true), node("public", true)])],
+    [keyOf("analytics", "reporting"), ready([node("daily_revenue"), node("invoice_id_seq")])],
+  ]);
 }
 
 function names(levels: Levels, expanded: string[], text: string): string[] {
@@ -124,10 +125,10 @@ describe("visible rows", () => {
   // else, which is what lets the row say it is working without the tree jumping
   // about when the answer lands.
   it("draws a node that is still being asked for without anything under it", () => {
-    const levels: Levels = {
-      [rootKey]: ready([node("analytics", true)]),
-      analytics: { state: "asking", nodes: [], error: "" },
-    };
+    const levels: Levels = new Map([
+      [rootKey, ready([node("analytics", true)])],
+      ["analytics", { state: "asking", nodes: [], error: "" }],
+    ]);
 
     expect(names(levels, ["analytics"], "")).toEqual(["analytics"]);
   });
@@ -137,7 +138,7 @@ describe("visible rows", () => {
   // from, and a row that only learned about it on expansion could not say that
   // the last attempt to open it had failed.
   it("hands each row the level of what is under it, and undefined until it arrives", () => {
-    const unopened: Levels = { [rootKey]: ready([node("analytics", true)]) };
+    const unopened: Levels = new Map([[rootKey, ready([node("analytics", true)])]]);
 
     expect(visibleRows(unopened, new Set([]), "")[0]?.level).toBeUndefined();
     expect(visibleRows(loaded(), new Set([]), "")[0]?.level?.state).toBe("ready");
@@ -164,7 +165,23 @@ describe("visible rows", () => {
   });
 
   it("is empty until the root has arrived", () => {
-    expect(names({}, [], "")).toEqual([]);
+    expect(names(new Map(), [], "")).toEqual([]);
+  });
+
+  // A database really can be called constructor, toString or __proto__: they are
+  // legal quoted identifiers, and the key of a database is its bare name. Held
+  // in a plain object, a level nobody has loaded for one of those answers
+  // whatever Object.prototype has under that name — so the walk descends into a
+  // function, reads undefined nodes and throws, and needsAsking sees something
+  // that is neither missing nor failed and asks for nothing.
+  it("treats a name that collides with a prototype member as an ordinary key", () => {
+    for (const hostile of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      const levels: Levels = new Map([[rootKey, ready([node(hostile, true)])]]);
+
+      expect(levels.get(hostile)).toBeUndefined();
+      expect(needsAsking(levels.get(hostile))).toBe(true);
+      expect(names(levels, [hostile], "")).toEqual([hostile]);
+    }
   });
 });
 

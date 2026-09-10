@@ -21,6 +21,7 @@ import {
   refOf,
   rootKey,
   visibleRows,
+  type Level,
   type Levels,
   type Row,
 } from "./rows";
@@ -54,7 +55,7 @@ export function ObjectTree({
   connectionId: string;
   onSelect: (object: ObjectRef | null) => void;
 }): React.JSX.Element {
-  const [levels, setLevels] = useState<Levels>({});
+  const [levels, setLevels] = useState<Levels>(new Map());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [text, setText] = useState("");
   const [system, setSystem] = useState(false);
@@ -89,7 +90,7 @@ export function ObjectTree({
       era.current.set(key, mine);
       const current = (): boolean => era.current.get(key) === mine;
 
-      setLevels((held): Levels => ({ ...held, [key]: asking(held[key]) }));
+      setLevels((held): Levels => written(held, key, asking(held.get(key))));
 
       const request = children(connectionId, refOf(key), filter);
       inFlight.set(key, request);
@@ -97,7 +98,7 @@ export function ObjectTree({
       request
         .then((nodes): void => {
           if (current()) {
-            setLevels((held): Levels => ({ ...held, [key]: { state: "ready", nodes, error: "" } }));
+            setLevels((held): Levels => written(held, key, { state: "ready", nodes, error: "" }));
           }
         })
         .catch((err: unknown): void => {
@@ -115,10 +116,9 @@ export function ObjectTree({
             return;
           }
 
-          setLevels((held): Levels => ({
-            ...held,
-            [key]: { state: "failed", nodes: [], error: String(err) },
-          }));
+          setLevels((held): Levels =>
+            written(held, key, { state: "failed", nodes: [], error: String(err) }),
+          );
         })
         .finally((): void => {
           if (inFlight.get(key) === request) {
@@ -134,7 +134,7 @@ export function ObjectTree({
   useEffect((): (() => void) => {
     const inFlight = running.current;
 
-    setLevels({});
+    setLevels(new Map());
     setExpanded(new Set());
     ask(rootKey, noFilter);
 
@@ -221,12 +221,12 @@ export function ObjectTree({
 
       setSettled(filter);
       setLevels((held): Levels => {
-        const kept: Levels = {};
+        const kept = new Map<string, Level>();
 
         for (const key of [rootKey, ...open]) {
-          const level = held[key];
+          const level = held.get(key);
           if (level !== undefined) {
-            kept[key] = level;
+            kept.set(key, level);
           }
         }
 
@@ -247,7 +247,7 @@ export function ObjectTree({
   // this walks everything that has been loaded. With five thousand objects open
   // that is five thousand rows rebuilt per frame to draw the twenty that moved.
   const rows = useMemo((): Row[] => visibleRows(levels, expanded, text), [levels, expanded, text]);
-  const root = levels[rootKey];
+  const root = levels.get(rootKey);
 
   const scroller = useRef<HTMLDivElement>(null);
   // The rule warns that the React Compiler will skip memoizing a component that
@@ -440,15 +440,25 @@ function Marked({ name, text }: { name: string; text: string }): React.JSX.Eleme
  * What was already there is kept: a node being refreshed shows what it held
  * until the answer lands, instead of emptying and filling again.
  */
+/** A copy of the levels with one of them set. */
+function written(held: Levels, key: string, level: Level): Levels {
+  const next = new Map(held);
+  next.set(key, level);
+
+  return next;
+}
+
 /** Applies to the map what a level becomes once nobody is waiting for it. */
 function giveUp(held: Levels, key: string): Levels {
-  const level = abandoned(held[key]);
+  const level = abandoned(held.get(key));
   if (level !== undefined) {
-    return { ...held, [key]: level };
+    return written(held, key, level);
   }
 
-  // Rebuilt without the key rather than deleted out of a copy. What makes the
-  // node ask again is there being no level for it at all, and the linter is
-  // right that a computed delete is a poor way to say so.
-  return Object.fromEntries(Object.entries(held).filter(([held]): boolean => held !== key));
+  // Removed rather than left behind: what makes the node ask again is there
+  // being no level for it at all.
+  const next = new Map(held);
+  next.delete(key);
+
+  return next;
 }

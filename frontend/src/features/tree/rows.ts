@@ -15,8 +15,18 @@ export interface Level {
   error: string;
 }
 
-/** Every level the tree has asked for, by the key of the node it belongs to. */
-export type Levels = Record<string, Level>;
+/**
+ * Every level the tree has asked for, by the key of the node it belongs to.
+ *
+ * A Map rather than an object, because the keys come from the server. A database
+ * really can be called `constructor`, `toString` or `__proto__` — they are legal
+ * quoted identifiers — and the key of a database is its bare name. Held in a
+ * plain object, a level nobody has loaded for one of those answers whatever
+ * Object.prototype has under that name: the walk below would descend into a
+ * function and read undefined nodes, and needsAsking would see something that is
+ * neither missing nor failed and ask for nothing.
+ */
+export type Levels = ReadonlyMap<string, Level>;
 
 /**
  * One drawn line of the tree.
@@ -117,7 +127,7 @@ export function around(
  */
 export function visibleRows(levels: Levels, expanded: ReadonlySet<string>, text: string): Row[] {
   const walk = (parentKey: string, depth: number): Row[] => {
-    const level = levels[parentKey];
+    const level = levels.get(parentKey);
     if (level === undefined) {
       return [];
     }
@@ -130,7 +140,7 @@ export function visibleRows(levels: Levels, expanded: ReadonlySet<string>, text:
       const below = open ? walk(key, depth + 1) : [];
 
       if (matches(node.name, text) || below.length > 0) {
-        rows.push({ key, node, depth, expanded: open, level: levels[key] });
+        rows.push({ key, node, depth, expanded: open, level: levels.get(key) });
         rows.push(...below);
       }
     }
