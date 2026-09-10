@@ -262,8 +262,6 @@ export function ConnectionForm({
 
   return (
     <section className="connection">
-      <h2>Connect</h2>
-
       {vault !== null && <VaultBanner vault={vault} />}
 
       <div className="connection__paste">

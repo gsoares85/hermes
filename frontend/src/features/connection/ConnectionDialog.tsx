@@ -13,13 +13,23 @@ import { Icon } from "../../ui/Icon";
  * It is opened imperatively because that is the only way the modal behaviour is
  * available — an `open` attribute gives a dialog that is merely visible, with
  * the page behind it still focusable.
+ *
+ * **Every way of closing it closes the element, and the element tells React.**
+ * The button and the backdrop call close() on the dialog exactly as Escape
+ * does; the `close` event that follows is the one place the state is set. The
+ * other arrangement — the button setting state and an effect closing the
+ * element — has two paths to the same outcome and only one of them is the one
+ * the browser already takes, so the two can disagree and the visible one is the
+ * button that does nothing.
  */
 export function ConnectionDialog({
   open,
+  title,
   onClose,
   children,
 }: {
   open: boolean;
+  title: string;
   onClose: () => void;
   children: React.ReactNode;
 }): React.JSX.Element {
@@ -42,7 +52,7 @@ export function ConnectionDialog({
     <dialog
       ref={frame}
       className="dialog"
-      aria-label="Connection"
+      aria-labelledby="dialog-title"
       // Escape closes a modal dialog without asking anybody, so the state that
       // says it is open has to hear about it or the two disagree — and the next
       // attempt to open it would find the element already closed and the state
@@ -53,21 +63,26 @@ export function ConnectionDialog({
       // without measuring where the pointer was.
       onClick={(event): void => {
         if (event.target === frame.current) {
-          onClose();
+          frame.current.close();
         }
       }}
     >
-      {/*
-        Escape closes it and so does a click on the backdrop, and neither of
-        those is on screen. A modal with no visible way out is a modal somebody
-        looks for a way out of — and the two that exist are things you have to
-        already know.
-      */}
-      <button type="button" className="dialog__close" aria-label="Close" onClick={onClose}>
-        <Icon name="close" />
-      </button>
+      <div className="dialog__header">
+        <h2 id="dialog-title">{title}</h2>
 
-      {children}
+        <button
+          type="button"
+          className="dialog__close"
+          aria-label="Close"
+          onClick={(): void => {
+            frame.current?.close();
+          }}
+        >
+          <Icon name="close" />
+        </button>
+      </div>
+
+      <div className="dialog__body">{children}</div>
     </dialog>
   );
 }

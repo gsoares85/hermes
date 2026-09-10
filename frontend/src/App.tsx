@@ -253,6 +253,7 @@ export function App(): React.JSX.Element {
 
           <ConnectionDialog
             open={dialog}
+            title={editing === null ? "New connection" : "Edit connection"}
             onClose={(): void => {
               setDialog(false);
             }}
