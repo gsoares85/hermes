@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { fetchAppInfo, unknownAppInfo, type AppInfo } from "./api/appInfo";
 import {
@@ -8,7 +8,9 @@ import {
   savedConnections,
   serverVersion,
   wasCancelled,
+  type CancellablePromise,
   type SavedView,
+  type StatusView,
 } from "./api/connection";
 import type { ObjectRef } from "./api/object";
 import { Icon } from "./ui/Icon";
@@ -75,6 +77,10 @@ export function App(): React.JSX.Element {
   // person, so the row says what it is doing and the list stops taking clicks
   // rather than quietly queueing them.
   const [connecting, setConnecting] = useState("");
+  // The request that is opening it, so that it can be abandoned. A ref rather
+  // than state: nothing on screen is drawn from it, and a render per keystroke
+  // of a value only a handler reads is work for nothing.
+  const connectingWith = useRef<CancellablePromise<StatusView> | null>(null);
 
   const connection = activeOf(tabs);
   const selected = connection === null ? null : (picked.get(connection.id) ?? null);
@@ -179,14 +185,28 @@ export function App(): React.JSX.Element {
     setConnecting(saved.id);
     setSavedNotice("");
 
+    // Held rather than awaited straight away: the binding is cancellable the
+    // whole way down to the driver, and awaiting it here would throw the only
+    // handle away. Without it the row says "Connecting…" for as long as the
+    // server takes, the list refuses clicks for all of it, and there is
+    // nothing anybody can do — the state the form's Stop button was written to
+    // prevent.
+    const opening = openConnection(formFromSaved(saved));
+    connectingWith.current = opening;
+
     try {
-      const status = await openConnection(formFromSaved(saved));
+      const status = await opening;
       setTabs((held): Tabs => openedTab(held, status));
     } catch (err) {
       setSavedNotice(wasCancelled(err) ? "Connecting was stopped." : String(err));
     } finally {
+      connectingWith.current = null;
       setConnecting("");
     }
+  }
+
+  function stopConnecting(): void {
+    void connectingWith.current?.cancel();
   }
 
   // Closing the tab is what closes the connection: the pools per database and
@@ -245,6 +265,7 @@ export function App(): React.JSX.Element {
               void connect(pick);
             }}
             onManage={openDialog}
+            onStop={stopConnecting}
             onNew={(): void => {
               openDialog(null);
             }}

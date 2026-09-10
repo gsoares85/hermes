@@ -25,6 +25,7 @@ export function SavedConnections({
   notice,
   onConnect,
   onManage,
+  onStop,
   onNew,
 }: {
   connections: SavedView[];
@@ -36,6 +37,8 @@ export function SavedConnections({
   notice: string;
   onConnect: (connection: SavedView) => void;
   onManage: (connection: SavedView) => void;
+  /** Abandon the one being opened. */
+  onStop: () => void;
   onNew: () => void;
 }): React.JSX.Element {
   return (
@@ -85,17 +88,42 @@ export function SavedConnections({
                   </span>
                 </button>
 
-                <button
-                  type="button"
-                  className="saved__manage"
-                  aria-label={`Manage ${name}`}
-                  title={`Manage ${name}`}
-                  onClick={(): void => {
-                    onManage(connection);
-                  }}
-                >
-                  <Icon name="manage" />
-                </button>
+                {/*
+                  While a row is opening, the control beside it stops it
+                  instead of opening the form.
+
+                  Both of those cannot be true at once — nobody edits a
+                  connection halfway through opening it — and the slot is
+                  already where the eye is. What matters is that the way out
+                  exists at all: a server can take as long as it likes to
+                  answer, a host that drops rather than refuses runs to the
+                  operating system's timeout, and reading a password can be a
+                  keychain dialog waiting for a person. The list stops taking
+                  clicks for all of it.
+                */}
+                {opening ? (
+                  <button
+                    type="button"
+                    className="saved__stop"
+                    aria-label={`Stop connecting to ${name}`}
+                    title={`Stop connecting to ${name}`}
+                    onClick={onStop}
+                  >
+                    <Icon name="close" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="saved__manage"
+                    aria-label={`Manage ${name}`}
+                    title={`Manage ${name}`}
+                    onClick={(): void => {
+                      onManage(connection);
+                    }}
+                  >
+                    <Icon name="manage" />
+                  </button>
+                )}
               </li>
             );
           })}

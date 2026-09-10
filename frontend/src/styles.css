@@ -859,6 +859,29 @@ body {
   color: var(--text);
 }
 
+/*
+  The way out of a connection that is taking its time.
+
+  It does not hide until hovered the way Manage does. Manage is a thing you go
+  looking for; this is the answer to "why is nothing happening", and a way out
+  that has to be found first is not one.
+*/
+.saved__stop {
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  flex: none;
+  padding: 0.25rem;
+}
+
+.saved__stop:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
 .saved__name {
   align-items: center;
   display: flex;
