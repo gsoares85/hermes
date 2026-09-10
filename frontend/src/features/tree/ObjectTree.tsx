@@ -15,6 +15,7 @@ import type { ObjectRef } from "../../api/object";
 import {
   abandoned,
   around,
+  askAgain,
   asking,
   objectOf,
   refOf,
@@ -213,13 +214,15 @@ export function ObjectTree({
     [ask, expanded, settled, supersede],
   );
 
-  // What is open, so that the effect below can read it without running every
-  // time somebody expands something.
+  // What is open and what has been loaded, so that the effect below can read
+  // both without running every time somebody expands something.
   const openNow = useRef<ReadonlySet<string>>(expanded);
+  const heldNow = useRef<Levels>(levels);
 
   useEffect((): void => {
     openNow.current = expanded;
-  }, [expanded]);
+    heldNow.current = levels;
+  }, [expanded, levels]);
 
   // Typing settles, and then the open levels are asked for again with what was
   // typed. This is the half of the filter the server does, and it is a
@@ -249,7 +252,7 @@ export function ObjectTree({
         return kept;
       });
 
-      for (const key of open) {
+      for (const key of askAgain(heldNow.current, open)) {
         ask(key, filter);
       }
     }, settleDelay);

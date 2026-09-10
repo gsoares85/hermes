@@ -5,6 +5,7 @@ import type { NodeView } from "../../api/tree";
 import {
   abandoned,
   around,
+  askAgain,
   asking,
   keyOf,
   matches,
@@ -266,5 +267,33 @@ describe("toggling a node", () => {
     const interrupted = abandoned(asking(undefined));
 
     expect(toggling(row("analytics", true, interrupted), new Set())).toBe("open-and-ask");
+  });
+});
+
+describe("what to ask again when typing settles", () => {
+  const open = new Set(["analytics", keyOf("analytics", "reporting")]);
+
+  it("asks every open node again, because the filter narrows what a level holds", () => {
+    expect(askAgain(loaded(), open).sort()).toEqual([...open].sort());
+  });
+
+  // The databases are deliberately not narrowed by the pattern — hiding the
+  // database that holds the match would hide the answer — so asking for them
+  // again on every settle would be a query per keystroke that cannot change its
+  // own answer.
+  it("leaves a root that answered alone", () => {
+    expect(askAgain(loaded(), open)).not.toContain(rootKey);
+  });
+
+  // A root that failed has no other way back: nothing else re-asks it, so
+  // without this the tree shows the failure until the connection is reopened.
+  it("asks a root that failed again", () => {
+    const broken: Levels = new Map([[rootKey, { state: "failed", nodes: [], error: "no" }]]);
+
+    expect(askAgain(broken, new Set())).toEqual([rootKey]);
+  });
+
+  it("asks a root that was never loaded", () => {
+    expect(askAgain(new Map(), new Set())).toEqual([rootKey]);
   });
 });

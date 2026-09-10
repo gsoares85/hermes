@@ -200,6 +200,25 @@ export function abandoned(held: Level | undefined): Level | undefined {
 }
 
 /**
+ * Which levels to ask for again once typing settles.
+ *
+ * Every open node, because the filter narrows what a level holds at the server.
+ *
+ * The root only when it needs asking. The databases are deliberately not
+ * narrowed by the pattern — hiding the database that holds the match would hide
+ * the answer along with the noise — so re-asking a root that answered would be a
+ * query per keystroke that cannot change its own answer. A root that failed is
+ * the other case: nothing else ever re-asks it, so without this the tree shows
+ * that failure until the connection is reopened, and typing is the one thing a
+ * person does next.
+ */
+export function askAgain(levels: Levels, expanded: ReadonlySet<string>): string[] {
+  const open = [...expanded];
+
+  return needsAsking(levels.get(rootKey)) ? [rootKey, ...open] : open;
+}
+
+/**
  * What clicking the arrow on a row does.
  *
  * A value rather than a branch inside the component, because the interesting
