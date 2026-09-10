@@ -7,7 +7,8 @@ import { ConnectionForm } from "./features/connection/ConnectionForm";
 import { ConnectionMarks } from "./features/connection/ConnectionMarks";
 import { ObjectPanel } from "./features/tree/ObjectPanel";
 import { ObjectTree } from "./features/tree/ObjectTree";
-import { initial, type Pane, type Side } from "./features/workspace/panes";
+import type { Pane, Side } from "./features/workspace/panes";
+import { rememberedPanes, rememberPanes } from "./features/workspace/remembered";
 import { showing } from "./features/workspace/regions";
 import { Workspace } from "./features/workspace/Workspace";
 
@@ -26,8 +27,10 @@ export function App(): React.JSX.Element {
   const [selected, setSelected] = useState<ObjectRef | null>(null);
   // How wide the side panes are and whether they are showing. It is the layout
   // of the window rather than anything about a connection, so it outlives every
-  // connection opened in this window.
-  const [panes, setPanes] = useState<Record<Side, Pane>>(initial);
+  // connection opened in this window — and, through the storage below, this run
+  // of it. Read lazily: it touches storage, and doing that on every render to
+  // throw the answer away is work for nothing.
+  const [panes, setPanes] = useState<Record<Side, Pane>>(rememberedPanes);
 
   useEffect(() => {
     let active = true;
@@ -58,7 +61,12 @@ export function App(): React.JSX.Element {
       production={shown.production}
       panes={panes}
       onPane={(side, pane): void => {
-        setPanes((held): Record<Side, Pane> => ({ ...held, [side]: pane }));
+        setPanes((held): Record<Side, Pane> => {
+          const next = { ...held, [side]: pane };
+          rememberPanes(next);
+
+          return next;
+        });
       }}
       toolbar={
         <>
