@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -346,5 +347,79 @@ func TestListingCostsTheSameNumberOfQueriesWhateverTheSchemaHolds(t *testing.T) 
 	const asks = 1
 	if one != asks {
 		t.Errorf("listing a schema costs %d queries, want %d", one, asks)
+	}
+}
+
+// A level bigger than this listing will carry is refused rather than truncated.
+//
+// The result of a level crosses to the window whole, so a schema with a
+// pathological number of objects in it — or a server answering a question
+// nobody can check — is memory this process has no bound on. Truncating would
+// be worse than refusing: the tree would show a number of objects nobody could
+// tell from all of them, which is a screen that lies rather than one that says
+// it cannot.
+//
+// The refusal names the filter, because narrowing is what the person can
+// actually do about it. Paging a level of this size is the keyset work of
+// another task.
+func TestALevelTooLargeToCarryIsRefused(t *testing.T) {
+	t.Parallel()
+
+	rows := make([][]any, 0, catalog.MaxLevel+1)
+	for i := range catalog.MaxLevel + 1 {
+		rows = append(rows, []any{fmt.Sprintf("table_%d", i), "r"})
+	}
+
+	server := &asked{rows: rows}
+
+	_, err := catalog.NewLister(server).Objects(t.Context(), catalog.NewName("sales"), "")
+	if !errors.Is(err, catalog.ErrLevelTooLarge) {
+		t.Fatalf("Objects() = %v, want ErrLevelTooLarge", err)
+	}
+
+	if !strings.Contains(err.Error(), "filter") {
+		t.Errorf("the refusal does not say what to do about it: %v", err)
+	}
+}
+
+// Exactly the cap is not too large. An off-by-one here refuses a level the
+// product promises to draw.
+func TestALevelExactlyAtTheCapIsCarried(t *testing.T) {
+	t.Parallel()
+
+	rows := make([][]any, 0, catalog.MaxLevel)
+	for i := range catalog.MaxLevel {
+		rows = append(rows, []any{fmt.Sprintf("table_%d", i), "r"})
+	}
+
+	objects, err := catalog.NewLister(&asked{rows: rows}).Objects(t.Context(), catalog.NewName("sales"), "")
+	if err != nil {
+		t.Fatalf("Objects() = %v, want the level carried", err)
+	}
+
+	if len(objects) != catalog.MaxLevel {
+		t.Errorf("carried %d objects, want %d", len(objects), catalog.MaxLevel)
+	}
+}
+
+// The server is asked to stop rather than trusted to. Draining a level of a
+// million rows to find out it was too big is the cost this is avoiding.
+func TestTheServerIsToldWhereToStop(t *testing.T) {
+	t.Parallel()
+
+	server := &asked{}
+	if _, err := catalog.NewLister(server).Objects(t.Context(), catalog.NewName("sales"), ""); err != nil {
+		t.Fatalf("listing the objects: %v", err)
+	}
+
+	if !strings.Contains(strings.ToUpper(server.sql[0]), "LIMIT") {
+		t.Errorf("the listing does not bound what the server sends: %s", server.sql[0])
+	}
+
+	// Crossed against the constant rather than read as a number somebody typed:
+	// the query carries the bound as a literal because LIMIT takes bigint, and
+	// this is what keeps that literal and MaxLevel from drifting apart.
+	if !strings.Contains(server.sql[0], strconv.Itoa(catalog.MaxLevel+1)) {
+		t.Errorf("the query does not stop one past the cap of %d: %s", catalog.MaxLevel, server.sql[0])
 	}
 }

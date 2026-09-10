@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -21,6 +22,33 @@ import (
 type Asker interface {
 	Query(ctx context.Context, sql string, args ...any) driver.Rows
 }
+
+// MaxLevel is the most names this listing will carry for one level.
+//
+// A level crosses to whoever asked for it whole, so without a bound the memory
+// one costs is whatever a server chooses to answer. The number is far past any
+// schema somebody browses on purpose — the performance budget of this product
+// is five thousand tables in a schema — and is there for the pathological case
+// and for a server nobody in this process can vouch for.
+//
+// A level over it is refused rather than truncated. Truncating would draw a
+// number of objects nobody could tell from all of them, which is a screen that
+// lies; refusing says what happened and what to do about it. Paging a level of
+// that size is the keyset work of another task.
+// The literal in the LIMIT of each query below is this plus one, and a test
+// crosses the two. One past the cap, so that a level of exactly MaxLevel is
+// carried and the one name over is what says the level is too big; a query
+// asking for the cap alone could not tell a schema of exactly MaxLevel from one
+// of a million.
+//
+// A literal rather than a parameter, which is the one place in this package
+// where that is the right answer: LIMIT takes bigint, every other value these
+// queries carry is text, and the oracle that proves them safe rebuilds each one
+// as a view with text substituted for every placeholder.
+const MaxLevel = 20000
+
+// ErrLevelTooLarge is a level this listing will not carry whole.
+var ErrLevelTooLarge = errors.New("the level holds more objects than Hermes will list at once")
 
 // Filter narrows a listing of schemas at the server.
 type Filter struct {
@@ -75,7 +103,8 @@ const listUserSchemas = `SELECT n.nspname
 	FROM pg_catalog.pg_namespace n
 	WHERE pg_catalog.strpos(pg_catalog.lower(n.nspname), pg_catalog.lower($1)) OPERATOR(pg_catalog.>) 0
 	  AND NOT (pg_catalog.strpos(n.nspname, 'pg_') OPERATOR(pg_catalog.=) 1
-	           OR n.nspname OPERATOR(pg_catalog.=) 'information_schema')`
+	           OR n.nspname OPERATOR(pg_catalog.=) 'information_schema')
+	LIMIT 20001`
 
 // listEverySchema is the same question without the exclusion.
 //
@@ -85,7 +114,8 @@ const listUserSchemas = `SELECT n.nspname
 // that read every query in this package.
 const listEverySchema = `SELECT n.nspname
 	FROM pg_catalog.pg_namespace n
-	WHERE pg_catalog.strpos(pg_catalog.lower(n.nspname), pg_catalog.lower($1)) OPERATOR(pg_catalog.>) 0`
+	WHERE pg_catalog.strpos(pg_catalog.lower(n.nspname), pg_catalog.lower($1)) OPERATOR(pg_catalog.>) 0
+	LIMIT 20001`
 
 // Schemas answers the schemas of the database this connection is on.
 //
@@ -127,6 +157,11 @@ func schemaNames(rows driver.Rows) ([]Name, error) {
 		return nil, fmt.Errorf("listing the schemas: %w", err)
 	}
 
+	if len(schemas) > MaxLevel {
+		return nil, fmt.Errorf("%w: this database holds more than %d schemas, so narrow the filter to see them",
+			ErrLevelTooLarge, MaxLevel)
+	}
+
 	slices.SortFunc(schemas, func(a, b Name) int { return strings.Compare(a.String(), b.String()) })
 
 	return schemas, nil
@@ -152,7 +187,8 @@ const listObjects = `SELECT c.relname, c.relkind
 	JOIN pg_catalog.pg_namespace n ON n.oid OPERATOR(pg_catalog.=) c.relnamespace
 	WHERE n.nspname OPERATOR(pg_catalog.=) $1
 	  AND c.relkind OPERATOR(pg_catalog.=) ANY (ARRAY['r', 'p', 'v', 'S'])
-	  AND pg_catalog.strpos(pg_catalog.lower(c.relname), pg_catalog.lower($2)) OPERATOR(pg_catalog.>) 0`
+	  AND pg_catalog.strpos(pg_catalog.lower(c.relname), pg_catalog.lower($2)) OPERATOR(pg_catalog.>) 0
+	LIMIT 20001`
 
 // Objects answers what a schema holds, as names and kinds.
 //
@@ -188,6 +224,11 @@ func (l *Lister) Objects(ctx context.Context, schema Name, pattern string) ([]Ob
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("listing the objects of %s: %w", schema, err)
+	}
+
+	if len(objects) > MaxLevel {
+		return nil, fmt.Errorf("%w: %s holds more than %d, so narrow the filter to see them",
+			ErrLevelTooLarge, schema, MaxLevel)
 	}
 
 	slices.SortFunc(objects, compareObjects)
