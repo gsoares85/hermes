@@ -249,7 +249,57 @@ func (c Config) Validate() error {
 		return err
 	}
 
-	return c.noCredentials("options", c.Options)
+	if err := c.noCredentials("options", c.Options); err != nil {
+		return err
+	}
+
+	return c.oneOpinionOnWriting()
+}
+
+// oneOpinionOnWriting refuses a connection that says two things about whether
+// it may write.
+//
+// Params and Options are free-form text that the person types, the file keeps
+// and the server is handed, so both can carry a second opinion about the one
+// setting the read-only mark exists to state: the parameter itself, or a libpq
+// options string carrying -c default_transaction_read_only=off. As it happens
+// the server applies them in the order that keeps the mark winning, which is an
+// internal detail of PostgreSQL that nothing here fixes and nobody should have
+// to know to trust the mark.
+//
+// Refused rather than quietly overridden in either direction. Someone who typed
+// it believes it is taking effect, and a protection that depends on which of
+// two settings the server reads first is not a protection.
+func (c Config) oneOpinionOnWriting() error {
+	if !c.ReadOnly {
+		return nil
+	}
+
+	for key := range c.Params {
+		if strings.EqualFold(strings.TrimSpace(key), readOnlyParam) {
+			return InvalidField{
+				Field: "params." + key,
+				Problem: fmt.Sprintf(
+					"this connection is marked read-only, so params.%s would be a second answer to the same question — clear one of them",
+					key),
+			}
+		}
+	}
+
+	for key, value := range c.Options {
+		if !strings.Contains(strings.ToLower(value), readOnlyParam) {
+			continue
+		}
+
+		return InvalidField{
+			Field: "options." + key,
+			Problem: fmt.Sprintf(
+				"this connection is marked read-only, so options.%s must not set %s as well — clear one of them",
+				key, readOnlyParam),
+		}
+	}
+
+	return nil
 }
 
 // noCredentials refuses a secret smuggled in under a free-form key.

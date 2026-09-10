@@ -409,3 +409,52 @@ func TestAnUnmarkedConnectionStillWrites(t *testing.T) {
 		t.Errorf("an unmarked connection was refused a write: %v", err)
 	}
 }
+
+// The read-only mark reaches every database browsed under the connection.
+//
+// Another database is another pool, opened from the same configuration, and a
+// pool opened without the parameter would be a connection somebody can write
+// through — reached in two clicks from a connection they marked precisely so
+// that they could not. The unit test proves the parameter is on the target;
+// this proves the server acts on it, which is the only claim that matters.
+func TestBrowsingCarriesTheReadOnlyMarkToTheServer(t *testing.T) {
+	t.Parallel()
+
+	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
+
+	config, err := conn.ParseURI(instance.DSN)
+	if err != nil {
+		t.Fatalf("parsing the DSN: %v", err)
+	}
+	config.ReadOnly = true
+
+	connection, err := conn.Open(t.Context(), postgres.New(), config)
+	if err != nil {
+		t.Fatalf("opening the connection: %v", err)
+	}
+	t.Cleanup(connection.Close)
+
+	// The maintenance database, which every server has and which is not the one
+	// the connection was opened on — so what is exercised is the second pool.
+	other, err := connection.Database(t.Context(), conn.MaintenanceDatabase)
+	if err != nil {
+		t.Fatalf("browsing to %s: %v", conn.MaintenanceDatabase, err)
+	}
+
+	session, err := other.Session(t.Context())
+	if err != nil {
+		t.Fatalf("checking out a session on %s: %v", conn.MaintenanceDatabase, err)
+	}
+	t.Cleanup(session.Close)
+
+	// DDL rather than an INSERT, because it needs nothing to exist first and is
+	// refused by the same gate.
+	err = session.Exec(t.Context(), "CREATE TABLE browsed_write (id int)")
+	if err == nil {
+		t.Fatal("a database browsed from a read-only connection accepted a write")
+	}
+
+	if class, _ := driver.ClassOf(err); class != driver.FailureReadOnly {
+		t.Fatalf("class = %q, want %q (%v)", class, driver.FailureReadOnly, err)
+	}
+}
