@@ -501,6 +501,18 @@ func TestTheStateOfAConnectionSaysWhereItGoes(t *testing.T) {
 	if opened.Database != "hermes" || opened.User != "hermes" {
 		t.Errorf("database/user = %s/%s, want hermes/hermes", opened.Database, opened.User)
 	}
+
+	// By value, not by the name of a field.
+	//
+	// TestNothingReturnedCarriesACredential next door checks that no field is
+	// called anything like "password", and that is a different question: a
+	// field named Host holding a URI with the password in it passes it, and
+	// this is the first state built out of several fields of a conn.Config that
+	// does hold one. The rest of the address is not a secret — it is what the
+	// form was filled in with, minus the one field that is.
+	if rendered := renderAll(opened); strings.Contains(rendered, password) {
+		t.Errorf("the state of the connection carried the password: %s", rendered)
+	}
 }
 
 // The state of an open connection says which saved connection it came from.
