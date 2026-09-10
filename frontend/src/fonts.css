@@ -1,0 +1,71 @@
+/*
+ * The two typefaces the window is drawn in, bundled rather than fetched.
+ *
+ * The design they come from loads them from Google Fonts. That is fine for a
+ * page and wrong for this: Hermes is a desktop application that has to open on
+ * a laptop with no network, and a font that arrives over the wire is a window
+ * that looks different depending on whether somebody is on a train. These are
+ * woff2 files inside the binary.
+ *
+ * The faces are declared here rather than by importing the stylesheets the font
+ * package ships, and that is the difference between 120KB and 1.5MB. Those
+ * stylesheets cover every subset — Cyrillic, Greek, Vietnamese — in both woff
+ * and woff2, which came to seventy-four files for four weights. What is here is
+ * the latin subset, woff2 only, in exactly the weights that are used. Every
+ * webview this runs in has read woff2 for years.
+ *
+ * A glyph outside the subset falls through to the next family in the stack,
+ * per character, which is invisible and is the right outcome for the rare name
+ * that needs it.
+ *
+ * font-display: swap, because the fallback stack is a real stack: text is
+ * readable from the first paint rather than after a flash of nothing.
+ */
+
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("@fontsource/inter/files/inter-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("@fontsource/inter/files/inter-latin-500-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("@fontsource/inter/files/inter-latin-600-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("@fontsource/inter/files/inter-latin-700-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2") format("woff2");
+}

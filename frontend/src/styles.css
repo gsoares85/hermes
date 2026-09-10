@@ -43,12 +43,22 @@
   --production: #b42318;
   --production-surface: #fdeceb;
 
-  font-family:
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    sans-serif;
-  font-size: 14px;
+  /* Inter for the interface and JetBrains Mono for anything that is data
+     rather than prose — a column name, a type, a definition, a script. The
+     fallbacks matter: a font file that failed to load must leave a readable
+     window, not a serif one. */
+  --font-sans: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
+
+  font-family: var(--font-sans);
+
+  /* Thirteen rather than sixteen, and that is the density of the design rather
+     than a preference. A database window is a window full of names, types and
+     definitions: what it needs is more rows on screen, not larger ones. The
+     places that have to be read as prose — a diagnosis, an empty state — say so
+     themselves. */
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -484,6 +494,10 @@ body {
   white-space: nowrap;
 }
 
+.tree__name {
+  font-family: var(--font-mono);
+}
+
 .tree__name mark {
   background: #ffd43b55;
   border-radius: 2px;
@@ -545,6 +559,7 @@ body {
 }
 
 .panel__columns {
+  font-family: var(--font-mono);
   border-collapse: collapse;
   font-size: 0.9em;
   width: 100%;
@@ -560,6 +575,7 @@ body {
 
 .panel__notes,
 .panel__listing ul {
+  font-family: var(--font-mono);
   color: var(--text-muted);
   font-size: 0.9em;
   margin: 0;
@@ -574,6 +590,7 @@ body {
    than scrolling sideways: a statement cut off at the right edge is one nobody
    can check before running. */
 .panel__ddl {
+  font-family: var(--font-mono);
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -705,6 +722,7 @@ body {
 
 .saved__target {
   color: var(--text-muted);
+  font-family: var(--font-mono);
   font-size: 0.8em;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -810,6 +828,8 @@ body {
  */
 .workspace__origin {
   border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   color: var(--text-muted);
   flex: 0 0 auto;
   font-size: 0.8em;
@@ -834,6 +854,7 @@ body {
   display: flex;
   flex: 0 0 auto;
   gap: 2px;
+  height: 36px;
   overflow-x: auto;
   padding: 0 0.4rem;
 }
@@ -843,6 +864,8 @@ body {
   border-radius: 5px 5px 0 0;
   color: var(--text-muted);
   display: flex;
+  font-size: 0.85rem;
+  height: 28px;
   padding-right: 0.2rem;
 }
 
@@ -862,7 +885,7 @@ body {
   color: inherit;
   cursor: pointer;
   font: inherit;
-  padding: 0.35rem 0.5rem;
+  padding: 0 0.5rem;
 }
 
 .tabs__name {
