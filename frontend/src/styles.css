@@ -7,6 +7,7 @@
   color-scheme: light dark;
 
   --surface: #ffffff;
+  --panel: #f7f7f8;
   --surface-raised: #f1f1f4;
   --text: #17181c;
   --text-muted: #5f6169;
@@ -23,6 +24,14 @@
      failure that looks deliberate. */
   --accent: #6d5aed;
   --accent-text: #6d5aed;
+
+  /* The chrome of the window. Named here because two of them are read by the
+     script that drags the dividers, and a size that lives in one place is a
+     size that cannot disagree with itself. */
+  --toolbar-height: 48px;
+  --status-height: 28px;
+  --objects-width: 252px;
+  --details-width: 260px;
 
   /* The environment marks. Production is the one that has to stop somebody
      mid-keystroke, so it is the only one that is red, and the other two are
@@ -44,9 +53,11 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    /* The page and what is lifted off it. A third ground for the chrome that
-       frames them arrives with the panels that need it. */
+    /* Three grounds: the page, the chrome that frames it, and what is lifted
+       off the page. The chrome is darker than the page rather than lighter —
+       panels recede and content comes forward. */
     --surface: #1e1e24;
+    --panel: #18181d;
     --surface-raised: #232329;
     --text: #f3f4f6;
     --text-muted: #a1a1aa;
@@ -88,19 +99,92 @@ body {
   outline-offset: 1px;
 }
 
-.app {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
+/*
+ * The window: a toolbar across the top, a body of up to three columns, and a
+ * status bar across the bottom.
+ *
+ * minmax(0, 1fr) rather than 1fr on the body row, and min-height: 0 on every
+ * box below it. A grid or flex child is at least as tall as its content by
+ * default, which for a column holding a scroller means the scroller is as tall
+ * as everything it could scroll — and a virtualiser given an unbounded height
+ * draws every row it has loaded. That failure is silent: the benchmark in CI
+ * measures the listing on the Go side, not the drawing, so a schema of five
+ * thousand tables would go back to costing five thousand rows per repaint with
+ * nothing turning red.
+ */
+.workspace {
   background: var(--surface);
+  display: grid;
+  grid-template-rows: var(--toolbar-height) minmax(0, 1fr) var(--status-height);
+  height: 100vh;
 }
 
-.app__header {
+.workspace__toolbar {
+  align-items: center;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
   display: flex;
   gap: 1rem;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 1.5rem 1.5rem 0;
+  padding: 0 0.75rem;
+}
+
+.workspace__brand {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/*
+ * Flex rather than a grid of fixed columns, because two of the three are
+ * optional: with no connection open there is no navigator and no details, and a
+ * grid would keep their tracks and the empty space with them.
+ */
+.workspace__body {
+  display: flex;
+  min-height: 0;
+}
+
+.workspace__objects,
+.workspace__details {
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.workspace__objects {
+  border-right: 1px solid var(--border);
+  flex: 0 0 var(--objects-width);
+}
+
+.workspace__details {
+  border-left: 1px solid var(--border);
+  flex: 0 0 var(--details-width);
+}
+
+.workspace__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  padding: 1.5rem;
+}
+
+.workspace__status {
+  align-items: center;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  display: flex;
+  font-variant-numeric: tabular-nums;
+  gap: 1rem;
+  overflow: hidden;
+  padding: 0 0.75rem;
+  white-space: nowrap;
 }
 
 /*
@@ -108,28 +192,28 @@ body {
  *
  * It is on the window and not on a panel because the requirement is that a
  * production server be unmistakable wherever the person is looking, and every
- * panel is inside this. A band across the top and a coloured header are what
+ * panel is inside this. A band across the top and a coloured toolbar are what
  * survive being ignored: neither scrolls away, and neither has to be redrawn by
- * whichever screen is on top.
+ * whichever panel is on top.
  */
-.app--production {
+.workspace--production {
   border-top: 4px solid var(--production);
 }
 
-.app--production .app__header {
+.workspace--production .workspace__toolbar {
   background: var(--production-surface);
-  padding-bottom: 1rem;
 }
 
-.app__connection {
+.workspace__connection {
+  align-items: center;
+  color: var(--text-muted);
   display: flex;
   gap: 0.5rem;
-  align-items: center;
   margin: 0;
-  color: var(--text-muted);
+  margin-left: auto;
 }
 
-.app__connection-name {
+.workspace__connection-name {
   font-weight: 600;
   color: var(--text);
 }
@@ -177,41 +261,6 @@ body {
 .mark--read-only {
   background: var(--surface-raised);
   color: var(--text-muted);
-}
-
-.app__header h1 {
-  margin: 0;
-  font-size: 1.5rem;
-}
-
-.app__header p {
-  margin: 0.25rem 0 0;
-  color: var(--text-muted);
-}
-
-/*
- * min-height is what pins the footer. A flex item is sized by its content
- * before it is sized by the container, so a screen taller than the window used
- * to push the status bar past the bottom edge and take the version with it —
- * the one line that says which build is running is the one nobody can go and
- * look up. The overflow puts the scrollbar on this block instead of the page.
- */
-.app__main {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 1.5rem;
-}
-
-.app__status {
-  display: flex;
-  gap: 1rem;
-  justify-content: flex-end;
-  padding: 0.5rem 1.5rem;
-  border-top: 1px solid var(--border);
-  background: var(--surface-raised);
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
 }
 
 /*
@@ -456,15 +505,21 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  margin-top: 1.5rem;
-  max-width: 42rem;
+  min-height: 0;
+  padding: 0.5rem;
 }
 
+/*
+ * contain: strict includes contain: size, so this element is laid out as though
+ * it had no content at all: it takes the height the column gives it and never
+ * the height of the five thousand rows it could scroll. It is the reason the
+ * virtualiser can be trusted, and it is why it survives being moved out of a
+ * card of fixed height and into a panel that stretches.
+ */
 .tree__scroller {
-  border: 1px solid var(--border);
-  border-radius: 6px;
   contain: strict;
-  height: 24rem;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
 }
 
@@ -574,29 +629,14 @@ body {
   collapses to one column when the window is narrow, because a panel squeezed
   beside a tree shows neither.
 */
-.app__browser {
-  display: grid;
-  gap: 1.5rem;
-  grid-template-columns: minmax(0, 1fr);
-  margin-top: 1.5rem;
-}
-
-@media (min-width: 60rem) {
-  .app__browser {
-    grid-template-columns: minmax(0, 24rem) minmax(0, 1fr);
-  }
-}
-
-.tree {
-  margin-top: 0;
-  max-width: none;
-}
-
 .panel {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  min-height: 0;
   min-width: 0;
+  overflow: auto;
+  padding: 0.75rem;
 }
 
 .panel__header {

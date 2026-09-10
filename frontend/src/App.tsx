@@ -4,9 +4,11 @@ import { fetchAppInfo, unknownAppInfo, type AppInfo } from "./api/appInfo";
 import { closeConnection, type StatusView } from "./api/connection";
 import type { ObjectRef } from "./api/object";
 import { ConnectionForm } from "./features/connection/ConnectionForm";
-import { ConnectionMarks, isProduction } from "./features/connection/ConnectionMarks";
+import { ConnectionMarks } from "./features/connection/ConnectionMarks";
 import { ObjectPanel } from "./features/tree/ObjectPanel";
 import { ObjectTree } from "./features/tree/ObjectTree";
+import { showing } from "./features/workspace/regions";
+import { Workspace } from "./features/workspace/Workspace";
 
 export function App(): React.JSX.Element {
   const [info, setInfo] = useState<AppInfo>(unknownAppInfo);
@@ -41,30 +43,37 @@ export function App(): React.JSX.Element {
     };
   }, []);
 
-  // Drawn on the window rather than on a panel, and that is the requirement
-  // rather than a flourish: a production server has to be unmistakable wherever
-  // someone is looking, and every panel is inside this.
-  const production = connection !== null && isProduction(connection.environment);
+  // One answer for the three questions the markup below would otherwise ask
+  // separately, because they are not independent: everything on the sides
+  // belongs to an open connection, the production mark most of all.
+  const shown = showing(connection, selected);
 
   return (
-    <div className={production ? "app app--production" : "app"}>
-      <header className="app__header">
-        <div>
-          <h1>Hermes</h1>
-          <p>PostgreSQL, without the license.</p>
-        </div>
+    <Workspace
+      production={shown.production}
+      toolbar={
+        <>
+          <span className="workspace__brand">Hermes</span>
 
-        {connection !== null && (
-          <p className="app__connection">
-            {connection.name !== "" && (
-              <span className="app__connection-name">{connection.name}</span>
-            )}
-            <ConnectionMarks environment={connection.environment} readOnly={connection.readOnly} />
-          </p>
-        )}
-      </header>
-
-      <main className="app__main">
+          {connection !== null && (
+            <p className="workspace__connection">
+              {connection.name !== "" && (
+                <span className="workspace__connection-name">{connection.name}</span>
+              )}
+              <ConnectionMarks
+                environment={connection.environment}
+                readOnly={connection.readOnly}
+              />
+            </p>
+          )}
+        </>
+      }
+      objects={
+        shown.objects && connection !== null ? (
+          <ObjectTree connectionId={connection.id} onSelect={setSelected} />
+        ) : null
+      }
+      main={
         <ConnectionForm
           onOpened={(opened): void => {
             // The one that was open is released rather than dropped. Replacing
@@ -87,26 +96,21 @@ export function App(): React.JSX.Element {
             setSelected(null);
           }}
         />
-
-        {connection !== null && (
-          <div className="app__browser">
-            <ObjectTree connectionId={connection.id} onSelect={setSelected} />
-
-            {selected !== null && <ObjectPanel connectionId={connection.id} object={selected} />}
-          </div>
-        )}
-      </main>
-
-      {/*
-        The build that is running, named. A bare version string is ambiguous the
-        moment anything else in the window has one, and the commit and the date
-        stay in the tooltip: enough to identify a build exactly, without a
-        status bar that reads like a changelog.
-      */}
-      <footer className="app__status" title={`${info.commit} · ${info.date}`}>
-        <span>Hermes {info.version}</span>
-        <span>{info.platform}</span>
-      </footer>
-    </div>
+      }
+      details={
+        shown.details && connection !== null && selected !== null ? (
+          <ObjectPanel connectionId={connection.id} object={selected} />
+        ) : null
+      }
+      status={
+        // The build that is running, named. A bare version string is ambiguous
+        // the moment anything else in the window has one, and the commit and the
+        // date stay in the tooltip: enough to identify a build exactly, without
+        // a status bar that reads like a changelog.
+        <span className="workspace__build" title={`${info.commit} · ${info.date}`}>
+          Hermes {info.version} · {info.platform}
+        </span>
+      }
+    />
   );
 }
