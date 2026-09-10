@@ -742,10 +742,10 @@ body {
 /*
  * The saved connections, at the top of the navigator.
  *
- * It is a list of places rather than a list of controls: one target per row,
- * the whole row, and nothing small to aim at beside it. Removing a connection
- * lives in the dialog that opens when you pick one, where somebody has the
- * connection in front of them.
+ * A row connects, because that is what clicking the name of a server means.
+ * Managing one is the occasional job and is a small control beside the name;
+ * removing one lives inside that, where somebody has the connection in front of
+ * them rather than aiming at a target in a list.
  */
 .saved {
   border-bottom: 1px solid var(--border);
@@ -906,13 +906,31 @@ body {
   border-radius: 12px;
   box-shadow: 0 24px 60px rgb(0 0 0 / 55%);
   color: var(--text);
-  display: flex;
-  flex-direction: column;
   max-height: 85vh;
   max-width: min(46rem, 92vw);
   overflow: hidden;
   padding: 0;
   width: 100%;
+}
+
+/*
+ * The display goes on [open] and nowhere else, and this is not a nicety.
+ *
+ * A closed dialog is hidden by `display: none` in the user agent's stylesheet,
+ * and a rule written here is an author rule: it beats the user agent whatever
+ * the specificity says, because the cascade sorts by origin before it sorts by
+ * anything else. So `.dialog { display: flex }` made the dialog visible always
+ * — on screen from the moment the window opened, with showModal never called,
+ * which means no backdrop, no focus trap, nothing inert behind it, and Escape
+ * doing nothing because none of it was a modal. Closing it removed an attribute
+ * that changed nothing, so the button and the key both looked broken.
+ *
+ * Anything that lays a dialog out has to be conditioned on it being open, or it
+ * un-hides the thing the browser hid.
+ */
+.dialog[open] {
+  display: flex;
+  flex-direction: column;
 }
 
 .dialog::backdrop {
