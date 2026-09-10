@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { fetchAppInfo, unknownAppInfo, type AppInfo } from "./api/appInfo";
-import type { StatusView } from "./api/connection";
+import { closeConnection, type StatusView } from "./api/connection";
 import type { ObjectRef } from "./api/object";
 import { ConnectionForm } from "./features/connection/ConnectionForm";
 import { ConnectionMarks, isProduction } from "./features/connection/ConnectionMarks";
@@ -67,7 +67,23 @@ export function App(): React.JSX.Element {
       <main className="app__main">
         <ConnectionForm
           onOpened={(opened): void => {
-            setConnection(opened);
+            // The one that was open is released rather than dropped. Replacing
+            // the state alone would leave it open on the Go side, with its pools
+            // per database and its cached catalog, and nothing left out here
+            // holding the identifier that could close it. The form disables
+            // Connect while one is open, so this is the belt to that braces —
+            // and it is the half that does not depend on a second component
+            // agreeing about what is open.
+            setConnection((held): StatusView | null => {
+              if (held !== null && held.id !== opened?.id) {
+                void closeConnection(held.id).catch((): void => {
+                  // Already gone, or the window is closing. There is nothing
+                  // useful to say and nothing to go back to.
+                });
+              }
+
+              return opened;
+            });
             setSelected(null);
           }}
         />
