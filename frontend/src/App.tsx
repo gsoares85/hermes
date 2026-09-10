@@ -383,19 +383,31 @@ export function App(): React.JSX.Element {
               setDialog(false);
             }}
           >
-            <ConnectionForm
-              key={opened}
-              editing={editing}
-              connection={connection}
-              onChanged={(): void => {
-                void reload();
-              }}
-              onOpened={(status): void => {
-                if (status !== null) {
-                  show(status);
-                }
-              }}
-            />
+            {/*
+              Rendered only while the dialog is open, so closing it unmounts
+              the form.
+
+              A form that merely goes off screen keeps what was typed into it —
+              in React's state and in the value of the input — and only a later
+              reopen cleared it, because that is what remounts it. Somebody who
+              types a password, fails to connect and closes the dialog left the
+              secret in the window for the rest of the session.
+            */}
+            {dialog && (
+              <ConnectionForm
+                key={opened}
+                editing={editing}
+                connection={connection}
+                onChanged={(): void => {
+                  void reload();
+                }}
+                onOpened={(status): void => {
+                  if (status !== null) {
+                    show(status);
+                  }
+                }}
+              />
+            )}
           </ConnectionDialog>
         </>
       }

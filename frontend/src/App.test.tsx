@@ -211,3 +211,32 @@ describe("saving a connection that was opened first", () => {
     expect(backend.open).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The password does not outlive the dialog it was typed into.
+ *
+ * The form was a child of a <dialog> that is always rendered, so closing the
+ * dialog took it off the screen without unmounting it: what was typed stayed
+ * in React's state and in the value of the input, and only a later reopen —
+ * which remounts the form — cleared it. Someone who types a password, fails to
+ * connect and closes the dialog left the secret in the window for the rest of
+ * the session.
+ */
+describe("the connection dialog", () => {
+  it("forgets a typed password when it closes", async () => {
+    render(<App />);
+
+    fireEvent.click(
+      within(await screen.findByRole("banner")).getByRole("button", { name: "New connection" }),
+    );
+
+    const field = await screen.findByLabelText("Password");
+    fireEvent.change(field, { target: { value: "s3cr3t" } });
+    expect((field as HTMLInputElement).value).toBe("s3cr3t");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    expect(screen.queryByLabelText("Password")).toBeNull();
+    expect(document.body.innerHTML).not.toContain("s3cr3t");
+  });
+});
