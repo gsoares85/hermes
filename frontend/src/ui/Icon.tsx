@@ -68,7 +68,29 @@ const glyphs = {
   ),
 } as const;
 
-export type IconName = keyof typeof glyphs;
+/**
+ * The few that are filled rather than drawn.
+ *
+ * A stroke reads as a label and a solid shape reads as an identity, which is
+ * why the one on the product's own mark is solid and the ones naming rows are
+ * not. Kept in a map of their own because the two need opposite SVG attributes,
+ * and a flag on the component would be a caller deciding how a glyph is drawn.
+ */
+const solids = {
+  databaseFill: (
+    <>
+      <path d="M12 2.2c3.9 0 7 1.3 7 2.9s-3.1 2.9-7 2.9-7-1.3-7-2.9 3.1-2.9 7-2.9Z" />
+      <path d="M19 8.4v3.4c0 1.6-3.1 2.9-7 2.9s-7-1.3-7-2.9V8.4c1.5 1.1 4.1 1.7 7 1.7s5.5-.6 7-1.7Z" />
+      <path d="M19 14.6V18c0 1.6-3.1 2.9-7 2.9S5 19.6 5 18v-3.4c1.5 1.1 4.1 1.7 7 1.7s5.5-.6 7-1.7Z" />
+    </>
+  ),
+} as const;
+
+export type IconName = keyof typeof glyphs | keyof typeof solids;
+
+function isSolid(name: IconName): name is keyof typeof solids {
+  return name in solids;
+}
 
 export function Icon({
   name,
@@ -77,19 +99,21 @@ export function Icon({
   name: IconName;
   className?: string;
 }): React.JSX.Element {
+  const solid = isSolid(name);
+
   return (
     <svg
       className={className === undefined ? "icon" : `icon ${className}`}
       viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
+      fill={solid ? "currentColor" : "none"}
+      stroke={solid ? "none" : "currentColor"}
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
       focusable="false"
     >
-      {glyphs[name]}
+      {solid ? solids[name] : glyphs[name]}
     </svg>
   );
 }

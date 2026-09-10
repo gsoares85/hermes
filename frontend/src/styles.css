@@ -24,6 +24,8 @@
      failure that looks deliberate. */
   --accent: #6d5aed;
   --accent-text: #6d5aed;
+  /* The one that carries white text on top of it. */
+  --accent-deep: #4b3fc4;
 
   /* The chrome of the window. Named here because two of them are read by the
      script that drags the dividers, and a size that lives in one place is a
@@ -75,6 +77,7 @@
 
     --accent: #6d5aed;
     --accent-text: #ece6ff;
+    --accent-deep: #4b3fc4;
 
     --dev: #8ec0f5;
     --dev-surface: #12283f;
@@ -139,8 +142,11 @@ body {
 }
 
 .workspace__brand {
+  align-items: center;
+  display: flex;
   font-size: 1.05rem;
   font-weight: 700;
+  gap: 0.5rem;
   letter-spacing: -0.01em;
 }
 
@@ -154,6 +160,10 @@ body {
   min-height: 0;
 }
 
+/*
+ * No border of their own: the divider beside each pane draws that line, and two
+ * hairlines a pixel apart read as a mistake rather than as an edge.
+ */
 .workspace__objects,
 .workspace__details {
   background: var(--panel);
@@ -165,12 +175,10 @@ body {
 }
 
 .workspace__objects {
-  border-right: 1px solid var(--border);
   flex: 0 0 var(--objects-width);
 }
 
 .workspace__details {
-  border-left: 1px solid var(--border);
   flex: 0 0 var(--details-width);
 }
 
@@ -187,16 +195,27 @@ body {
   overflow: auto;
 }
 
+/*
+ * The status bar is the one solid band of colour in the window.
+ *
+ * It is not decoration. The strip is the same height and in the same place on
+ * every screen this application will ever have, and a band of the accent is
+ * what makes the bottom of the window a fixed point rather than more panel.
+ *
+ * White on this ground is 7.5:1 and the muted white 5.5:1, both past AA — so
+ * the band reads the same in either theme without a second palette.
+ */
 .workspace__status {
   align-items: center;
-  background: var(--panel);
-  border-top: 1px solid var(--border);
-  color: var(--text-muted);
+  background: var(--accent-deep);
+  color: rgb(255 255 255 / 80%);
   display: flex;
+  font-size: 0.85em;
   font-variant-numeric: tabular-nums;
   gap: 1rem;
   overflow: hidden;
   padding: 0 0.75rem;
+  user-select: none;
   white-space: nowrap;
 }
 
@@ -479,10 +498,13 @@ body {
   align-items: center;
   display: flex;
   gap: 0.75rem;
+  position: relative;
 }
 
 .tree__filter input[type="search"] {
   flex: 1;
+  /* Room for the glyph sitting inside the field. */
+  padding-left: 1.9rem;
 }
 
 .tree__system {
@@ -527,7 +549,10 @@ body {
 }
 
 .panel__refresh {
+  align-items: center;
+  display: flex;
   flex: none;
+  gap: 0.3rem;
 }
 
 .panel__header h3 {
@@ -625,18 +650,6 @@ body {
 .workspace__separator:focus-visible {
   background: var(--accent);
   border-right-color: var(--accent);
-}
-
-/*
- * The pane's own border would double the line the divider already draws, and
- * two hairlines a pixel apart read as a mistake rather than as an edge.
- */
-.workspace__objects {
-  border-right: none;
-}
-
-.workspace__details {
-  border-left: none;
 }
 
 /*
@@ -791,28 +804,30 @@ body {
  */
 .status__state {
   align-items: center;
-  color: var(--text);
+  color: #fff;
   display: flex;
   gap: 0.4rem;
 }
 
+/* Read against the band rather than against a theme: the greens and reds that
+   work on a panel disappear on this one. */
 .status__dot {
-  background: var(--text-muted);
+  background: rgb(255 255 255 / 60%);
   border-radius: 50%;
   height: 0.5rem;
   width: 0.5rem;
 }
 
 .status__state--connected .status__dot {
-  background: #3fa95f;
+  background: #86efac;
 }
 
 .status__state--down .status__dot {
-  background: var(--production);
+  background: #fda4a4;
 }
 
 .status__idle {
-  color: var(--text-muted);
+  color: rgb(255 255 255 / 70%);
 }
 
 .status__build {
@@ -827,12 +842,15 @@ body {
  * what the session is doing, this says where it is.
  */
 .workspace__origin {
+  align-items: center;
   border-top: 1px solid var(--border);
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
   color: var(--text-muted);
+  display: flex;
   flex: 0 0 auto;
+  font-family: var(--font-mono);
   font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+  gap: 0.4rem;
   margin: 0;
   overflow: hidden;
   padding: 0.4rem 0.6rem;
@@ -1076,20 +1094,11 @@ body {
   display: inline-flex;
 }
 
-.tree__filter {
-  align-items: center;
-  position: relative;
-}
-
 .tree__filter-icon {
   color: var(--text-muted);
   left: 0.5rem;
   pointer-events: none;
   position: absolute;
-}
-
-.tree__filter input[type="search"] {
-  padding-left: 1.9rem;
 }
 
 .saved__icon,
@@ -1104,14 +1113,28 @@ body {
   color: var(--accent);
 }
 
-.workspace__origin {
+/*
+ * The product's own mark: a square of the accent with the one solid glyph in
+ * the window inside it.
+ *
+ * It keeps its colour when the toolbar turns red for a production connection.
+ * The red says which server you are on; this says which application you are in,
+ * and one is not allowed to restate the other.
+ */
+.workspace__mark {
   align-items: center;
+  background: var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgb(109 90 237 / 25%);
+  color: #fff;
   display: flex;
-  gap: 0.4rem;
+  flex: none;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
 }
 
-.panel__refresh {
-  align-items: center;
-  display: flex;
-  gap: 0.3rem;
+.workspace__mark .icon {
+  height: 1rem;
+  width: 1rem;
 }

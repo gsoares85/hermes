@@ -1,4 +1,5 @@
 import type { StatusView } from "../../api/connection";
+import { Icon } from "../../ui/Icon";
 import { ConnectionMarks } from "../connection/ConnectionMarks";
 
 /**
@@ -26,7 +27,17 @@ export function Toolbar({
 }): React.JSX.Element {
   return (
     <>
-      <span className="workspace__brand">Hermes</span>
+      <span className="workspace__brand">
+        {/*
+          The one solid glyph in the window. A stroke reads as a label and a
+          solid shape reads as an identity, and this is the only thing on screen
+          that is the product rather than something the product is showing you.
+        */}
+        <span className="workspace__mark">
+          <Icon name="databaseFill" />
+        </span>
+        Hermes
+      </span>
 
       {/*
         Also reachable from the + of the navigator, and not a duplicate for the
