@@ -84,6 +84,29 @@ export function Separator({
     [bounds, onChange, widthAt],
   );
 
+  /**
+   * A cancelled drag is a drag that did not happen.
+   *
+   * The browser cancels one for reasons nobody chose: the pointer is taken by
+   * something else, a touch turns into a scroll. Treated as a release it
+   * committed whatever width the pointer was over when that happened — and
+   * because a settled width is always an open pane, it could put back a pane
+   * somebody had deliberately closed.
+   *
+   * The capture is not released here. The pointer is already gone by the time
+   * this arrives, and releasing one that is not captured is an error rather
+   * than a no-op.
+   */
+  const onPointerCancel = useCallback((): void => {
+    const held = dragging.current;
+    if (!held) {
+      return;
+    }
+
+    dragging.current = null;
+    held.root.style.setProperty(`--${side}-width`, `${String(pane.width)}px`);
+  }, [pane.width, side]);
+
   return (
     <div
       className="workspace__separator"
@@ -97,7 +120,7 @@ export function Separator({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      onPointerCancel={onPointerCancel}
       onKeyDown={(event): void => {
         const next = keyed(pane, event.key, side, bounds);
         if (next === null) {
