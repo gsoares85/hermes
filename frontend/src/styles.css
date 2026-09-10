@@ -546,6 +546,17 @@ body {
   min-width: 0;
 }
 
+.panel__header {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.panel__refresh {
+  flex: none;
+}
+
 .panel__header h3 {
   margin: 0;
 }

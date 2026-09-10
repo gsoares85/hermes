@@ -25,6 +25,20 @@ export function properties(
 }
 
 /**
+ * Forgets what was read about the schema this object is in.
+ *
+ * The tree asks the server on every expansion and this panel reads through a
+ * cache, so that the second object clicked in a schema costs nothing. That is
+ * the right trade until something changes the database from somewhere else, and
+ * this is how a person says "look again". One schema and not the connection:
+ * throwing away everything because one table changed would make every other
+ * schema be waited for a second time.
+ */
+export function refreshObject(connectionId: string, object: ObjectRef): CancellablePromise<void> {
+  return CatalogService.Refresh(connectionId, object);
+}
+
+/**
  * The statements that would build the selected object.
  *
  * Written by the generator the structure sync is built on, over a model holding

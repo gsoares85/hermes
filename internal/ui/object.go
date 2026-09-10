@@ -75,6 +75,61 @@ func (s *CatalogService) DDL(ctx context.Context, id string, object ObjectRef) (
 	return ddl.Of(slice).String(), nil
 }
 
+// Refresh forgets what was read about a schema, so that the next look at it
+// asks the server again.
+//
+// It exists because the two halves of this screen read the world differently:
+// the tree asks the server on every expansion, and the panel reads through a
+// cache so that the second object somebody clicks in a schema costs nothing.
+// After a table is created from somewhere else the tree draws the new row and
+// the panel says the object is not in the schema any more, and until now there
+// was no way to say "look again" — the cache had an Invalidate that nothing
+// above it could reach.
+//
+// One schema rather than the whole connection, for the reason the cache itself
+// gives: invalidating everything because one table changed throws away every
+// other schema somebody has already waited for.
+func (s *CatalogService) Refresh(id string, object ObjectRef) error {
+	cache, err := s.cached(id, object.Database)
+	if err != nil {
+		return err
+	}
+
+	cache.Invalidate(catalog.NewName(object.Schema))
+
+	return nil
+}
+
+// cached answers a cache this service already holds, and never opens one.
+//
+// Refresh has nothing to read and nothing to connect for: a schema nobody has
+// looked at is already as fresh as it can be, and building a cache to throw it
+// away would open a pool against a database to forget nothing.
+func (s *CatalogService) cached(id, database string) (*catalog.Cache, error) {
+	if _, err := s.connection(id); err != nil {
+		return nil, err
+	}
+
+	s.caching.Lock()
+	defer s.caching.Unlock()
+
+	cache, found := s.caches[cacheKey(id, database)]
+	if !found {
+		return catalog.NewCache(nothingToRead{}), nil
+	}
+
+	return cache, nil
+}
+
+// nothingToRead stands in for a cache that was never built, so that refreshing
+// a schema nobody has read is the no-op it should be rather than a special case
+// every caller has to know about.
+type nothingToRead struct{}
+
+func (nothingToRead) Read(context.Context, catalog.Name) (catalog.Schema, error) {
+	return catalog.Schema{}, errors.New("nothing has been read from this database")
+}
+
 // sliceOf reads the schema the object is in and answers a model of that object
 // alone.
 //

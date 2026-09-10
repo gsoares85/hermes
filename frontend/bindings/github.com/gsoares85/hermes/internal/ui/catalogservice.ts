@@ -52,3 +52,23 @@ export function DDL(id: string, object: $models.ObjectRef): $CancellablePromise<
 export function Properties(id: string, object: $models.ObjectRef): $CancellablePromise<$models.PropertiesView> {
     return $Call.ByID(1896415632, id, object);
 }
+
+/**
+ * Refresh forgets what was read about a schema, so that the next look at it
+ * asks the server again.
+ * 
+ * It exists because the two halves of this screen read the world differently:
+ * the tree asks the server on every expansion, and the panel reads through a
+ * cache so that the second object somebody clicks in a schema costs nothing.
+ * After a table is created from somewhere else the tree draws the new row and
+ * the panel says the object is not in the schema any more, and until now there
+ * was no way to say "look again" — the cache had an Invalidate that nothing
+ * above it could reach.
+ * 
+ * One schema rather than the whole connection, for the reason the cache itself
+ * gives: invalidating everything because one table changed throws away every
+ * other schema somebody has already waited for.
+ */
+export function Refresh(id: string, object: $models.ObjectRef): $CancellablePromise<void> {
+    return $Call.ByID(635473368, id, object);
+}

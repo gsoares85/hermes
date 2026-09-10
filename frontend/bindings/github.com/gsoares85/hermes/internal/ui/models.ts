@@ -202,7 +202,10 @@ export interface StatusView {
  */
 export interface TreeFilter {
     /**
-     * Pattern matches a name as a case-insensitive substring.
+     * Pattern matches an object name as a case-insensitive substring. It
+     * applies to the objects of a schema and to nothing else: narrowing the
+     * schemas themselves would hide the schema that holds the match, which is
+     * the opposite of what somebody typing a name is asking for.
      */
     "pattern": string;
 

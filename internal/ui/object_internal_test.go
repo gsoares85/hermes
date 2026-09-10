@@ -298,3 +298,146 @@ func (idlePool) Close()                                        {}
 func reachable() ConnectionForm {
 	return ConnectionForm{Host: "db.example.com", Port: 5432, User: "hermes", SSLMode: "disable"}
 }
+
+// counting reads a schema and says how many times it was asked.
+type counting struct{ reads int }
+
+func (c *counting) Read(context.Context, catalog.Name) (catalog.Schema, error) {
+	c.reads++
+
+	return catalog.Schema{Name: catalog.NewName("sales")}, nil
+}
+
+// What the panel shows can be asked for again.
+//
+// The two halves of the screen read the world differently: the tree asks the
+// server on every expansion, and the panel reads through a cache so that the
+// second object somebody clicks in a schema costs nothing. So a table created
+// from somewhere else appears in the tree and not in the panel, which answers
+// that the object is not in the schema any more — and there was no way to say
+// "look again", because the Invalidate the cache has was unreachable from
+// anything above it.
+func TestASchemaCanBeReadAgain(t *testing.T) {
+	t.Parallel()
+
+	connections := NewConnectionService(Dependencies{Opener: idleOpener{}})
+	catalogue := NewCatalogService(connections)
+
+	opened, err := connections.Open(t.Context(), reachable())
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+
+	source := &counting{}
+	catalogue.caching.Lock()
+	catalogue.caches = map[string]*catalog.Cache{
+		cacheKey(opened.ID, "app"): catalog.NewCache(source),
+	}
+	catalogue.caching.Unlock()
+
+	object := ObjectRef{Database: "app", Schema: "sales", Name: "orders"}
+	read := func() {
+		t.Helper()
+
+		cache := catalogue.caches[cacheKey(opened.ID, "app")]
+		if _, err := cache.Read(t.Context(), catalog.NewName(object.Schema)); err != nil {
+			t.Fatalf("reading the schema: %v", err)
+		}
+	}
+
+	read()
+	read()
+
+	// Asserted before the refresh, because a cache that never cached would make
+	// the assertion after it pass for the wrong reason.
+	if source.reads != 1 {
+		t.Fatalf("the schema was read %d times, want the cache to answer the second look", source.reads)
+	}
+
+	if err := catalogue.Refresh(opened.ID, object); err != nil {
+		t.Fatalf("Refresh() = %v", err)
+	}
+
+	read()
+
+	if source.reads != 2 {
+		t.Errorf("the schema was read %d times, want refreshing to send it back to the server", source.reads)
+	}
+}
+
+// One schema and not the whole connection: invalidating everything because one
+// table changed throws away every other schema somebody has already waited for.
+func TestRefreshingOneSchemaKeepsTheOthers(t *testing.T) {
+	t.Parallel()
+
+	connections := NewConnectionService(Dependencies{Opener: idleOpener{}})
+	catalogue := NewCatalogService(connections)
+
+	opened, err := connections.Open(t.Context(), reachable())
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+
+	source := &counting{}
+	cache := catalog.NewCache(source)
+
+	catalogue.caching.Lock()
+	catalogue.caches = map[string]*catalog.Cache{cacheKey(opened.ID, "app"): cache}
+	catalogue.caching.Unlock()
+
+	for _, schema := range []string{"sales", "billing"} {
+		if _, err := cache.Read(t.Context(), catalog.NewName(schema)); err != nil {
+			t.Fatalf("reading %s: %v", schema, err)
+		}
+	}
+
+	if err := catalogue.Refresh(opened.ID, ObjectRef{Database: "app", Schema: "sales"}); err != nil {
+		t.Fatalf("Refresh() = %v", err)
+	}
+
+	if _, err := cache.Read(t.Context(), catalog.NewName("billing")); err != nil {
+		t.Fatalf("reading billing again: %v", err)
+	}
+
+	if source.reads != 2 {
+		t.Errorf("the source was read %d times, want billing still answered from the cache", source.reads)
+	}
+}
+
+// A schema nobody has looked at is already as fresh as it can be. Refreshing it
+// must not build a cache, which would open a pool against a database in order
+// to forget nothing.
+func TestRefreshingSomethingNeverReadOpensNothing(t *testing.T) {
+	t.Parallel()
+
+	connections := NewConnectionService(Dependencies{Opener: idleOpener{}})
+	catalogue := NewCatalogService(connections)
+
+	opened, err := connections.Open(t.Context(), reachable())
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+
+	if err := catalogue.Refresh(opened.ID, ObjectRef{Database: "app", Schema: "sales"}); err != nil {
+		t.Errorf("Refresh() = %v, want refreshing what was never read to be a no-op", err)
+	}
+
+	catalogue.caching.Lock()
+	defer catalogue.caching.Unlock()
+
+	if len(catalogue.caches) != 0 {
+		t.Errorf("refreshing built %d caches", len(catalogue.caches))
+	}
+}
+
+// A connection nobody opened is refused rather than quietly doing nothing,
+// which is what every other call on this boundary does.
+func TestRefreshingAConnectionThatIsNotOpenIsRefused(t *testing.T) {
+	t.Parallel()
+
+	catalogue := NewCatalogService(NewConnectionService(Dependencies{Opener: idleOpener{}}))
+
+	if err := catalogue.Refresh("nothing", ObjectRef{Database: "app", Schema: "sales"}); err == nil {
+		t.Error("a connection that is not open was refreshed")
+	}
+}

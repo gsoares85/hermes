@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 
-import { ddl, properties, type ObjectRef, type PropertiesView } from "../../api/object";
+import {
+  ddl,
+  properties,
+  refreshObject,
+  type ObjectRef,
+  type PropertiesView,
+} from "../../api/object";
 import { wasCancelled, type CancellablePromise } from "../../api/tree";
 
 type Tab = "properties" | "ddl";
@@ -25,6 +31,11 @@ export function ObjectPanel({
   const [shown, setShown] = useState<PropertiesView | null>(null);
   const [script, setScript] = useState("");
   const [failure, setFailure] = useState("");
+  // Bumped by the Refresh button, and nothing else reads it. It is what turns
+  // "ask the same question again" into a change the effect below can see: the
+  // object and the tab are the same, so without it the answer already on screen
+  // is the answer to the new question too.
+  const [asked, setAsked] = useState(0);
 
   // Nothing is reset when the question changes: what is on screen stays until
   // the answer to the new one lands, which is the same rule the tree follows
@@ -54,7 +65,18 @@ export function ObjectPanel({
     return (): void => {
       void request.cancel();
     };
-  }, [connectionId, object, tab]);
+  }, [connectionId, object, tab, asked]);
+
+  async function onRefresh(): Promise<void> {
+    try {
+      await refreshObject(connectionId, object);
+      setAsked((times): number => times + 1);
+    } catch (err) {
+      if (!wasCancelled(err)) {
+        setFailure(String(err));
+      }
+    }
+  }
 
   // There is nothing to show yet for the tab being looked at. It is derived
   // rather than held, so it cannot disagree with what is on screen.
@@ -63,10 +85,21 @@ export function ObjectPanel({
   return (
     <section className="panel" aria-label={object.name}>
       <header className="panel__header">
-        <h3>{object.name}</h3>
-        <p className="panel__where">
-          {object.database} · {object.schema}
-        </p>
+        <div>
+          <h3>{object.name}</h3>
+          <p className="panel__where">
+            {object.database} · {object.schema}
+          </p>
+        </div>
+        {/*
+          The tree reads the server every time a node is opened and this panel
+          reads through a cache, so after something changes the database from
+          elsewhere the two disagree. This is the way to say "look again", and
+          it forgets one schema rather than the whole connection.
+        */}
+        <button type="button" className="panel__refresh" onClick={(): void => void onRefresh()}>
+          Refresh
+        </button>
       </header>
 
       <div className="panel__tabs" role="tablist">
