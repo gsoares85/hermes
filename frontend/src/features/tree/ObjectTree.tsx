@@ -147,8 +147,15 @@ export function ObjectTree({
     };
   }, [ask]);
 
+  // The row that was last picked, kept so that the tree can say which one is
+  // selected. A reader that is told a list is a tree and then that none of its
+  // items is selected is being told less than a plain list would say.
+  const [picked, setPicked] = useState("");
+
   const pick = useCallback(
     (row: Row): void => {
+      setPicked(row.key);
+
       // Only an object has properties to show. A database or a schema opens
       // instead, which is what the click on those already does.
       onSelect(row.node.expandable ? null : objectOf(row.key));
@@ -290,7 +297,16 @@ export function ObjectTree({
       {root?.state === "failed" && <p className="tree__error">{root.error}</p>}
 
       <div className="tree__scroller" ref={scroller}>
-        <div className="tree__spacer" style={{ height: `${String(virtualiser.getTotalSize())}px` }}>
+        {/*
+          The rows are the tree, and each one carries its own depth: a
+          virtualised list has no nesting to read the structure from, so the
+          level is stated rather than implied by the markup.
+        */}
+        <div
+          className="tree__spacer"
+          role="tree"
+          style={{ height: `${String(virtualiser.getTotalSize())}px` }}
+        >
           {virtualiser.getVirtualItems().map((item) => {
             const row = rows[item.index];
             if (row === undefined) {
@@ -301,11 +317,20 @@ export function ObjectTree({
               <div
                 key={row.key}
                 className="tree__row"
+                // The positioning wrapper is the virtualiser's, not part of the
+                // tree: without this it sits between the tree and its items.
+                role="presentation"
                 style={{ transform: `translateY(${String(item.start)}px)` }}
                 ref={virtualiser.measureElement}
                 data-index={item.index}
               >
-                <TreeRow row={row} text={text} onToggle={toggle} onPick={pick} />
+                <TreeRow
+                  row={row}
+                  text={text}
+                  selected={row.key === picked}
+                  onToggle={toggle}
+                  onPick={pick}
+                />
               </div>
             );
           })}
@@ -319,11 +344,13 @@ export function ObjectTree({
 function TreeRow({
   row,
   text,
+  selected,
   onToggle,
   onPick,
 }: {
   row: Row;
   text: string;
+  selected: boolean;
   onToggle: (row: Row) => void;
   onPick: (row: Row) => void;
 }): React.JSX.Element {
@@ -346,7 +373,8 @@ function TreeRow({
       }}
       role="treeitem"
       tabIndex={0}
-      aria-selected={false}
+      aria-level={row.depth + 1}
+      aria-selected={selected}
     >
       <button
         type="button"
