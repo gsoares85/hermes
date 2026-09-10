@@ -110,6 +110,13 @@ jobs:
         run: npm run lint
         working-directory: frontend
 
+      # In this job rather than beside the Go tests: the dependencies are
+      # already installed here, and a second job would install them again to
+      # run a suite that takes under a second.
+      - name: Test frontend
+        run: npm test
+        working-directory: frontend
+
       # The README is the only public entry point of the repository, so it must
       # never point at files that are not published with it.
       - name: Check README references
