@@ -220,6 +220,18 @@ function glyphOf(column: ColumnView): IconName {
   return "text";
 }
 
+/*
+ * One name for one number.
+ *
+ * The card counted every constraint the model read and called the total
+ * "Keys", while the list underneath rendered the same array under the heading
+ * "Constraints" — so a table with three CHECK constraints and no key at all
+ * reported three keys. Both now read the name from here, which is what stops
+ * them saying different things about one array again.
+ */
+const constraintsTitle = "Constraints";
+const indexesTitle = "Indexes";
+
 /** The columns and everything else declared on the object. */
 function Properties({ shown }: { shown: PropertiesView }): React.JSX.Element {
   const columns = shown.columns ?? [];
@@ -236,8 +248,8 @@ function Properties({ shown }: { shown: PropertiesView }): React.JSX.Element {
       */}
       <div className="panel__stats">
         <Stat label="Columns" value={columns.length} />
-        <Stat label="Keys" value={constraints.length} />
-        <Stat label="Indexes" value={indexes.length} />
+        <Stat label={constraintsTitle} value={constraints.length} />
+        <Stat label={indexesTitle} value={indexes.length} />
       </div>
 
       {shown.notes !== null && shown.notes.length > 0 && (
@@ -277,8 +289,8 @@ function Properties({ shown }: { shown: PropertiesView }): React.JSX.Element {
         </div>
       )}
 
-      <Listing title="Constraints" items={shown.constraints} />
-      <Listing title="Indexes" items={shown.indexes} />
+      <Listing title={constraintsTitle} items={shown.constraints} />
+      <Listing title={indexesTitle} items={shown.indexes} />
     </div>
   );
 }
