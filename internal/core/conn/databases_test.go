@@ -401,3 +401,30 @@ func TestAClosedConnectionIsNotItsOwnDatabaseEither(t *testing.T) {
 		t.Errorf("Database() = %v, want ErrClosed", err)
 	}
 }
+
+// Browsing must not hand the second connection the first one's maps.
+//
+// A plain assignment copies the struct and shares the two maps inside it, which
+// is exactly the "almost" the comment on Config.Clone describes as the bug it
+// exists to prevent: a session parameter added to one database's connection
+// would appear on every other database browsed under the same one, and on the
+// connection they all came from.
+//
+// Nothing writes to those maps today, and that is the point of catching it now:
+// the first thing that does would find the sharing rather than cause it.
+func TestBrowsingDoesNotShareTheParameterMaps(t *testing.T) {
+	t.Parallel()
+
+	connection, _ := openBrowsable(t)
+
+	other, err := connection.Database(t.Context(), "reporting")
+	if err != nil {
+		t.Fatalf("opening reporting: %v", err)
+	}
+
+	other.Config().Params["application_name"] = "something else"
+
+	if got := connection.Config().Params["application_name"]; got != "hermes" {
+		t.Errorf("the parameters of the connection browsed from changed to %q", got)
+	}
+}

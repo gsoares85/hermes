@@ -161,7 +161,13 @@ func (c *Connection) Database(ctx context.Context, name string) (*Connection, er
 		return open, nil
 	}
 
-	config := c.config
+	// Cloned rather than assigned. A plain copy shares the two maps inside the
+	// configuration, which is the "almost" the comment on Clone describes: a
+	// session parameter added to one browsed database would appear on every
+	// other and on the connection they came from. Nothing writes to them today,
+	// and that is why it is worth fixing now — the first thing that does would
+	// find the sharing rather than cause it.
+	config := c.config.Clone()
 	config.Database = wanted
 
 	open, err := Open(ctx, c.opener, config)
