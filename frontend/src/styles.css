@@ -164,6 +164,10 @@ body {
   flex: 0 0 var(--details-width);
 }
 
+/*
+ * No padding of its own: the tab bar has to sit flush against the top and the
+ * edges, the way a tab bar does. What goes inside brings its own.
+ */
 .workspace__main {
   display: flex;
   flex-direction: column;
@@ -171,7 +175,6 @@ body {
   min-height: 0;
   min-width: 0;
   overflow: auto;
-  padding: 1.5rem;
 }
 
 .workspace__status {
@@ -815,4 +818,93 @@ body {
   padding: 0.4rem 0.6rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * One tab per open connection, across the top of the middle column.
+ *
+ * The close button is a sibling of the tab rather than a child: a button inside
+ * a button is not markup a browser will give you, and a close target that is
+ * part of the tab is a close somebody hits while trying to select.
+ */
+.tabs {
+  align-items: flex-end;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 0 0.4rem;
+}
+
+.tabs__tab {
+  align-items: center;
+  border-radius: 5px 5px 0 0;
+  color: var(--text-muted);
+  display: flex;
+  padding-right: 0.2rem;
+}
+
+.tabs__tab:hover {
+  background: var(--surface-raised);
+}
+
+.tabs__tab.is-active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.tabs__tab button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+}
+
+.tabs__name {
+  margin-right: 0.4rem;
+  white-space: nowrap;
+}
+
+.tabs__close {
+  border-radius: 4px;
+  line-height: 1;
+  opacity: 0.6;
+}
+
+.tabs__close:hover {
+  background: var(--border);
+  opacity: 1;
+}
+
+/*
+ * What the middle says while there is nothing in it. Centred and narrow,
+ * because it is a sentence rather than a panel: making it fill the column would
+ * be making it look like a feature.
+ */
+.empty {
+  color: var(--text-muted);
+  margin: auto;
+  max-width: 28rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+.empty p {
+  margin: 0 0 0.6rem;
+}
+
+.empty__lead {
+  color: var(--text);
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.empty__later {
+  font-size: 0.85em;
+  opacity: 0.8;
 }

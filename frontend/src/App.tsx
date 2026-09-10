@@ -1,39 +1,45 @@
 import { useEffect, useState } from "react";
 
 import { fetchAppInfo, unknownAppInfo, type AppInfo } from "./api/appInfo";
-import {
-  closeConnection,
-  savedConnections,
-  serverVersion,
-  type SavedView,
-  type StatusView,
-} from "./api/connection";
+import { closeConnection, savedConnections, serverVersion, type SavedView } from "./api/connection";
 import type { ObjectRef } from "./api/object";
 import { ConnectionDialog } from "./features/connection/ConnectionDialog";
 import { ConnectionForm } from "./features/connection/ConnectionForm";
 import { SavedConnections } from "./features/connection/SavedConnections";
 import { ObjectPanel } from "./features/tree/ObjectPanel";
 import { ObjectTree } from "./features/tree/ObjectTree";
+import { EmptyState } from "./features/workspace/EmptyState";
 import type { Pane, Side } from "./features/workspace/panes";
 import { rememberedPanes, rememberPanes } from "./features/workspace/remembered";
-import { Toolbar } from "./features/workspace/Toolbar";
 import { showing } from "./features/workspace/regions";
 import { StatusBar } from "./features/workspace/StatusBar";
+import { TabBar } from "./features/workspace/TabBar";
+import {
+  activeOf,
+  closed,
+  noTabs,
+  opened as openedTab,
+  type Tabs,
+} from "./features/workspace/tabs";
+import { Toolbar } from "./features/workspace/Toolbar";
 import { Workspace } from "./features/workspace/Workspace";
 
 export function App(): React.JSX.Element {
   const [info, setInfo] = useState<AppInfo>(unknownAppInfo);
-  // The connection whose objects are on screen. Null until one is opened, and
-  // null again when it closes: the tree belongs to a connection and there is
-  // nothing to draw without one.
+  // Every connection the window has open, and which of them is in front.
   //
-  // The whole state is kept rather than the identifier alone, because the mark
-  // saying which server this is belongs around the whole window and not inside
-  // the panel that happens to have asked for it.
-  const [connection, setConnection] = useState<StatusView | null>(null);
-  // The object whose properties are on screen. Null until one is picked, and
-  // null again when the connection goes, because it belonged to that server.
-  const [selected, setSelected] = useState<ObjectRef | null>(null);
+  // The Go side has held a map of open connections since the day it could open
+  // one. It was this that held a single one and closed it to open another, and
+  // the tab bar is what stops that: opening a second server no longer costs you
+  // the first.
+  const [tabs, setTabs] = useState<Tabs>(noTabs);
+  // The object each connection has selected, by connection.
+  //
+  // By connection rather than one for the window, because a selection belongs
+  // to the server it was made in. Held that way, moving between tabs is
+  // something the render works out; held as one value it would be something an
+  // effect had to clear, which is a render before anything has been asked.
+  const [picked, setPicked] = useState<ReadonlyMap<string, ObjectRef>>(new Map());
   // How wide the side panes are and whether they are showing. It is the layout
   // of the window rather than anything about a connection, so it outlives every
   // connection opened in this window — and, through the storage below, this run
@@ -52,15 +58,13 @@ export function App(): React.JSX.Element {
   const [editing, setEditing] = useState<SavedView | null>(null);
   const [opened, setOpened] = useState(0);
   const [dialog, setDialog] = useState(false);
-  // What the open server reports itself to be, and which connection said so.
-  //
-  // The pair rather than the string, because the answer belongs to a
-  // connection: a version left over from the last server would be a sentence
-  // about a connection nobody has open any more. Naming the connection lets the
-  // stale answer be ignored when it is read, instead of cleared when the
-  // connection changes — which would be a setState in the body of an effect,
-  // and a render before anything had been asked.
-  const [reported, setReported] = useState({ id: "", version: "" });
+  // What each open server reports itself to be, by connection — the same
+  // argument as the selection above, and the same shape.
+  const [versions, setVersions] = useState<ReadonlyMap<string, string>>(new Map());
+
+  const connection = activeOf(tabs);
+  const selected = connection === null ? null : (picked.get(connection.id) ?? null);
+  const version = connection === null ? "" : (versions.get(connection.id) ?? "");
 
   // Declared above the effect that calls it for the reason the chain below is
   // written out rather than awaited: a function declaration hoists, so written
@@ -102,8 +106,10 @@ export function App(): React.JSX.Element {
     };
   }, []);
 
+  // Asked once per connection: it reaches the server, and it does not change
+  // under one.
   useEffect(() => {
-    if (connection === null) {
+    if (connection === null || versions.has(connection.id)) {
       return;
     }
 
@@ -111,9 +117,9 @@ export function App(): React.JSX.Element {
     const asked = connection.id;
 
     serverVersion(asked)
-      .then((version): void => {
+      .then((reported): void => {
         if (active) {
-          setReported({ id: asked, version });
+          setVersions((held): ReadonlyMap<string, string> => new Map(held).set(asked, reported));
         }
       })
       .catch((): void => {
@@ -124,10 +130,7 @@ export function App(): React.JSX.Element {
     return (): void => {
       active = false;
     };
-  }, [connection]);
-
-  // Only the answer that belongs to the connection on screen.
-  const version = reported.id === connection?.id ? reported.version : "";
+  }, [connection, versions]);
 
   // One answer for the three questions the markup below would otherwise ask
   // separately, because they are not independent: everything on the sides
@@ -140,23 +143,24 @@ export function App(): React.JSX.Element {
     setDialog(true);
   }
 
-  // Releasing it is what closing the pools and the cached catalog on the Go
-  // side depends on, so the state goes to null whether or not the call worked:
-  // the only way it fails is the connection being gone already, and leaving the
-  // window pointing at one that is not there would be worse than either.
-  async function disconnect(): Promise<void> {
-    if (connection === null) {
-      return;
-    }
-
+  // Closing the tab is what closes the connection: the pools per database and
+  // the cached catalog on the Go side go with it. The tab goes whether or not
+  // the call worked — the only way it fails is the connection being gone
+  // already, and a tab pointing at one that is not there is worse than either.
+  async function close(id: string): Promise<void> {
     try {
-      await closeConnection(connection.id);
+      await closeConnection(id);
     } catch {
       // Already closed. Nothing to say and nothing to go back to.
     }
 
-    setConnection(null);
-    setSelected(null);
+    setTabs((held): Tabs => closed(held, id));
+    setPicked((held): ReadonlyMap<string, ObjectRef> => {
+      const next = new Map(held);
+      next.delete(id);
+
+      return next;
+    });
   }
 
   return (
@@ -178,7 +182,9 @@ export function App(): React.JSX.Element {
             openDialog(null);
           }}
           onDisconnect={(): void => {
-            void disconnect();
+            if (connection !== null) {
+              void close(connection.id);
+            }
           }}
         />
       }
@@ -196,7 +202,23 @@ export function App(): React.JSX.Element {
 
           {shown.objects && connection !== null && (
             <>
-              <ObjectTree connectionId={connection.id} onSelect={setSelected} />
+              <ObjectTree
+                key={connection.id}
+                connectionId={connection.id}
+                onSelect={(object): void => {
+                  setPicked((held): ReadonlyMap<string, ObjectRef> => {
+                    const next = new Map(held);
+
+                    if (object === null) {
+                      next.delete(connection.id);
+                    } else {
+                      next.set(connection.id, object);
+                    }
+
+                    return next;
+                  });
+                }}
+              />
 
               {/*
                 Which server these objects came from. It is the question the
@@ -212,41 +234,42 @@ export function App(): React.JSX.Element {
         </>
       }
       main={
-        <ConnectionDialog
-          open={dialog}
-          onClose={(): void => {
-            setDialog(false);
-          }}
-        >
-          <ConnectionForm
-            key={opened}
-            editing={editing}
-            connection={connection}
-            onChanged={(): void => {
-              void reload();
-            }}
-            onOpened={(status): void => {
-              // The one that was open is released rather than dropped. Replacing
-              // the state alone would leave it open on the Go side, with its pools
-              // per database and its cached catalog, and nothing left out here
-              // holding the identifier that could close it. The form disables
-              // Connect while one is open, so this is the belt to that braces —
-              // and it is the half that does not depend on a second component
-              // agreeing about what is open.
-              setConnection((held): StatusView | null => {
-                if (held !== null && held.id !== status?.id) {
-                  void closeConnection(held.id).catch((): void => {
-                    // Already gone, or the window is closing. There is nothing
-                    // useful to say and nothing to go back to.
-                  });
-                }
+        <>
+          {tabs.open.length > 0 && (
+            <TabBar
+              tabs={tabs}
+              onPick={(id): void => {
+                setTabs((held): Tabs => ({ ...held, activeId: id }));
+              }}
+              onClose={(id): void => {
+                void close(id);
+              }}
+            />
+          )}
 
-                return status;
-              });
-              setSelected(null);
+          <EmptyState connected={connection !== null} />
+
+          <ConnectionDialog
+            open={dialog}
+            onClose={(): void => {
+              setDialog(false);
             }}
-          />
-        </ConnectionDialog>
+          >
+            <ConnectionForm
+              key={opened}
+              editing={editing}
+              connection={connection}
+              onChanged={(): void => {
+                void reload();
+              }}
+              onOpened={(status): void => {
+                if (status !== null) {
+                  setTabs((held): Tabs => openedTab(held, status));
+                }
+              }}
+            />
+          </ConnectionDialog>
+        </>
       }
       details={
         shown.details && connection !== null && selected !== null ? (

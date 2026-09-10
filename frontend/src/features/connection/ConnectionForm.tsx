@@ -403,16 +403,13 @@ export function ConnectionForm({
           {busy ? "Working…" : "Test connection"}
         </button>
         {/*
-          Disabled while a connection is open, because the id of the open one
-          lives in this state and connecting again would overwrite it: the
-          first pool would stay open on the other side with nothing left here
-          able to close it. Disconnect first.
+          It used to be disabled while a connection was open, because the window
+          held one and connecting again would have replaced it — leaving the
+          first pool open on the other side with nothing able to close it. The
+          window holds a tab per connection now, so connecting again is a second
+          tab rather than a leak.
         */}
-        <button
-          type="button"
-          onClick={(): void => void onOpen()}
-          disabled={busy || status !== null}
-        >
+        <button type="button" onClick={(): void => void onOpen()} disabled={busy}>
           Connect
         </button>
         <button type="button" onClick={(): void => void onSave()} disabled={busy}>
