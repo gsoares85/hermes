@@ -457,3 +457,54 @@ func TestAConnectionThatIsNotOpenHasNoObjects(t *testing.T) {
 		t.Error("a connection that is not open answered a script")
 	}
 }
+
+// The pattern narrows objects, and never schemas.
+//
+// Narrowing schemas by their own name is what makes the filter useless for the
+// thing people actually type into it. Looking for "invoice" would drop the
+// schema "sales" from the answer, and the window cannot draw a table whose
+// parent the server did not send — so the one row somebody was looking for
+// disappears along with the noise. Hiding what does not match is the window's
+// job, over what it already holds, and it keeps a parent whose child matches.
+//
+// What the server is still asked to do at this level is hide the system
+// schemas, which is a different question with a different reason: those are
+// thousands of names nobody typed anything to see.
+func TestTheFilterNarrowsObjectsAndNotSchemas(t *testing.T) {
+	t.Parallel()
+
+	const typed = "invoice"
+
+	carries := func(node ui.NodeRef) bool {
+		held := newSessions()
+		tree, id := openTree(t, treeOpener{sessions: held, rows: [][]any{{"sales", "r"}}})
+
+		if _, err := tree.Children(t.Context(), id, node, ui.TreeFilter{Pattern: typed}); err != nil {
+			t.Fatalf("expanding %+v: %v", node, err)
+		}
+
+		session := held.get("app")
+		if session == nil {
+			t.Fatalf("no session was checked out for %+v", node)
+		}
+
+		_, args := session.asked()
+		for _, sent := range args {
+			for _, arg := range sent {
+				if arg == typed {
+					return true
+				}
+			}
+		}
+
+		return false
+	}
+
+	if carries(ui.NodeRef{Database: "app"}) {
+		t.Error("the schemas of a database were narrowed by the pattern, which hides the schemas that hold the matches")
+	}
+
+	if !carries(ui.NodeRef{Database: "app", Schema: "sales"}) {
+		t.Error("the objects of a schema were not narrowed by the pattern, so a level of fifty thousand names crosses whole")
+	}
+}

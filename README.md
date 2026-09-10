@@ -377,9 +377,10 @@ Filter by name  [ invoice        ]   [ ] System schemas
 ```
 
 What is already on screen is filtered on every keystroke, so the box keeps up with typing. Once
-the typing settles, the same text goes back to the server, so the levels you open next are
-narrowed there too — a level of fifty thousand names is never carried across just to be thrown
-away here.
+the typing settles, the same text goes back to the server, so the objects of the schemas you
+open next are narrowed there too — a level of fifty thousand names is never carried across just
+to be thrown away here. Schemas themselves are never narrowed by it: hiding the schema that
+holds the table you are looking for would hide the answer along with the noise.
 
 PostgreSQL's own schemas — `pg_catalog`, `information_schema`, `pg_toast` — are hidden until you
 tick **System schemas**, which re-reads that level rather than revealing something already

@@ -28,7 +28,10 @@ type NodeRef struct {
 // listing exists to avoid — and the pattern travels as an argument beside the
 // query, never inside it.
 type TreeFilter struct {
-	// Pattern matches a name as a case-insensitive substring.
+	// Pattern matches an object name as a case-insensitive substring. It
+	// applies to the objects of a schema and to nothing else: narrowing the
+	// schemas themselves would hide the schema that holds the match, which is
+	// the opposite of what somebody typing a name is asking for.
 	Pattern string `json:"pattern"`
 
 	// System includes the schemas PostgreSQL keeps for itself. It means
@@ -132,7 +135,17 @@ func (s *CatalogService) schemas(ctx context.Context, connection *conn.Connectio
 	}
 	defer done()
 
-	found, err := lister.Schemas(ctx, catalog.Filter{Pattern: filter.Pattern, System: filter.System})
+	// The pattern is deliberately not passed on. Narrowing schemas by their own
+	// name drops the schema that holds the object somebody is looking for, and
+	// the window cannot draw a row whose parent never arrived — so the answer
+	// disappears along with the noise. Hiding what does not match at this level
+	// is the window's job, over what it already holds, and it keeps a parent
+	// whose child matches.
+	//
+	// Hiding the system schemas stays here, because it is a different question:
+	// those are names nobody typed anything to see, and there are thousands of
+	// them at the level below.
+	found, err := lister.Schemas(ctx, catalog.Filter{System: filter.System})
 	if err != nil {
 		return nil, secret.Error(err)
 	}
