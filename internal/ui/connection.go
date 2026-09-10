@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -227,6 +228,15 @@ type ConnectionService struct {
 	mu   sync.Mutex
 	open map[string]*conn.Connection
 
+	// closing is what to tell when a connection goes.
+	//
+	// A list of functions rather than an interface, and unexported for a
+	// reason that is not style: a binding is generated from every exported
+	// method of this type, and one taking a callback would cross to the
+	// frontend as something it could call. Whoever wires two services together
+	// is in this package, which is where the registration belongs.
+	closing []func(id string)
+
 	// saved serialises the read-modify-write of the connections file. Two
 	// saves at once would otherwise each write the list they read, and the
 	// second would delete the connection the first had just added.
@@ -241,6 +251,36 @@ func NewConnectionService(deps Dependencies) *ConnectionService {
 		vault:       deps.Vault,
 		vaultStatus: deps.VaultStatus,
 		open:        make(map[string]*conn.Connection),
+	}
+}
+
+// whenClosed registers something to tell when a connection is released.
+//
+// It exists because a service built on top of a connection has no other way to
+// learn that the connection has gone. The catalog cache found out by accident —
+// a later lookup failing — and a lookup for a closed connection never arrives,
+// because the window is handed a fresh identifier by every Open.
+func (s *ConnectionService) whenClosed(tell func(id string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.closing = append(s.closing, tell)
+}
+
+// announceClosed tells everyone registered, outside the lock.
+//
+// Outside because what is registered is somebody else's code taking somebody
+// else's lock, and holding this one across it is how two services that only
+// know each other through a callback deadlock.
+func (s *ConnectionService) announceClosed(ids ...string) {
+	s.mu.Lock()
+	listeners := slices.Clone(s.closing)
+	s.mu.Unlock()
+
+	for _, tell := range listeners {
+		for _, id := range ids {
+			tell(id)
+		}
 	}
 }
 
@@ -633,6 +673,7 @@ func (s *ConnectionService) Close(id string) error {
 	}
 
 	connection.Close()
+	s.announceClosed(id)
 
 	return nil
 }
@@ -680,8 +721,10 @@ func (s *ConnectionService) SSLModes() []string {
 func (s *ConnectionService) CloseAll() {
 	s.mu.Lock()
 	open := make([]*conn.Connection, 0, len(s.open))
+	closed := make([]string, 0, len(s.open))
 	for id, connection := range s.open {
 		open = append(open, connection)
+		closed = append(closed, id)
 		delete(s.open, id)
 	}
 	s.mu.Unlock()
@@ -689,6 +732,8 @@ func (s *ConnectionService) CloseAll() {
 	for _, connection := range open {
 		connection.Close()
 	}
+
+	s.announceClosed(closed...)
 }
 
 // newID returns an unguessable handle. Sequential ones would be fine for what

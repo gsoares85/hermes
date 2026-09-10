@@ -1,11 +1,14 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"slices"
 	"testing"
 
 	"github.com/gsoares85/hermes/internal/core/catalog"
+	"github.com/gsoares85/hermes/internal/driver"
 )
 
 // The panel prints text, and this is where the model becomes it. The tests are
@@ -203,4 +206,95 @@ func TestForgettingDropsOnlyThatConnection(t *testing.T) {
 	if !reflect.DeepEqual(left, want) {
 		t.Errorf("what is left is %q, want %q", left, want)
 	}
+}
+
+// Closing a connection drops the catalog it read.
+//
+// Nothing used to tell this service that a connection had gone. forget ran only
+// when a later lookup failed, and a lookup for a closed connection never
+// arrives: the window is handed a fresh identifier by every Open, so the closed
+// one is never asked about again. The schemas somebody browsed on production —
+// every column, index, constraint and view definition of them — stayed in
+// memory for the life of the process, next to a live reference to a connection
+// that had been closed.
+func TestClosingAConnectionDropsWhatItRead(t *testing.T) {
+	t.Parallel()
+
+	connections := NewConnectionService(Dependencies{Opener: idleOpener{}})
+	catalogue := NewCatalogService(connections)
+
+	opened, err := connections.Open(t.Context(), reachable())
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+
+	catalogue.caching.Lock()
+	catalogue.caches = map[string]*catalog.Cache{
+		cacheKey(opened.ID, "app"):       nil,
+		cacheKey("somebody else", "app"): nil,
+	}
+	catalogue.caching.Unlock()
+
+	if err := connections.Close(opened.ID); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+
+	catalogue.caching.Lock()
+	defer catalogue.caching.Unlock()
+
+	if _, held := catalogue.caches[cacheKey(opened.ID, "app")]; held {
+		t.Error("the catalog of a closed connection is still in memory")
+	}
+	if _, held := catalogue.caches[cacheKey("somebody else", "app")]; !held {
+		t.Error("closing one connection dropped the catalog of another")
+	}
+}
+
+// The same when the window shuts, which is the path that closes every
+// connection at once and is the one a reload takes.
+func TestClosingEveryConnectionDropsWhatTheyRead(t *testing.T) {
+	t.Parallel()
+
+	connections := NewConnectionService(Dependencies{Opener: idleOpener{}})
+	catalogue := NewCatalogService(connections)
+
+	opened, err := connections.Open(t.Context(), reachable())
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+
+	catalogue.caching.Lock()
+	catalogue.caches = map[string]*catalog.Cache{cacheKey(opened.ID, "app"): nil}
+	catalogue.caching.Unlock()
+
+	connections.CloseAll()
+
+	catalogue.caching.Lock()
+	defer catalogue.caching.Unlock()
+
+	if len(catalogue.caches) != 0 {
+		t.Errorf("%d catalogs outlived every connection", len(catalogue.caches))
+	}
+}
+
+// The doubles this file needs of its own. The ones the black-box tests use live
+// in the other package and cannot be reached from here, and what these have to
+// do is connect without a server: the caches are put in by hand, and what is
+// under test is what happens to them when the connection goes.
+type idleOpener struct{}
+
+func (idleOpener) Open(context.Context, driver.Target) (driver.Pool, error) { return idlePool{}, nil }
+
+type idlePool struct{}
+
+func (idlePool) Ping(context.Context) error { return nil }
+func (idlePool) Session(context.Context) (driver.Session, error) {
+	return nil, errors.New("not part of this test")
+}
+func (idlePool) ServerVersion(context.Context) (string, error) { return "16.2", nil }
+func (idlePool) Databases(context.Context) ([]string, error)   { return nil, nil }
+func (idlePool) Close()                                        {}
+
+func reachable() ConnectionForm {
+	return ConnectionForm{Host: "db.example.com", Port: 5432, User: "hermes", SSLMode: "disable"}
 }

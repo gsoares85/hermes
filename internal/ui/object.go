@@ -149,9 +149,12 @@ func (s *CatalogService) cacheOn(ctx context.Context, id, database string) (*cat
 
 // forget drops the caches of a connection that is not open any more.
 //
-// The failed lookup is the moment this can know: nothing tells this service
-// that a connection was closed, and a cache of a catalog nobody can reach again
-// is memory held for no reason.
+// Called when the connection service says a connection has been released, and
+// again whenever a lookup fails — the second is not redundant, because a
+// connection can also go away without this service having been wired to hear
+// about it. A cache of a catalog nobody can reach again is memory held for no
+// reason, and what it holds is every column, index and view definition of every
+// schema somebody looked at.
 func (s *CatalogService) forget(id string) {
 	s.caching.Lock()
 	defer s.caching.Unlock()

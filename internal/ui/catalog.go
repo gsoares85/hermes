@@ -76,8 +76,16 @@ type CatalogService struct {
 }
 
 // NewCatalogService creates the service bound to the frontend.
+//
+// It asks to be told when a connection closes, which is the only way it can
+// know: what it holds is keyed by a connection identifier the window stops
+// using the moment the connection goes, so nothing would ever ask about it
+// again and the catalog it read would be held for the life of the process.
 func NewCatalogService(connections *ConnectionService) *CatalogService {
-	return &CatalogService{connection: connections.lookup}
+	service := &CatalogService{connection: connections.lookup}
+	connections.whenClosed(service.forget)
+
+	return service
 }
 
 // Children answers what a node holds.
