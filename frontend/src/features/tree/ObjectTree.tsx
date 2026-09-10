@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   children,
@@ -236,7 +236,10 @@ export function ObjectTree({
     };
   }, [ask, system, text]);
 
-  const rows = visibleRows(levels, expanded, text);
+  // Memoised because the virtualiser renders on every frame of a scroll, and
+  // this walks everything that has been loaded. With five thousand objects open
+  // that is five thousand rows rebuilt per frame to draw the twenty that moved.
+  const rows = useMemo((): Row[] => visibleRows(levels, expanded, text), [levels, expanded, text]);
   const root = levels[rootKey];
 
   const scroller = useRef<HTMLDivElement>(null);
