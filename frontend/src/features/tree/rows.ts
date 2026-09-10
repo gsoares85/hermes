@@ -200,6 +200,28 @@ export function abandoned(held: Level | undefined): Level | undefined {
 }
 
 /**
+ * What clicking the arrow on a row does.
+ *
+ * A value rather than a branch inside the component, because the interesting
+ * case is a sequence: collapsing a node stops its request, and reopening it
+ * before the cancellation lands has to ask again rather than find a level that
+ * still says it is being fetched.
+ */
+export type Toggling = "nothing" | "collapse" | "open" | "open-and-ask";
+
+export function toggling(row: Row, expanded: ReadonlySet<string>): Toggling {
+  if (!row.node.expandable) {
+    return "nothing";
+  }
+
+  if (expanded.has(row.key)) {
+    return "collapse";
+  }
+
+  return needsAsking(row.level) ? "open-and-ask" : "open";
+}
+
+/**
  * Whether the children of a node have to be asked for.
  *
  * A level nobody has asked for, and one whose last attempt failed — reopening a

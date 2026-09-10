@@ -12,9 +12,11 @@ import {
   objectOf,
   refOf,
   rootKey,
+  toggling,
   visibleRows,
   type Level,
   type Levels,
+  type Row,
 } from "./rows";
 
 function node(name: string, expandable = false): NodeView {
@@ -221,5 +223,48 @@ describe("what a level may do next", () => {
 
     expect(abandonedLevel).toEqual({ state: "ready", nodes: [node("daily_revenue")], error: "" });
     expect(needsAsking(abandonedLevel)).toBe(false);
+  });
+});
+
+describe("toggling a node", () => {
+  const row = (key: string, expandable: boolean, level?: Level): Row => ({
+    key,
+    node: node(key, expandable),
+    depth: 0,
+    expanded: false,
+    level,
+  });
+
+  it("does nothing to a row that cannot open", () => {
+    expect(toggling(row("daily_revenue", false), new Set())).toBe("nothing");
+  });
+
+  it("collapses a node that is open", () => {
+    expect(toggling(row("analytics", true), new Set(["analytics"]))).toBe("collapse");
+  });
+
+  it("opens and asks for a node nobody has opened", () => {
+    expect(toggling(row("analytics", true), new Set())).toBe("open-and-ask");
+  });
+
+  it("opens without asking again for a node whose children it already has", () => {
+    expect(toggling(row("analytics", true, ready([node("public", true)])), new Set())).toBe("open");
+  });
+
+  it("opens and asks again for a node whose last attempt failed", () => {
+    const failed: Level = { state: "failed", nodes: [], error: "no" };
+
+    expect(toggling(row("analytics", true, failed), new Set())).toBe("open-and-ask");
+  });
+
+  // The window between collapsing a node and its cancelled request rejecting.
+  // Reopening in that window used to find a level still saying it was being
+  // asked for, so it asked for nothing — and the rejection that landed
+  // afterwards took the level away from under a node that was open again.
+  // Collapsing gives up on the level at once, which is what makes this "ask".
+  it("asks again when a collapse gave up on a level mid-question", () => {
+    const interrupted = abandoned(asking(undefined));
+
+    expect(toggling(row("analytics", true, interrupted), new Set())).toBe("open-and-ask");
   });
 });

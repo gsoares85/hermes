@@ -16,10 +16,10 @@ import {
   abandoned,
   around,
   asking,
-  needsAsking,
   objectOf,
   refOf,
   rootKey,
+  toggling,
   visibleRows,
   type Level,
   type Levels,
@@ -76,6 +76,15 @@ export function ObjectTree({
   // ends up describing a question nobody asked.
   const era = useRef(new Map<string, number>());
 
+  // Marks whatever is in flight for a node as no longer the current question,
+  // so its handlers write nothing when they land.
+  const supersede = useCallback((key: string): number => {
+    const next = (era.current.get(key) ?? 0) + 1;
+    era.current.set(key, next);
+
+    return next;
+  }, []);
+
   const ask = useCallback(
     (key: string, filter: TreeFilter): void => {
       const inFlight = running.current;
@@ -86,8 +95,7 @@ export function ObjectTree({
       // answer to the narrower question until the next keystroke.
       void inFlight.get(key)?.cancel();
 
-      const mine = (era.current.get(key) ?? 0) + 1;
-      era.current.set(key, mine);
+      const mine = supersede(key);
       const current = (): boolean => era.current.get(key) === mine;
 
       setLevels((held): Levels => written(held, key, asking(held.get(key))));
@@ -126,7 +134,7 @@ export function ObjectTree({
           }
         });
     },
-    [connectionId],
+    [connectionId, supersede],
   );
 
   // The databases of the server, asked for once the tree is on screen. A
@@ -165,36 +173,44 @@ export function ObjectTree({
 
   const toggle = useCallback(
     (row: Row): void => {
-      if (!row.node.expandable) {
+      const what = toggling(row, expanded);
+      if (what === "nothing") {
         return;
       }
 
       setExpanded((open): ReadonlySet<string> => {
         const next = new Set(open);
 
-        if (next.has(row.key)) {
+        if (what === "collapse") {
           next.delete(row.key);
-
-          // Whatever was still being fetched for a node nobody is looking at
-          // any more is stopped rather than left to arrive.
-          void running.current.get(row.key)?.cancel();
-
-          return next;
+        } else {
+          next.add(row.key);
         }
-
-        next.add(row.key);
 
         return next;
       });
 
-      // Asked when it is opened, and asked again when what is there failed
-      // last time: reopening a node that could not be read is how a person
-      // retries, and answering the old failure would make the tree look stuck.
-      if (!expanded.has(row.key) && needsAsking(row.level)) {
+      if (what === "collapse") {
+        // Whatever was still being fetched for a node nobody is looking at any
+        // more is stopped — and the level is given up here rather than when the
+        // rejection lands. Between the two, a quick reopen used to find a level
+        // that still said it was being asked for, ask for nothing, and then
+        // have the rejection take the level away from under an open node.
+        void running.current.get(row.key)?.cancel();
+        supersede(row.key);
+        setLevels((held): Levels => giveUp(held, row.key));
+
+        return;
+      }
+
+      // Asked when it is opened, and asked again when what is there failed last
+      // time: reopening a node that could not be read is how a person retries,
+      // and answering the old failure would make the tree look stuck.
+      if (what === "open-and-ask") {
         ask(row.key, settled);
       }
     },
-    [ask, expanded, settled],
+    [ask, expanded, settled, supersede],
   );
 
   // What is open, so that the effect below can read it without running every
