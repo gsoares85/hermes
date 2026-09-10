@@ -4,6 +4,7 @@ import { fetchAppInfo, unknownAppInfo, type AppInfo } from "./api/appInfo";
 import {
   closeConnection,
   savedConnections,
+  serverVersion,
   type SavedView,
   type StatusView,
 } from "./api/connection";
@@ -17,6 +18,7 @@ import type { Pane, Side } from "./features/workspace/panes";
 import { rememberedPanes, rememberPanes } from "./features/workspace/remembered";
 import { Toolbar } from "./features/workspace/Toolbar";
 import { showing } from "./features/workspace/regions";
+import { StatusBar } from "./features/workspace/StatusBar";
 import { Workspace } from "./features/workspace/Workspace";
 
 export function App(): React.JSX.Element {
@@ -50,6 +52,15 @@ export function App(): React.JSX.Element {
   const [editing, setEditing] = useState<SavedView | null>(null);
   const [opened, setOpened] = useState(0);
   const [dialog, setDialog] = useState(false);
+  // What the open server reports itself to be, and which connection said so.
+  //
+  // The pair rather than the string, because the answer belongs to a
+  // connection: a version left over from the last server would be a sentence
+  // about a connection nobody has open any more. Naming the connection lets the
+  // stale answer be ignored when it is read, instead of cleared when the
+  // connection changes — which would be a setState in the body of an effect,
+  // and a render before anything had been asked.
+  const [reported, setReported] = useState({ id: "", version: "" });
 
   // Declared above the effect that calls it for the reason the chain below is
   // written out rather than awaited: a function declaration hoists, so written
@@ -90,6 +101,33 @@ export function App(): React.JSX.Element {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (connection === null) {
+      return;
+    }
+
+    let active = true;
+    const asked = connection.id;
+
+    serverVersion(asked)
+      .then((version): void => {
+        if (active) {
+          setReported({ id: asked, version });
+        }
+      })
+      .catch((): void => {
+        // The server did not answer. The rest of the window still works, and
+        // the footer says nothing rather than saying something wrong.
+      });
+
+    return (): void => {
+      active = false;
+    };
+  }, [connection]);
+
+  // Only the answer that belongs to the connection on screen.
+  const version = reported.id === connection?.id ? reported.version : "";
 
   // One answer for the three questions the markup below would otherwise ask
   // separately, because they are not independent: everything on the sides
@@ -157,7 +195,19 @@ export function App(): React.JSX.Element {
           />
 
           {shown.objects && connection !== null && (
-            <ObjectTree connectionId={connection.id} onSelect={setSelected} />
+            <>
+              <ObjectTree connectionId={connection.id} onSelect={setSelected} />
+
+              {/*
+                Which server these objects came from. It is the question the
+                tree raises and the status bar does not answer: that one says
+                what the session is doing, this says where it is.
+              */}
+              <p className="workspace__origin">
+                {connection.user}@{connection.host}:{connection.port}
+                {version === "" ? "" : ` · PostgreSQL ${version}`}
+              </p>
+            </>
           )}
         </>
       }
@@ -203,15 +253,7 @@ export function App(): React.JSX.Element {
           <ObjectPanel connectionId={connection.id} object={selected} />
         ) : null
       }
-      status={
-        // The build that is running, named. A bare version string is ambiguous
-        // the moment anything else in the window has one, and the commit and the
-        // date stay in the tooltip: enough to identify a build exactly, without
-        // a status bar that reads like a changelog.
-        <span className="workspace__build" title={`${info.commit} · ${info.date}`}>
-          Hermes {info.version} · {info.platform}
-        </span>
-      }
+      status={<StatusBar connection={connection} info={info} />}
     />
   );
 }

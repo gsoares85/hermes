@@ -13,6 +13,10 @@ function open(environment = ""): StatusView {
     name: "billing",
     environment,
     readOnly: false,
+    host: "db.example.com",
+    port: 5432,
+    database: "app",
+    user: "reporting",
   };
 }
 

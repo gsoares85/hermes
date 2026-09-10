@@ -190,6 +190,17 @@ export interface StatusView {
     "name": string;
     "environment": string;
     "readOnly": boolean;
+
+    /**
+     * Where the connection goes, so that a window can say which database and
+     * which role it is looking at without asking a second question. None of it
+     * is a secret — it is what the form was filled in with, minus the one field
+     * that is.
+     */
+    "host": string;
+    "port": number;
+    "database": string;
+    "user": string;
 }
 
 /**

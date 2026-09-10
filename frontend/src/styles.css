@@ -762,3 +762,57 @@ body {
 .workspace--production .workspace__toolbar button:hover {
   background: rgb(0 0 0 / 8%);
 }
+
+/*
+ * The status bar. Everything on it is a fact about now, so it never wraps and
+ * never grows: what does not fit is cut rather than allowed to push the strip
+ * taller and take a row of the window with it.
+ */
+.status__state {
+  align-items: center;
+  color: var(--text);
+  display: flex;
+  gap: 0.4rem;
+}
+
+.status__dot {
+  background: var(--text-muted);
+  border-radius: 50%;
+  height: 0.5rem;
+  width: 0.5rem;
+}
+
+.status__state--connected .status__dot {
+  background: #3fa95f;
+}
+
+.status__state--down .status__dot {
+  background: var(--production);
+}
+
+.status__idle {
+  color: var(--text-muted);
+}
+
+.status__build {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * Which server the objects above came from. It sits at the foot of the
+ * navigator because that is the question the tree raises — the status bar says
+ * what the session is doing, this says where it is.
+ */
+.workspace__origin {
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  flex: 0 0 auto;
+  font-size: 0.8em;
+  margin: 0;
+  overflow: hidden;
+  padding: 0.4rem 0.6rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

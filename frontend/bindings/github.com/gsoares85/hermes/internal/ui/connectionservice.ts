@@ -124,6 +124,20 @@ export function Save(form: $models.ConnectionForm): $CancellablePromise<$models.
 }
 
 /**
+ * ServerVersion answers what the server reports itself to be.
+ * 
+ * A call of its own rather than a field on the state. Reading the state is a
+ * read of memory and nothing else — a window repaints far more often than a
+ * server changes version, and a status read that dialled would turn every
+ * repaint into a round trip and every unreachable server into a freeze. This
+ * one reaches the server, so the window asks for it once, when a connection
+ * opens.
+ */
+export function ServerVersion(id: string): $CancellablePromise<string> {
+    return $Call.ByID(3066936021, id);
+}
+
+/**
  * Status returns the last known state without contacting the server, which is
  * what the window calls as it redraws.
  */
