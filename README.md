@@ -28,9 +28,9 @@ The bet is focus: do for **one** engine what the competition tries to do for twe
 
 ## Project status
 
-**Pre-alpha — under active development.** You can open several servers at once, save each
-connection with its password in your system keychain, mark one as production or as read-only,
-and browse what is on it — databases, schemas, tables, views and sequences, with an object's
+**Pre-alpha — under active development.** You can open several servers at once and save each
+connection — with its password in your system keychain where there is one, and held for the
+session where there is not — mark one as production or as read-only, and browse what is on it — databases, schemas, tables, views and sequences, with an object's
 properties and its DDL in a pane of their own. There is no SQL editor and no backup yet. This
 README grows with every feature shipped: anything documented below with an example works.
 Anything in the *Roadmap* section does not.
