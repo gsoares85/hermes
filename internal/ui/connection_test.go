@@ -69,6 +69,8 @@ func TestNothingReturnedCarriesACredential(t *testing.T) {
 		ui.SavedView{},
 		ui.VaultView{},
 		ui.NodeView{},
+		ui.PropertiesView{},
+		ui.ColumnView{},
 	}
 
 	// The walk itself is checked before it is trusted. A password is planted in

@@ -112,17 +112,24 @@ func (t *treeSession) isClosed() bool {
 // treePool hands out one session per database, so a test can say which database
 // a question was asked of.
 type treePool struct {
-	database   string
-	sessions   *sessions
-	rows       [][]any
-	err        error
-	sessionErr error
+	database     string
+	sessions     *sessions
+	rows         [][]any
+	err          error
+	sessionErr   error
+	databasesErr error
 }
 
 func (t treePool) Ping(context.Context) error                    { return nil }
 func (t treePool) ServerVersion(context.Context) (string, error) { return "16.2", nil }
-func (t treePool) Databases(context.Context) ([]string, error)   { return []string{"app", "hermes"}, nil }
-func (t treePool) Close()                                        {}
+func (t treePool) Databases(context.Context) ([]string, error) {
+	if t.databasesErr != nil {
+		return nil, t.databasesErr
+	}
+
+	return []string{"app", "hermes"}, nil
+}
+func (t treePool) Close() {}
 func (t treePool) Session(context.Context) (driver.Session, error) {
 	if t.sessionErr != nil {
 		return nil, t.sessionErr
@@ -168,15 +175,19 @@ type treeOpener struct {
 	// may not open looks like: the pool is built without contacting anything,
 	// and the refusal arrives at the first thing that actually asks.
 	sessionErr error
+	// databasesErr fails the root of the tree, which is the first thing a
+	// connection is asked and a different path from the one above.
+	databasesErr error
 }
 
 func (t treeOpener) Open(_ context.Context, target driver.Target) (driver.Pool, error) {
 	return treePool{
-		database:   target.Database,
-		sessions:   t.sessions,
-		rows:       t.rows,
-		err:        t.err,
-		sessionErr: t.sessionErr,
+		database:     target.Database,
+		sessions:     t.sessions,
+		rows:         t.rows,
+		err:          t.err,
+		sessionErr:   t.sessionErr,
+		databasesErr: t.databasesErr,
 	}, nil
 }
 
@@ -619,5 +630,57 @@ func TestBrowsingIntoADatabaseThatExistsIsAllowed(t *testing.T) {
 
 	if _, err := tree.Children(t.Context(), id, ui.NodeRef{Database: "app"}, ui.TreeFilter{}); err != nil {
 		t.Errorf("expanding a database the server listed: %v", err)
+	}
+}
+
+// A failure on the way to a level is redacted before it crosses.
+//
+// The driver echoes the connection string it was given into some of its own
+// errors, and a connection string holds a password. Every failure path of this
+// service goes through the redaction for that reason, and until now nothing
+// planted a secret in one to find out whether it did. A rule kept by everybody
+// remembering is a rule with no test behind it.
+func TestAFailureOnTheWayToALevelCarriesNoPassword(t *testing.T) {
+	t.Parallel()
+
+	const leaking = "postgres://hermes:" + password + "@db.example.com:5432/app"
+
+	// Unclassified on purpose: a classified failure is replaced by a diagnosis
+	// this product wrote, which is a different guarantee. What has to be proved
+	// here is that the path which does carry the driver's words redacts them.
+	tree, id := openTree(t, treeOpener{
+		sessions:   newSessions(),
+		sessionErr: errors.New("checking out a connection: " + leaking),
+	})
+
+	_, err := tree.Children(t.Context(), id, ui.NodeRef{Database: "app"}, ui.TreeFilter{})
+	if err == nil {
+		t.Fatal("a session that could not be checked out answered a level")
+	}
+
+	if strings.Contains(err.Error(), password) {
+		t.Errorf("the failure of a level carries the password: %v", err)
+	}
+
+	// The message is worth nothing if redaction emptied it, so the check that
+	// something survived is part of the same assertion.
+	if !strings.Contains(err.Error(), "db.example.com") {
+		t.Errorf("redaction took the whole message with it: %v", err)
+	}
+}
+
+// The same for the root of the tree, which is a different call on a different
+// failure path and the first one anybody hits.
+func TestAFailureListingTheDatabasesCarriesNoPassword(t *testing.T) {
+	t.Parallel()
+
+	const leaking = "postgres://hermes:" + password + "@db.example.com:5432/app"
+
+	tree, id := openTree(t, treeOpener{sessions: newSessions(), databasesErr: errors.New(leaking)})
+
+	if _, err := tree.Children(t.Context(), id, ui.NodeRef{}, ui.TreeFilter{}); err == nil {
+		t.Fatal("a server that could not be listed answered a level")
+	} else if strings.Contains(err.Error(), password) {
+		t.Errorf("the failure of the root carries the password: %v", err)
 	}
 }
