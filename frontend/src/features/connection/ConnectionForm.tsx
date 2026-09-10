@@ -6,6 +6,7 @@ import {
   databases as listDatabases,
   deleteConnection,
   emptyForm,
+  environments as listEnvironments,
   formFromSaved,
   openConnection,
   parseURI,
@@ -22,6 +23,7 @@ import {
   type StatusView,
   type VaultView,
 } from "../../api/connection";
+import { ConnectionMarks } from "./ConnectionMarks";
 
 /**
  * Describes a connection, tests it, and opens it.
@@ -34,11 +36,12 @@ import {
 export function ConnectionForm({
   onOpened,
 }: {
-  onOpened: (id: string) => void;
+  onOpened: (status: StatusView | null) => void;
 }): React.JSX.Element {
   const [form, setForm] = useState<Form>(emptyForm);
   const [uri, setUri] = useState("");
   const [modes, setModes] = useState<string[]>([]);
+  const [labels, setLabels] = useState<string[]>([]);
   const [diagnosis, setDiagnosis] = useState<DiagnosisView | null>(null);
   const [status, setStatus] = useState<StatusView | null>(null);
   const [busy, setBusy] = useState(false);
@@ -111,6 +114,16 @@ export function ConnectionForm({
       .catch((): void => {
         // Running outside the desktop shell. The field falls back to a plain
         // text input rather than the window failing to draw.
+      });
+
+    listEnvironments()
+      .then((loaded): void => {
+        if (active) {
+          setLabels(loaded);
+        }
+      })
+      .catch((): void => {
+        // Running outside the desktop shell, like the modes above.
       });
 
     // Asked once, at startup, and never again: the answer cannot change while
@@ -200,9 +213,11 @@ export function ConnectionForm({
     try {
       const opened = await run(openConnection(form));
       setStatus(opened);
-      // The window above holds the identifier, because the object tree is drawn
-      // from it and this form is not the place that owns what is on screen.
-      onOpened(opened.id);
+      // The window above is handed the whole state, not just the identifier.
+      // The object tree is drawn from the identifier, and the environment mark
+      // is drawn around all of it — a form that reported only the identifier
+      // would leave the rest of the window unable to say which server this is.
+      onOpened(opened);
       setDiagnosis(null);
       // The connection is open and the password has been used. Keeping it in
       // the state of a page that is redrawn and inspected buys nothing, and
@@ -281,7 +296,7 @@ export function ConnectionForm({
     }
     setStatus(null);
     setAvailable([]);
-    onOpened("");
+    onOpened(null);
   }
 
   return (
@@ -387,6 +402,49 @@ export function ConnectionForm({
               }}
             />
           )}
+        </label>
+
+        <label className="connection__field">
+          <span>Environment</span>
+          <select
+            value={form.environment}
+            onChange={(event): void => {
+              update("environment", event.target.value);
+            }}
+          >
+            {/*
+              First, and the default. Most connections are somebody's own
+              database and are not worth labelling, and a list that opens on
+              Development would label them all wrongly.
+            */}
+            <option value="">Not labelled</option>
+            {labels.map((label): React.JSX.Element => (
+              <option key={label} value={label}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {/*
+          The mark is a request to the server, not a rule this window applies.
+          Saying so is the point: a checkbox that looked like the window
+          policing writes would be trusted for something it cannot do.
+        */}
+        <label className="connection__field connection__check">
+          <span>Read-only</span>
+          <span className="connection__check-row">
+            <input
+              type="checkbox"
+              checked={form.readOnly}
+              onChange={(event): void => {
+                update("readOnly", event.target.checked);
+              }}
+            />
+            <span className="connection__hint">
+              The server is asked to refuse every statement that writes.
+            </span>
+          </span>
         </label>
       </div>
 
@@ -505,6 +563,10 @@ function SavedConnections(props: {
             >
               <span className="connection__saved-name">
                 {connection.name === "" ? connection.host : connection.name}
+                <ConnectionMarks
+                  environment={connection.environment}
+                  readOnly={connection.readOnly}
+                />
               </span>
               <span className="connection__saved-target">
                 {connection.user}@{connection.host}:{connection.port}
@@ -597,6 +659,7 @@ function StateIndicator({ status }: { status: StatusView }): React.JSX.Element {
     <p className={`connection__state connection__state--${status.state}`}>
       <span className="connection__dot" aria-hidden="true" />
       {status.state}
+      <ConnectionMarks environment={status.environment} readOnly={status.readOnly} />
       {status.diagnosis.failed && ` — ${status.diagnosis.summary}`}
     </p>
   );

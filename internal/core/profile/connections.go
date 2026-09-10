@@ -10,14 +10,28 @@ import (
 	"github.com/gsoares85/hermes/internal/core/conn"
 )
 
-// Version is the version of the connections file this build reads and writes.
+// The versions of the connections file this build understands.
 //
-// It is written first and read first, and a file carrying any other number is
-// refused rather than read anyway. That is the whole point of having it: a
-// format with no version leaves the day it changes with two bad options, to
-// guess or to break, and guessing at the meaning of a file that holds how
-// someone reaches their production database is not an option.
-const Version = 1
+// The number is written first and read first, and a file carrying anything
+// outside this range is refused rather than read anyway. That is the whole
+// point of having it: a format with no version leaves the day it changes with
+// two bad options, to guess or to break, and guessing at the meaning of a file
+// that holds how someone reaches their production database is not an option.
+//
+// Version 2 added the environment and the read-only mark. They went into a
+// version of their own rather than into version 1 because the decoder here is
+// strict: an older build meeting them under version 1 would refuse the file and
+// blame a field, when what is actually true is that the file is newer than it
+// is. It reads 2 and answers exactly that.
+const (
+	// FirstVersion is the oldest file this build still reads. Refusing one
+	// would lose every connection somebody had saved, over two optional fields
+	// they had never heard of.
+	FirstVersion = 1
+
+	// Version is what this build writes, always, whatever it read.
+	Version = 2
+)
 
 // ReadConnections reads a connections file.
 //
@@ -151,6 +165,8 @@ type entry struct {
 	SSLRootCert string `toml:"sslrootcert,omitempty"`
 	SSLCert     string `toml:"sslcert,omitempty"`
 	SSLKey      string `toml:"sslkey,omitempty"`
+	Environment string `toml:"environment,omitempty"`
+	ReadOnly    bool   `toml:"read_only,omitempty"`
 	Archived    bool   `toml:"archived,omitempty"`
 
 	Params  map[string]string `toml:"params,omitempty"`
@@ -169,6 +185,8 @@ func entryOf(config conn.Config) entry {
 		SSLRootCert: config.TLS.RootCert,
 		SSLCert:     config.TLS.Cert,
 		SSLKey:      config.TLS.Key,
+		Environment: string(config.Environment),
+		ReadOnly:    config.ReadOnly,
 		Archived:    config.Archived,
 		Params:      config.Params,
 		Options:     config.Options,
@@ -189,8 +207,10 @@ func (e entry) config() conn.Config {
 			Cert:     e.SSLCert,
 			Key:      e.SSLKey,
 		},
-		Archived: e.Archived,
-		Params:   e.Params,
-		Options:  e.Options,
+		Environment: conn.Environment(e.Environment),
+		ReadOnly:    e.ReadOnly,
+		Archived:    e.Archived,
+		Params:      e.Params,
+		Options:     e.Options,
 	}
 }

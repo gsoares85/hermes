@@ -81,3 +81,66 @@ func TestTargetOfAConfigWithoutParams(t *testing.T) {
 		t.Errorf("Params = %v, want nil", got)
 	}
 }
+
+// The whole of the read-only mark, as far as this layer is concerned: it
+// reaches the server as a session parameter.
+//
+// Deciding in the client whether a statement writes would need a SQL parser and
+// would be wrong about the first function that writes inside itself. Saying it
+// once, on connect, makes the server the thing that refuses — and nothing the
+// window forgets to check can go around it.
+func TestAReadOnlyConnectionTellsTheServerToRefuseWrites(t *testing.T) {
+	t.Parallel()
+
+	config := sample()
+	config.ReadOnly = true
+
+	if got := config.Target().Params["default_transaction_read_only"]; got != "on" {
+		t.Errorf("default_transaction_read_only = %q, want on", got)
+	}
+}
+
+// A connection nobody marked is left exactly as it was. Sending the parameter
+// as off would override a server, a database or a role that was deliberately
+// set read-only, which is the opposite of what not marking anything means.
+func TestAnUnmarkedConnectionSaysNothingAboutReadingOnly(t *testing.T) {
+	t.Parallel()
+
+	if _, set := sample().Target().Params["default_transaction_read_only"]; set {
+		t.Error("an unmarked connection sends default_transaction_read_only, and it should say nothing")
+	}
+}
+
+// The mark wins over the parameter. Params is free-form text, so a connection
+// marked read-only in the form could otherwise be un-marked by a line further
+// down the same form — a protection turned off by something that never
+// mentioned it.
+func TestTheReadOnlyMarkOverridesTheSessionParameter(t *testing.T) {
+	t.Parallel()
+
+	config := sample()
+	config.ReadOnly = true
+	config.Params = map[string]string{"default_transaction_read_only": "off"}
+
+	if got := config.Target().Params["default_transaction_read_only"]; got != "on" {
+		t.Errorf("default_transaction_read_only = %q, want the mark to win", got)
+	}
+}
+
+// The parameter map is the caller's, and a connection that had none must not
+// come back having grown one — which is the shape a nil map makes easy to get
+// wrong in both directions.
+func TestMarkingReadOnlyDoesNotReachTheConfiguration(t *testing.T) {
+	t.Parallel()
+
+	config := sample()
+	config.ReadOnly = true
+	config.Params = nil
+
+	if got := config.Target().Params["default_transaction_read_only"]; got != "on" {
+		t.Errorf("default_transaction_read_only = %q, want on even with no parameters", got)
+	}
+	if config.Params != nil {
+		t.Errorf("Params = %v, want the configuration left alone", config.Params)
+	}
+}

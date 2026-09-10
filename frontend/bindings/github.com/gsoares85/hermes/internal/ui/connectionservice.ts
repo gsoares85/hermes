@@ -68,6 +68,15 @@ export function Delete(id: string): $CancellablePromise<void> {
 }
 
 /**
+ * Environments lists the labels the form offers, for the same reason SSLModes
+ * does: a window that retypes the list drifts from what the file will accept,
+ * and the value that drifts is the one marking a production server.
+ */
+export function Environments(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(3513473366);
+}
+
+/**
  * List returns the saved connections, and touches no keychain doing it.
  */
 export function List(): $CancellablePromise<$models.SavedView[] | null> {

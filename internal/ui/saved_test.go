@@ -882,3 +882,58 @@ func TestAnIdentifierIsSavedTrimmed(t *testing.T) {
 		t.Errorf("the keychain holds a different password than the last save wrote")
 	}
 }
+
+// The environment and the read-only mark are part of the connection, so they go
+// to the file with it and come back in the listing.
+//
+// Losing either one on the round trip is not cosmetic: the connection that
+// comes back is a production server with no mark on it, or one that was meant
+// never to write and now can.
+func TestTheEnvironmentAndTheReadOnlyMarkAreSaved(t *testing.T) {
+	t.Parallel()
+
+	service, store, _ := saved(t)
+
+	marked := form()
+	marked.Environment = "prod"
+	marked.ReadOnly = true
+
+	view, err := service.Save(t.Context(), marked)
+	if err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+	if view.Environment != "prod" || !view.ReadOnly {
+		t.Errorf("the saved view says %q/%v, want prod/true", view.Environment, view.ReadOnly)
+	}
+
+	if store.saved[0].Environment != conn.EnvironmentProduction || !store.saved[0].ReadOnly {
+		t.Errorf("the stored connection says %q/%v, want prod/true",
+			store.saved[0].Environment, store.saved[0].ReadOnly)
+	}
+
+	listed, err := service.List()
+	if err != nil {
+		t.Fatalf("List() = %v", err)
+	}
+	if listed[0].Environment != "prod" || !listed[0].ReadOnly {
+		t.Errorf("the listing says %q/%v, want prod/true", listed[0].Environment, listed[0].ReadOnly)
+	}
+}
+
+// An environment the file would refuse is refused here, while the person is
+// still looking at the form rather than at a file they cannot load next time.
+func TestSavingRefusesAnEnvironmentThatIsNotOne(t *testing.T) {
+	t.Parallel()
+
+	service, store, _ := saved(t)
+
+	wrong := form()
+	wrong.Environment = "prd"
+
+	if _, err := service.Save(t.Context(), wrong); err == nil {
+		t.Error("Save accepted an environment that is not one of the three")
+	}
+	if len(store.saved) != 0 {
+		t.Errorf("the store holds %d connections, want none written", len(store.saved))
+	}
+}

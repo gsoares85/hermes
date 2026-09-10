@@ -4,6 +4,7 @@ package conn_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/gsoares85/hermes/internal/core/conn"
@@ -334,5 +335,77 @@ func TestADatabaseThatCannotBeOpenedSaysWhy(t *testing.T) {
 
 	if status := connection.Check(t.Context()); status.State != conn.StateConnected {
 		t.Errorf("the connection beside the refused database is %q", status.State)
+	}
+}
+
+// The read-only mark, proved where it has to be true: against a server.
+//
+// A mark that only greys out a button is the failure this test exists to catch,
+// so nothing here asks the window. The connection is opened marked, an INSERT
+// is sent, and what has to come back is the server's own refusal turned into
+// the sentence that says where the mark is cleared — not the driver's text.
+func TestAReadOnlyConnectionIsRefusedByTheServer(t *testing.T) {
+	t.Parallel()
+
+	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
+	instance.Exec(t, "CREATE TABLE IF NOT EXISTS refused_write (id int)")
+
+	config, err := conn.ParseURI(instance.DSN)
+	if err != nil {
+		t.Fatalf("parsing the DSN: %v", err)
+	}
+	config.ReadOnly = true
+
+	connection, err := conn.Open(t.Context(), postgres.New(), config)
+	if err != nil {
+		t.Fatalf("opening the connection: %v", err)
+	}
+	t.Cleanup(connection.Close)
+
+	session, err := connection.Session(t.Context())
+	if err != nil {
+		t.Fatalf("checking out a session: %v", err)
+	}
+	t.Cleanup(session.Close)
+
+	err = session.Exec(t.Context(), "INSERT INTO refused_write VALUES (1)")
+	if err == nil {
+		t.Fatal("the server accepted a write on a connection marked read-only")
+	}
+
+	if class, _ := driver.ClassOf(err); class != driver.FailureReadOnly {
+		t.Fatalf("class = %q, want %q (%v)", class, driver.FailureReadOnly, err)
+	}
+
+	diagnosis := conn.Diagnose(err, config)
+	explanation := strings.ToLower(diagnosis.Summary + diagnosis.Cause + diagnosis.NextStep)
+
+	if !strings.Contains(explanation, "read-only") {
+		t.Errorf("the refusal was not explained: %+v", diagnosis)
+	}
+	if strings.Contains(diagnosis.Summary, "SQLSTATE") {
+		t.Errorf("the summary is the driver's own text: %q", diagnosis.Summary)
+	}
+}
+
+// The other half of the same promise. A gate that refused every write would
+// pass the test above and leave the product unable to do anything, so the
+// unmarked connection has to still write.
+func TestAnUnmarkedConnectionStillWrites(t *testing.T) {
+	t.Parallel()
+
+	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
+	instance.Exec(t, "CREATE TABLE IF NOT EXISTS accepted_write (id int)")
+
+	connection := openReal(t, instance)
+
+	session, err := connection.Session(t.Context())
+	if err != nil {
+		t.Fatalf("checking out a session: %v", err)
+	}
+	t.Cleanup(session.Close)
+
+	if err := session.Exec(t.Context(), "INSERT INTO accepted_write VALUES (1)"); err != nil {
+		t.Errorf("an unmarked connection was refused a write: %v", err)
 	}
 }

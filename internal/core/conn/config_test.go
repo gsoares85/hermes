@@ -310,3 +310,40 @@ func TestOrdinarySettingsAreStillValid(t *testing.T) {
 		t.Errorf("Validate() = %v, want nil", err)
 	}
 }
+
+// The environment is a closed set, and a value outside it is refused rather
+// than kept. "prd" typed into the field of a production server would draw no
+// mark at all, and an unmarked production server is exactly what this label
+// exists to prevent.
+func TestAnUnknownEnvironmentIsRefused(t *testing.T) {
+	t.Parallel()
+
+	config := sample()
+	config.Environment = "prd"
+
+	err := config.Validate()
+
+	var invalid conn.InvalidField
+	if !errors.As(err, &invalid) || invalid.Field != "environment" {
+		t.Errorf("Validate() = %v, want a fault naming the environment field", err)
+	}
+}
+
+// Not choosing is not the same as choosing something that does not exist: most
+// connections are neither production nor staging, and they have to validate.
+func TestEveryEnvironmentTheFormOffersIsAccepted(t *testing.T) {
+	t.Parallel()
+
+	for _, environment := range append([]conn.Environment{""}, conn.Environments()...) {
+		t.Run(string(environment), func(t *testing.T) {
+			t.Parallel()
+
+			config := sample()
+			config.Environment = environment
+
+			if err := config.Validate(); err != nil {
+				t.Errorf("Validate() = %v, want the environment %q accepted", err, environment)
+			}
+		})
+	}
+}

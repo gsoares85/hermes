@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 
@@ -51,6 +52,16 @@ func (p *perDatabase) opened() []string {
 	}
 
 	return names
+}
+
+// asked answers every target the opener was handed, so that a test can check
+// what a browsed database was actually opened with rather than only that it was
+// opened.
+func (p *perDatabase) asked() []driver.Target {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return slices.Clone(p.targets)
 }
 
 func (p *perDatabase) poolOf(database string) *stubPool {
@@ -319,5 +330,36 @@ func TestADatabaseWithNoNameIsRefused(t *testing.T) {
 
 	if opened := opener.opened(); len(opened) != 1 {
 		t.Errorf("the opener was asked for %v, want nothing beyond the connection's own", opened)
+	}
+}
+
+// Browsing must not lose the read-only mark.
+//
+// Another database is another pool, and a pool opened without the parameter is
+// a connection somebody can write through — reached in two clicks from a
+// connection they marked precisely so that they could not.
+func TestBrowsingAnotherDatabaseCarriesTheReadOnlyMark(t *testing.T) {
+	t.Parallel()
+
+	opener := newPerDatabase()
+
+	marked := sample()
+	marked.ReadOnly = true
+
+	connection, err := conn.Open(t.Context(), opener, marked)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	t.Cleanup(connection.Close)
+
+	if _, err := connection.Database(t.Context(), "reporting"); err != nil {
+		t.Fatalf("opening reporting: %v", err)
+	}
+
+	for _, target := range opener.asked() {
+		if target.Params["default_transaction_read_only"] != "on" {
+			t.Errorf("the pool for %q was opened without the read-only mark: %v",
+				target.Database, target.Params)
+		}
 	}
 }

@@ -118,15 +118,15 @@ func lastSegment(key string) string {
 // does understand may mean something else there, and a connection opened
 // against the wrong host or with the wrong sslmode is not a cosmetic mistake.
 func (f file) checkVersion() error {
-	switch f.Version {
-	case Version:
+	switch {
+	case f.Version >= FirstVersion && f.Version <= Version:
 		return nil
-	case 0:
+	case f.Version == 0:
 		return fmt.Errorf("%w: the file does not say which version it is, and every connections file must",
 			ErrUnknownVersion)
 	default:
-		return fmt.Errorf("%w: the file is version %d and this Hermes reads version %d",
-			ErrUnknownVersion, f.Version, Version)
+		return fmt.Errorf("%w: the file is version %d and this Hermes reads versions %d to %d",
+			ErrUnknownVersion, f.Version, FirstVersion, Version)
 	}
 }
 

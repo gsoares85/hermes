@@ -81,7 +81,7 @@ func TestTheFileSaysWhichVersionItIs(t *testing.T) {
 		t.Fatalf("writing the connections file: %v", err)
 	}
 
-	if !strings.HasPrefix(written.String(), "version = 1\n") {
+	if !strings.HasPrefix(written.String(), "version = 2\n") {
 		t.Errorf("the file does not open with its version:\n%s", written.String())
 	}
 }
@@ -93,7 +93,7 @@ func TestAFileOfAnotherVersionIsRefused(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
-		"from the future": "version = 2\n",
+		"from the future": "version = 3\n",
 		"with no version": "[[connection]]\nid = \"a\"\n",
 	}
 
@@ -347,12 +347,17 @@ func TestTheFileIsWorthOpeningInAnEditor(t *testing.T) {
 
 func sample() conn.Config {
 	return conn.Config{
-		ID:       "9d0f6e5c-1b2a-4c3d-8e4f-5a6b7c8d9e0f",
-		Name:     "production — read only",
-		Host:     "db.example.com",
-		Port:     5432,
-		Database: "app",
-		User:     "reader",
+		ID:   "9d0f6e5c-1b2a-4c3d-8e4f-5a6b7c8d9e0f",
+		Name: "production — read only",
+		// The two fields version 2 added, set on the connection every
+		// round-trip test here uses. A field left at its zero in the sample is
+		// a field the round trip cannot tell from one the format drops.
+		Environment: conn.EnvironmentProduction,
+		ReadOnly:    true,
+		Host:        "db.example.com",
+		Port:        5432,
+		Database:    "app",
+		User:        "reader",
 		TLS: conn.TLS{
 			Mode:     conn.SSLVerifyFull,
 			RootCert: "/etc/ssl/certs/company-ca.pem",
@@ -607,5 +612,114 @@ password = 'correct-horse-battery-staple'
 	}
 	if !strings.Contains(err.Error(), "keychain") {
 		t.Errorf("ReadConnections(...) = %v, want it to say where passwords go", err)
+	}
+}
+
+// A file written by the build before version 2 is still read, and the two
+// fields it has no place for come back at their zero: no environment, and not
+// read-only.
+//
+// It is the whole reason the reader accepts more than one version. Refusing a
+// version 1 file would lose every connection somebody had saved, over two
+// optional fields neither of which they had ever heard of.
+func TestAVersionOneFileIsStillRead(t *testing.T) {
+	t.Parallel()
+
+	read, err := profile.ReadConnections(strings.NewReader(`version = 1
+
+[[connection]]
+id = "a"
+host = "db.example.com"
+port = 5432
+user = "reader"
+`))
+	if err != nil {
+		t.Fatalf("ReadConnections() = %v, want a version 1 file to still be read", err)
+	}
+	if len(read) != 1 {
+		t.Fatalf("read %d connections, want 1", len(read))
+	}
+
+	if read[0].Environment != "" {
+		t.Errorf("Environment = %q, want empty: version 1 has no field for it", read[0].Environment)
+	}
+	if read[0].ReadOnly {
+		t.Error("ReadOnly is set on a file that has no field for it")
+	}
+}
+
+// Written as version 2 whatever it was read as. There is one format this build
+// writes, and a file that keeps its old number would be a file whose number
+// says nothing about what is in it.
+func TestAVersionOneFileIsWrittenBackAsVersionTwo(t *testing.T) {
+	t.Parallel()
+
+	read, err := profile.ReadConnections(strings.NewReader(`version = 1
+
+[[connection]]
+id = "a"
+host = "db.example.com"
+port = 5432
+user = "reader"
+`))
+	if err != nil {
+		t.Fatalf("reading the version 1 file: %v", err)
+	}
+
+	var written bytes.Buffer
+	if err := profile.WriteConnections(&written, read); err != nil {
+		t.Fatalf("writing the connections file: %v", err)
+	}
+
+	if !strings.HasPrefix(written.String(), "version = 2\n") {
+		t.Errorf("a version 1 file was written back as something else:\n%s", written.String())
+	}
+}
+
+// The environment and the read-only mark are fields of the file, not of the
+// window: a connection marked production stays marked after Hermes is closed,
+// and so does one that must never write.
+func TestTheEnvironmentAndTheReadOnlyMarkAreKept(t *testing.T) {
+	t.Parallel()
+
+	var written bytes.Buffer
+	if err := profile.WriteConnections(&written, []conn.Config{sample()}); err != nil {
+		t.Fatalf("writing the connections file: %v", err)
+	}
+
+	// Asserted on the bytes as well as on the round trip, because the file is
+	// meant to be read and edited by hand and under version control: a key
+	// spelled readOnly would round-trip perfectly and be unreadable to anyone
+	// looking at it.
+	for _, want := range []string{"environment =", "read_only = true"} {
+		if !strings.Contains(written.String(), want) {
+			t.Errorf("the file does not carry %s:\n%s", want, written.String())
+		}
+	}
+
+	read, err := profile.ReadConnections(bytes.NewReader(written.Bytes()))
+	if err != nil {
+		t.Fatalf("reading the connections file back: %v", err)
+	}
+	if read[0].Environment != conn.EnvironmentProduction || !read[0].ReadOnly {
+		t.Errorf("environment/read-only came back as %q/%v, want prod/true",
+			read[0].Environment, read[0].ReadOnly)
+	}
+}
+
+// A build older than version 2 meeting a version 2 file has to say that it is
+// the version it cannot read, and not point at a field. That is the entire
+// reason the number exists, and the reason the fields went into a new version
+// rather than into version 1.
+func TestAnUnknownVersionIsBlamedOnTheVersion(t *testing.T) {
+	t.Parallel()
+
+	_, err := profile.ReadConnections(strings.NewReader("version = 7\n"))
+
+	if !errors.Is(err, profile.ErrUnknownVersion) {
+		t.Fatalf("ReadConnections() = %v, want ErrUnknownVersion", err)
+	}
+	if !strings.Contains(err.Error(), "7") {
+		t.Errorf("the message does not say which version the file is: %v", err)
 	}
 }

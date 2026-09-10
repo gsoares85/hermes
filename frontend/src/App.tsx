@@ -1,17 +1,23 @@
 import { useEffect, useState } from "react";
 
 import { fetchAppInfo, unknownAppInfo, type AppInfo } from "./api/appInfo";
+import type { StatusView } from "./api/connection";
 import type { ObjectRef } from "./api/object";
 import { ConnectionForm } from "./features/connection/ConnectionForm";
+import { ConnectionMarks, isProduction } from "./features/connection/ConnectionMarks";
 import { ObjectPanel } from "./features/tree/ObjectPanel";
 import { ObjectTree } from "./features/tree/ObjectTree";
 
 export function App(): React.JSX.Element {
   const [info, setInfo] = useState<AppInfo>(unknownAppInfo);
-  // The connection whose objects are on screen. Empty until one is opened, and
-  // empty again when it closes: the tree belongs to a connection and there is
+  // The connection whose objects are on screen. Null until one is opened, and
+  // null again when it closes: the tree belongs to a connection and there is
   // nothing to draw without one.
-  const [connectionId, setConnectionId] = useState("");
+  //
+  // The whole state is kept rather than the identifier alone, because the mark
+  // saying which server this is belongs around the whole window and not inside
+  // the panel that happens to have asked for it.
+  const [connection, setConnection] = useState<StatusView | null>(null);
   // The object whose properties are on screen. Null until one is picked, and
   // null again when the connection goes, because it belonged to that server.
   const [selected, setSelected] = useState<ObjectRef | null>(null);
@@ -35,26 +41,42 @@ export function App(): React.JSX.Element {
     };
   }, []);
 
+  // Drawn on the window rather than on a panel, and that is the requirement
+  // rather than a flourish: a production server has to be unmistakable wherever
+  // someone is looking, and every panel is inside this.
+  const production = connection !== null && isProduction(connection.environment);
+
   return (
-    <div className="app">
+    <div className={production ? "app app--production" : "app"}>
       <header className="app__header">
-        <h1>Hermes</h1>
-        <p>PostgreSQL, without the license.</p>
+        <div>
+          <h1>Hermes</h1>
+          <p>PostgreSQL, without the license.</p>
+        </div>
+
+        {connection !== null && (
+          <p className="app__connection">
+            {connection.name !== "" && (
+              <span className="app__connection-name">{connection.name}</span>
+            )}
+            <ConnectionMarks environment={connection.environment} readOnly={connection.readOnly} />
+          </p>
+        )}
       </header>
 
       <main className="app__main">
         <ConnectionForm
-          onOpened={(id): void => {
-            setConnectionId(id);
+          onOpened={(opened): void => {
+            setConnection(opened);
             setSelected(null);
           }}
         />
 
-        {connectionId !== "" && (
+        {connection !== null && (
           <div className="app__browser">
-            <ObjectTree connectionId={connectionId} onSelect={setSelected} />
+            <ObjectTree connectionId={connection.id} onSelect={setSelected} />
 
-            {selected !== null && <ObjectPanel connectionId={connectionId} object={selected} />}
+            {selected !== null && <ObjectPanel connectionId={connection.id} object={selected} />}
           </div>
         )}
       </main>

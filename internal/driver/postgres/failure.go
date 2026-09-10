@@ -24,6 +24,11 @@ const (
 	sqlStateInvalidAuthorization = "28000"
 	sqlStateInvalidCatalog       = "3D000"
 
+	// The transaction cannot write. It is what a connection Hermes marked
+	// read-only answers to every INSERT, UPDATE, DELETE and DDL, and what a
+	// standby answers to anyone.
+	sqlStateReadOnlyTransaction = "25006"
+
 	// A server on its way down says so before it closes the socket. Both
 	// codes mean the connection that existed is gone: 57P01 is a shutdown or
 	// an administrator terminating the backend, 57P02 is another backend
@@ -79,6 +84,9 @@ func fromSQLState(pgErr *pgconn.PgError) driver.FailureClass {
 
 	case sqlStateInvalidCatalog:
 		return driver.FailureMissingDatabase
+
+	case sqlStateReadOnlyTransaction:
+		return driver.FailureReadOnly
 
 	case sqlStateAdminShutdown, sqlStateCrashShutdown:
 		return driver.FailureDropped

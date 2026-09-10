@@ -47,6 +47,14 @@ export interface ConnectionForm {
     "rootCert": string;
     "cert": string;
     "key": string;
+
+    /**
+     * Environment is what this connection is — dev, staging or prod — and
+     * empty for one nobody labelled. ReadOnly asks the server to refuse every
+     * statement that writes.
+     */
+    "environment": string;
+    "readOnly": boolean;
 }
 
 /**
@@ -162,16 +170,26 @@ export interface SavedView {
     "rootCert": string;
     "cert": string;
     "key": string;
+    "environment": string;
+    "readOnly": boolean;
     "archived": boolean;
 }
 
 /**
- * StatusView is the state of an open connection.
+ * StatusView is the state of an open connection, and who that connection is.
+ * 
+ * The three fields after the state are the ones that make a production server
+ * unmistakable in every tab. A tab cannot arrange that for itself — it can only
+ * draw what it was handed — so the label travels with the state rather than
+ * being looked up separately by whoever remembers to.
  */
 export interface StatusView {
     "id": string;
     "state": string;
     "diagnosis": DiagnosisView;
+    "name": string;
+    "environment": string;
+    "readOnly": boolean;
 }
 
 /**
