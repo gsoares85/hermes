@@ -189,12 +189,7 @@ export function App(): React.JSX.Element {
     setTabs((held): Tabs => openedTab(held, status));
 
     if (released !== "") {
-      setPicked((held): ReadonlyMap<string, ObjectRef> => {
-        const next = new Map(held);
-        next.delete(released);
-
-        return next;
-      });
+      forget(released);
 
       closeConnection(released).catch((): void => {
         // Gone already. The tab it had is gone too, which is the part anybody
@@ -264,15 +259,35 @@ export function App(): React.JSX.Element {
    */
   function close(id: string): void {
     setTabs((held): Tabs => closed(held, id));
+    forget(id);
+
+    closeConnection(id).catch((): void => {
+      // Already closed. Nothing to say and nothing to go back to.
+    });
+  }
+
+  /**
+   * Everything the window holds keyed by a connection, dropped together.
+   *
+   * Two maps are keyed by it — what is selected, and what the server said it
+   * is — and one of them was being cleared. Neither can be reached again once
+   * the tab is gone, so the leak is a string per closed connection and nothing
+   * on screen is wrong. It is the asymmetry that is the defect: two maps with
+   * the same key and one rule between them is how the next map keyed by a
+   * connection ends up never cleared either.
+   */
+  function forget(id: string): void {
     setPicked((held): ReadonlyMap<string, ObjectRef> => {
       const next = new Map(held);
       next.delete(id);
 
       return next;
     });
+    setVersions((held): ReadonlyMap<string, string> => {
+      const next = new Map(held);
+      next.delete(id);
 
-    closeConnection(id).catch((): void => {
-      // Already closed. Nothing to say and nothing to go back to.
+      return next;
     });
   }
 
