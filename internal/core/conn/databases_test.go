@@ -428,3 +428,39 @@ func TestBrowsingDoesNotShareTheParameterMaps(t *testing.T) {
 		t.Errorf("the parameters of the connection browsed from changed to %q", got)
 	}
 }
+
+// A database name is used as it was given, not trimmed.
+//
+// PostgreSQL takes a quoted identifier with spaces in it, so " reporting " and
+// "reporting" are two different databases. Trimming opened one while the tree
+// said the other, and a connection configured on a padded name would open a
+// second pool for what it believed was the same database.
+//
+// It is the rule catalog.Name already states for every other identifier in this
+// product, and it states it for this reason: trimming renames the object at the
+// door.
+func TestADatabaseNameIsUsedAsItWasGiven(t *testing.T) {
+	t.Parallel()
+
+	connection, opener := openBrowsable(t)
+
+	const padded = " reporting "
+
+	if _, err := connection.Database(t.Context(), padded); err != nil {
+		t.Fatalf("opening %q: %v", padded, err)
+	}
+
+	var found bool
+	for _, target := range opener.asked() {
+		if target.Database == padded {
+			found = true
+		}
+		if target.Database == "reporting" {
+			t.Error("a database with spaces around its name was opened as a different database")
+		}
+	}
+
+	if !found {
+		t.Errorf("the opener was asked for %v, want %q", opener.opened(), padded)
+	}
+}

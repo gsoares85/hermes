@@ -132,10 +132,19 @@ func Open(ctx context.Context, opener driver.Opener, config Config) (*Connection
 // nothing, so holding it costs a map write, and the alternative is a second
 // implementation of single flight that would save nothing.
 func (c *Connection) Database(ctx context.Context, name string) (*Connection, error) {
-	wanted := strings.TrimSpace(name)
-	if wanted == "" {
+	// Trimmed to decide whether anything was named, and never trimmed after
+	// that. PostgreSQL takes a quoted identifier with spaces in it, so
+	// " reporting " and "reporting" are two different databases: opening the
+	// trimmed one would have the tree say one name and the session be in
+	// another, and a configuration on a padded name would open a second pool
+	// for what it believed was the same database. It is the rule catalog.Name
+	// states for every other identifier here, and for this reason — trimming
+	// renames the object at the door.
+	if strings.TrimSpace(name) == "" {
 		return nil, fmt.Errorf("%w: a database with no name", ErrInvalidConfig)
 	}
+
+	wanted := name
 
 	c.browsing.Lock()
 	defer c.browsing.Unlock()
