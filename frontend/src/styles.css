@@ -4,26 +4,30 @@
  * colour used here is declared, in both schemes.
  */
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
 
-  --surface: #ffffff;
-  --panel: #f7f7f8;
-  --surface-raised: #f1f1f4;
-  --text: #17181c;
-  --text-muted: #5f6169;
-  --border: rgb(0 0 0 / 12%);
+  /* Three grounds and a fourth for what is hovered: the chrome that frames the
+     window, the page itself, what is lifted off the page, and what the pointer
+     is on. The chrome is darker than the page rather than lighter — panels
+     recede and content comes forward. */
+  --panel: #18181d;
+  --surface: #1e1e24;
+  --surface-raised: #232329;
+  --surface-hover: #2a2a31;
+  --text: #f3f4f6;
+  --text-muted: #a1a1aa;
+  --border: #2f2f37;
 
   /* The one colour that is not a shade of the surface: it marks what is
-     focused and what is selected. The same hue in both themes — the surfaces
-     say which theme you are in, and this says where you are.
+     focused and what is selected.
 
      Two tokens because one value cannot do both jobs. --accent is for outlines
-     and borders, which need 3:1 against their background; --accent-text is for
-     accented words, which need 4.5:1, and on a dark ground the accent itself
-     only reaches 3.4:1. Using --accent as text there would be a contrast
-     failure that looks deliberate. */
+     and borders, which need 3:1 against their background and reach 3.4:1 here;
+     --accent-text is for accented words, which need 4.5:1, and the accent
+     itself does not get there on this ground. Using it as text would be a
+     contrast failure that looks deliberate. */
   --accent: #6d5aed;
-  --accent-text: #6d5aed;
+  --accent-text: #ece6ff;
   /* The one that carries white text on top of it. */
   --accent-deep: #4b3fc4;
 
@@ -38,12 +42,12 @@
   /* The environment marks. Production is the one that has to stop somebody
      mid-keystroke, so it is the only one that is red, and the other two are
      quiet enough that a window full of them stays readable. */
-  --dev: #0b6bcb;
-  --dev-surface: #e8f1fd;
-  --staging: #9a5b00;
-  --staging-surface: #fdf3e3;
-  --production: #b42318;
-  --production-surface: #fdeceb;
+  --dev: #8ec0f5;
+  --dev-surface: #12283f;
+  --staging: #e8b269;
+  --staging-surface: #3a2a12;
+  --production: #ff9a92;
+  --production-surface: #401713;
 
   /* Inter for the interface and JetBrains Mono for anything that is data
      rather than prose — a column name, a type, a definition, a script. The
@@ -61,31 +65,6 @@
      themselves. */
   font-size: 13px;
   line-height: 1.45;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* Three grounds: the page, the chrome that frames it, and what is lifted
-       off the page. The chrome is darker than the page rather than lighter —
-       panels recede and content comes forward. */
-    --surface: #1e1e24;
-    --panel: #18181d;
-    --surface-raised: #232329;
-    --text: #f3f4f6;
-    --text-muted: #a1a1aa;
-    --border: #2f2f37;
-
-    --accent: #6d5aed;
-    --accent-text: #ece6ff;
-    --accent-deep: #4b3fc4;
-
-    --dev: #8ec0f5;
-    --dev-surface: #12283f;
-    --staging: #e8b269;
-    --staging-surface: #3a2a12;
-    --production: #ff9a92;
-    --production-surface: #401713;
-  }
 }
 
 body {
@@ -203,7 +182,7 @@ body {
  * what makes the bottom of the window a fixed point rather than more panel.
  *
  * White on this ground is 7.5:1 and the muted white 5.5:1, both past AA — so
- * the band reads the same in either theme without a second palette.
+ * the band carries its text without needing a palette of its own.
  */
 .workspace__status {
   align-items: center;
@@ -884,7 +863,7 @@ body {
  * window is a row people stop seeing.
  */
 .workspace__toolbar button {
-  background: none;
+  background: var(--surface-raised);
   border: 1px solid transparent;
   border-radius: 5px;
   color: var(--text-muted);
@@ -894,12 +873,16 @@ body {
 }
 
 .workspace__toolbar button:hover {
-  background: var(--surface-raised);
+  background: var(--surface-hover);
   color: var(--text);
 }
 
+.workspace--production .workspace__toolbar button {
+  background: rgb(255 255 255 / 6%);
+}
+
 .workspace--production .workspace__toolbar button:hover {
-  background: rgb(0 0 0 / 8%);
+  background: rgb(255 255 255 / 12%);
 }
 
 /*
@@ -997,7 +980,7 @@ body {
 }
 
 .tabs__tab.is-active {
-  background: var(--surface);
+  background: var(--surface-raised);
   color: var(--text);
   box-shadow: inset 0 -2px 0 var(--accent);
 }
