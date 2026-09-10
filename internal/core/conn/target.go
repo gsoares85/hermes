@@ -8,6 +8,14 @@ import "github.com/gsoares85/hermes/internal/driver"
 // the client whether a statement writes — needs a SQL parser and is wrong about
 // the first function that writes inside itself, so the mark is stated once on
 // connect and enforced by the only thing that can enforce it.
+//
+// What it is not is a lock. It is the default of each transaction, and it is
+// USERSET: a session that runs SET default_transaction_read_only = off, or
+// opens a transaction with BEGIN READ WRITE, is writing again. Nothing in this
+// product sends arbitrary SQL today, so today the mark holds — but whatever
+// gains that ability has to refuse those two statements on a marked connection
+// itself. This is where the guarantee stops, and it stops here rather than
+// somewhere nobody wrote down.
 const readOnlyParam = "default_transaction_read_only"
 
 // Target reduces a saved connection to what the engine needs to reach a server.

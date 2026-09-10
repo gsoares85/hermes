@@ -179,9 +179,14 @@ type Config struct {
 	// ReadOnly asks the server to refuse every statement that writes.
 	//
 	// It is a request made once, on connect, and honoured by the server for
-	// the life of the connection — see Target. Deciding here whether a
-	// statement writes would mean parsing SQL, and would be wrong about the
-	// first function that writes inside itself.
+	// the life of the connection — see Target, which also says where the
+	// guarantee stops. Deciding here whether a statement writes would mean
+	// parsing SQL, and would be wrong about the first function that writes
+	// inside itself.
+	//
+	// Validate refuses a marked connection that also carries the parameter in
+	// its own settings, so the mark cannot be argued with from the one place
+	// this side controls.
 	ReadOnly bool
 
 	// Archived hides the connection from the usual listing without deleting

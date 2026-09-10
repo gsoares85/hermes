@@ -306,7 +306,14 @@ opened with `default_transaction_read_only` on, so PostgreSQL is what refuses. N
 forgets to check can go around it, and nothing has to guess whether a statement writes by
 reading the SQL — which is what any client-side version of this would have to do, and it would
 be wrong about the first function that writes inside itself. Browsing to another database on
-the same server opens a second connection, and it carries the mark with it.
+the same server opens a second connection, and it carries the mark with it. A connection that
+sets the same parameter in its own session settings is refused rather than silently
+overridden, because a protection you can argue with from two places is not one.
+
+What the setting is not is a lock. It is the default of each transaction, so a session that
+ran `SET default_transaction_read_only = off` would be writing again. Nothing in Hermes sends
+arbitrary SQL today; the SQL editor, when it arrives, will have to refuse those statements on a
+marked connection itself.
 
 There is no SQL editor yet, so nothing in Hermes sends a write today: the gate is what that
 editor will run into, and it is already proved against real servers rather than promised. The
