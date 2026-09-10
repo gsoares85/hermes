@@ -11,6 +11,13 @@ import (
 	"github.com/gsoares85/hermes/internal/driver"
 )
 
+// ErrClosed is what a connection answers once it has been released.
+//
+// It is a sentinel because the layer above reacts to it: a tree expanding a
+// node while somebody closes the connection is not a failure to report as a
+// broken server, it is work that has been given up on.
+var ErrClosed = errors.New("the connection is closed")
+
 // State is what a tab shows about its connection.
 type State string
 
@@ -130,12 +137,25 @@ func (c *Connection) Database(ctx context.Context, name string) (*Connection, er
 		return nil, fmt.Errorf("%w: a database with no name", ErrInvalidConfig)
 	}
 
+	c.browsing.Lock()
+	defer c.browsing.Unlock()
+
+	// Under the lock Close drains the map with, which is what makes the check
+	// worth anything. A browse that arrives while a connection is being closed
+	// either loses the race and is refused here, or wins it and is closed by
+	// the drain that follows — and never lands in a map nobody will walk again,
+	// holding a pool against somebody's server with nothing left to close it.
+	//
+	// Close takes the two locks in turn rather than together, so taking them in
+	// this order cannot deadlock: it has let go of the status lock long before
+	// it asks for this one.
+	if c.Status().State == StateClosed {
+		return nil, fmt.Errorf("%w, so %s cannot be browsed", ErrClosed, wanted)
+	}
+
 	if wanted == c.config.EffectiveDatabase() {
 		return c, nil
 	}
-
-	c.browsing.Lock()
-	defer c.browsing.Unlock()
 
 	if open, found := c.databases[wanted]; found {
 		return open, nil

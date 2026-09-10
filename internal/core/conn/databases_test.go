@@ -363,3 +363,41 @@ func TestBrowsingAnotherDatabaseCarriesTheReadOnlyMark(t *testing.T) {
 		}
 	}
 }
+
+// Browsing a connection that has been closed opens nothing.
+//
+// Close drains the databases it opened and closes them. A Database() arriving
+// after that would recreate the map and put a live pool into a structure
+// nothing will ever walk again: a connection held against somebody's server by
+// an application that believes it closed everything, with no reference left
+// anywhere that could close it.
+//
+// The window is not theoretical. Expanding a node checks out a session through
+// this call, and closing the connection is a button beside the tree.
+func TestBrowsingAClosedConnectionOpensNothing(t *testing.T) {
+	t.Parallel()
+
+	connection, opener := openBrowsable(t)
+	connection.Close()
+
+	if _, err := connection.Database(t.Context(), "reporting"); !errors.Is(err, conn.ErrClosed) {
+		t.Errorf("Database() = %v, want ErrClosed", err)
+	}
+
+	if opened := opener.opened(); len(opened) != 1 {
+		t.Errorf("the opener was asked for %v, want only the connection's own database", opened)
+	}
+}
+
+// The same promise for the database the connection is already on, which is
+// answered without opening anything and used to be answered whatever the state.
+func TestAClosedConnectionIsNotItsOwnDatabaseEither(t *testing.T) {
+	t.Parallel()
+
+	connection, _ := openBrowsable(t)
+	connection.Close()
+
+	if _, err := connection.Database(t.Context(), sample().Database); !errors.Is(err, conn.ErrClosed) {
+		t.Errorf("Database() = %v, want ErrClosed", err)
+	}
+}
