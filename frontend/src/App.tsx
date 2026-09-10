@@ -7,6 +7,7 @@ import { ConnectionForm } from "./features/connection/ConnectionForm";
 import { ConnectionMarks } from "./features/connection/ConnectionMarks";
 import { ObjectPanel } from "./features/tree/ObjectPanel";
 import { ObjectTree } from "./features/tree/ObjectTree";
+import { initial, type Pane, type Side } from "./features/workspace/panes";
 import { showing } from "./features/workspace/regions";
 import { Workspace } from "./features/workspace/Workspace";
 
@@ -23,6 +24,10 @@ export function App(): React.JSX.Element {
   // The object whose properties are on screen. Null until one is picked, and
   // null again when the connection goes, because it belonged to that server.
   const [selected, setSelected] = useState<ObjectRef | null>(null);
+  // How wide the side panes are and whether they are showing. It is the layout
+  // of the window rather than anything about a connection, so it outlives every
+  // connection opened in this window.
+  const [panes, setPanes] = useState<Record<Side, Pane>>(initial);
 
   useEffect(() => {
     let active = true;
@@ -51,6 +56,10 @@ export function App(): React.JSX.Element {
   return (
     <Workspace
       production={shown.production}
+      panes={panes}
+      onPane={(side, pane): void => {
+        setPanes((held): Record<Side, Pane> => ({ ...held, [side]: pane }));
+      }}
       toolbar={
         <>
           <span className="workspace__brand">Hermes</span>

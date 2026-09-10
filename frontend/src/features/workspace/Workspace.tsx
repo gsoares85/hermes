@@ -1,9 +1,12 @@
+import { Separator } from "./Separator";
+import type { Pane, Side } from "./panes";
+
 /**
  * The four regions of the window.
  *
  * A toolbar across the top, a body of up to three columns, and a status bar
  * across the bottom. Each region is a slot: this decides where things go and
- * how tall they are, and nothing about what they contain.
+ * how wide and tall they are, and nothing about what they contain.
  *
  * The height chain is the part worth being careful about. The tree draws
  * virtualised rows, and a virtualiser can only skip work it can count — what it
@@ -22,6 +25,8 @@ export function Workspace({
   details,
   status,
   production,
+  panes,
+  onPane,
 }: {
   toolbar: React.ReactNode;
   objects: React.ReactNode | null;
@@ -29,24 +34,63 @@ export function Workspace({
   details: React.ReactNode | null;
   status: React.ReactNode;
   production: boolean;
+  panes: Record<Side, Pane>;
+  onPane: (side: Side, pane: Pane) => void;
 }): React.JSX.Element {
   return (
-    <div className={production ? "workspace workspace--production" : "workspace"}>
+    <div
+      className={production ? "workspace workspace--production" : "workspace"}
+      // The widths live here rather than in a stylesheet because they are state:
+      // the drag writes the same two variables straight onto this element, and
+      // this is what puts the settled value back after it.
+      style={
+        {
+          "--objects-width": `${String(panes.objects.width)}px`,
+          "--details-width": `${String(panes.details.width)}px`,
+        } as React.CSSProperties
+      }
+    >
       <header className="workspace__toolbar">{toolbar}</header>
 
       <div className="workspace__body">
+        {/*
+          The divider is drawn whenever the pane could be shown, including when
+          it is put away — it is the only way back to a pane that is not there.
+        */}
         {objects !== null && (
-          <nav className="workspace__objects" aria-label="Navigator">
-            {objects}
-          </nav>
+          <>
+            {panes.objects.open && (
+              <nav className="workspace__objects" aria-label="Navigator">
+                {objects}
+              </nav>
+            )}
+            <Separator
+              side="objects"
+              pane={panes.objects}
+              onChange={(pane): void => {
+                onPane("objects", pane);
+              }}
+            />
+          </>
         )}
 
         <main className="workspace__main">{main}</main>
 
         {details !== null && (
-          <aside className="workspace__details" aria-label="Details">
-            {details}
-          </aside>
+          <>
+            <Separator
+              side="details"
+              pane={panes.details}
+              onChange={(pane): void => {
+                onPane("details", pane);
+              }}
+            />
+            {panes.details.open && (
+              <aside className="workspace__details" aria-label="Details">
+                {details}
+              </aside>
+            )}
+          </>
         )}
       </div>
 
