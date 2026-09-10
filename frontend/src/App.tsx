@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
 
 import { fetchAppInfo, unknownAppInfo, type AppInfo } from "./api/appInfo";
-import { closeConnection, savedConnections, serverVersion, type SavedView } from "./api/connection";
+import {
+  closeConnection,
+  formFromSaved,
+  openConnection,
+  savedConnections,
+  serverVersion,
+  wasCancelled,
+  type SavedView,
+} from "./api/connection";
 import type { ObjectRef } from "./api/object";
 import { Icon } from "./ui/Icon";
 import { ConnectionDialog } from "./features/connection/ConnectionDialog";
@@ -62,6 +70,11 @@ export function App(): React.JSX.Element {
   // What each open server reports itself to be, by connection — the same
   // argument as the selection above, and the same shape.
   const [versions, setVersions] = useState<ReadonlyMap<string, string>>(new Map());
+  // The saved connection being opened, if one is. A server can take as long as
+  // it likes to answer and reading a password can be a dialog waiting for a
+  // person, so the row says what it is doing and the list stops taking clicks
+  // rather than quietly queueing them.
+  const [connecting, setConnecting] = useState("");
 
   const connection = activeOf(tabs);
   const selected = connection === null ? null : (picked.get(connection.id) ?? null);
@@ -144,6 +157,38 @@ export function App(): React.JSX.Element {
     setDialog(true);
   }
 
+  /**
+   * Open a saved connection, or come back to it if it is already open.
+   *
+   * Clicking the name of a server means "show me that server", and a second
+   * connection to one already on screen is a second pool, a second cached
+   * catalog and a second tab saying what the first one says.
+   *
+   * The password is not read here and does not come back here: the Go side
+   * fetches it from the keychain at the moment it opens the pool, which is why
+   * a form carrying an identifier and no password is enough.
+   */
+  async function connect(saved: SavedView): Promise<void> {
+    const already = tabs.open.find((tab): boolean => tab.savedId === saved.id);
+    if (already) {
+      setTabs((held): Tabs => ({ ...held, activeId: already.id }));
+
+      return;
+    }
+
+    setConnecting(saved.id);
+    setSavedNotice("");
+
+    try {
+      const status = await openConnection(formFromSaved(saved));
+      setTabs((held): Tabs => openedTab(held, status));
+    } catch (err) {
+      setSavedNotice(wasCancelled(err) ? "Connecting was stopped." : String(err));
+    } finally {
+      setConnecting("");
+    }
+  }
+
   // Closing the tab is what closes the connection: the pools per database and
   // the cached catalog on the Go side go with it. The tab goes whether or not
   // the call worked — the only way it fails is the connection being gone
@@ -193,9 +238,13 @@ export function App(): React.JSX.Element {
         <>
           <SavedConnections
             connections={saved}
-            openId={connection?.id ?? ""}
+            openIds={tabs.open.map((tab): string => tab.savedId)}
+            connecting={connecting}
             notice={savedNotice}
-            onPick={openDialog}
+            onConnect={(pick): void => {
+              void connect(pick);
+            }}
+            onManage={openDialog}
             onNew={(): void => {
               openDialog(null);
             }}

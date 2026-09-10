@@ -57,6 +57,15 @@ const glyphs = {
       <path d="M20.5 3.5V9H15" />
     </>
   ),
+  /** The settings of one thing, as opposed to a menu of everything. */
+  manage: (
+    <>
+      <path d="M4 7h8M17.5 7H20M4 12h2.5M12 12h8M4 17h8M17.5 17H20" />
+      <circle cx="14.5" cy="7" r="2.2" />
+      <circle cx="9.5" cy="12" r="2.2" />
+      <circle cx="14.5" cy="17" r="2.2" />
+    </>
+  ),
   /** What the foot of the navigator says: this is the server you are on. */
   plug: <path d="M9 2.5v6M15 2.5v6M6 8.5h12v3.5a6 6 0 0 1-12 0ZM12 18v3.5" />,
   /** A column of words. */

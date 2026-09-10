@@ -194,7 +194,21 @@ export interface SavedView {
  * being looked up separately by whoever remembers to.
  */
 export interface StatusView {
+    /**
+     * ID addresses this connection while it is open. It is minted when the
+     * connection opens and means nothing to the file.
+     */
     "id": string;
+
+    /**
+     * SavedID is the connection in the file this was opened from, and empty for
+     * one opened from a form that was never saved.
+     * 
+     * The two are never equal, so a window that compared them would have a list
+     * in which nothing is ever marked as open, and would open a second
+     * connection to a server that already has one.
+     */
+    "savedId": string;
     "state": string;
     "diagnosis": DiagnosisView;
     "name": string;

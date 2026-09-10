@@ -172,7 +172,18 @@ type DiagnosisView struct {
 // draw what it was handed — so the label travels with the state rather than
 // being looked up separately by whoever remembers to.
 type StatusView struct {
-	ID        string        `json:"id"`
+	// ID addresses this connection while it is open. It is minted when the
+	// connection opens and means nothing to the file.
+	ID string `json:"id"`
+
+	// SavedID is the connection in the file this was opened from, and empty for
+	// one opened from a form that was never saved.
+	//
+	// The two are never equal, so a window that compared them would have a list
+	// in which nothing is ever marked as open, and would open a second
+	// connection to a server that already has one.
+	SavedID string `json:"savedId"`
+
 	State     string        `json:"state"`
 	Diagnosis DiagnosisView `json:"diagnosis"`
 
@@ -870,6 +881,7 @@ func diagnosisView(d conn.Diagnosis) DiagnosisView {
 func statusView(id string, config conn.Config, status conn.Status) StatusView {
 	return StatusView{
 		ID:          id,
+		SavedID:     config.ID,
 		State:       string(status.State),
 		Diagnosis:   diagnosisView(status.Diagnosis),
 		Name:        config.Name,

@@ -8,6 +8,7 @@ import { showing } from "./regions";
 function open(environment = ""): StatusView {
   return {
     id: "1",
+    savedId: "saved-1",
     state: "connected",
     diagnosis: { failed: false, class: "", summary: "", cause: "", nextStep: "", detail: "" },
     name: "billing",

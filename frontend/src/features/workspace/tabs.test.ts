@@ -7,6 +7,7 @@ import { activeOf, closed, moved, noTabs, opened, type Tabs } from "./tabs";
 function status(id: string): StatusView {
   return {
     id,
+    savedId: `saved-${id}`,
     state: "connected",
     diagnosis: { failed: false, class: "", summary: "", cause: "", nextStep: "", detail: "" },
     name: id,

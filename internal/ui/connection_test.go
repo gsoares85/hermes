@@ -502,3 +502,51 @@ func TestTheStateOfAConnectionSaysWhereItGoes(t *testing.T) {
 		t.Errorf("database/user = %s/%s, want hermes/hermes", opened.Database, opened.User)
 	}
 }
+
+// The state of an open connection says which saved connection it came from.
+//
+// Without it the window cannot tell that the row somebody just clicked is
+// already open: the identifier a connection is addressed by is minted when it
+// opens and has nothing to do with the one the file keeps. Two identifiers that
+// are never equal, compared, is a highlight that never shows and a second tab
+// onto a server that already has one.
+func TestTheStateSaysWhichSavedConnectionItCameFrom(t *testing.T) {
+	t.Parallel()
+
+	service, _, _ := saved(t)
+
+	stored, err := service.Save(t.Context(), form())
+	if err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	from := form()
+	from.ID = stored.ID
+
+	opened, err := service.Open(t.Context(), from)
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+
+	if opened.SavedID != stored.ID {
+		t.Errorf("SavedID = %q, want the identifier of the saved connection %q", opened.SavedID, stored.ID)
+	}
+	if opened.ID == opened.SavedID {
+		t.Error("the handle and the saved identifier are the same value, so neither says anything the other does not")
+	}
+}
+
+// One opened from a form that was never saved has none, which is the honest
+// answer rather than a made-up one.
+func TestAConnectionThatWasNeverSavedHasNoSavedIdentifier(t *testing.T) {
+	t.Parallel()
+
+	opened, err := service(stubOpener{}).Open(t.Context(), form())
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+
+	if opened.SavedID != "" {
+		t.Errorf("SavedID = %q, want empty for a connection that is not in the file", opened.SavedID)
+	}
+}
