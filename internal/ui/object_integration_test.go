@@ -18,10 +18,10 @@ import (
 
 // realTree opens a connection to a server through the real service and answers
 // the tree over it, with the corpus schema it can be pointed at.
-func realTree(t *testing.T) (*ui.CatalogService, string, string, *testsupport.Instance) {
+func realTree(t *testing.T, version string) (*ui.CatalogService, string, string, *testsupport.Instance) {
 	t.Helper()
 
-	instance := testsupport.SharedPostgres(t, testsupport.SupportedVersions[0])
+	instance := testsupport.SharedPostgres(t, version)
 	corpus := testsupport.Corpus(t, instance)
 
 	connections := ui.NewConnectionService(ui.Dependencies{
@@ -73,37 +73,43 @@ func formFor(t *testing.T, instance *testsupport.Instance) ui.ConnectionForm {
 func TestTheDDLShownIsTheDDLTheGeneratorWrites(t *testing.T) {
 	t.Parallel()
 
-	tree, id, corpus, instance := realTree(t)
+	for _, version := range testsupport.SupportedVersions {
+		t.Run(version, func(t *testing.T) {
+			t.Parallel()
 
-	session := testsupport.Session(t, instance)
+			tree, id, corpus, instance := realTree(t, version)
 
-	read, err := catalog.NewReader(session).Read(t.Context(), catalog.NewName(corpus))
-	if err != nil {
-		t.Fatalf("reading %s: %v", corpus, err)
-	}
+			session := testsupport.Session(t, instance)
 
-	for _, name := range []string{"Customer", "constrained", "parent"} {
-		slice, found := read.Only(catalog.NewName(name))
-		if !found {
-			t.Fatalf("%s is not in the corpus", name)
-		}
+			read, err := catalog.NewReader(session).Read(t.Context(), catalog.NewName(corpus))
+			if err != nil {
+				t.Fatalf("reading %s: %v", corpus, err)
+			}
 
-		want := ddl.Of(slice).String()
+			for _, name := range []string{"Customer", "constrained", "parent"} {
+				slice, found := read.Only(catalog.NewName(name))
+				if !found {
+					t.Fatalf("%s is not in the corpus", name)
+				}
 
-		got, err := tree.DDL(t.Context(), id, ui.ObjectRef{
-			Database: testsupport.Database, Schema: corpus, Name: name,
+				want := ddl.Of(slice).String()
+
+				got, err := tree.DDL(t.Context(), id, ui.ObjectRef{
+					Database: testsupport.Database, Schema: corpus, Name: name,
+				})
+				if err != nil {
+					t.Fatalf("asking for the DDL of %s: %v", name, err)
+				}
+
+				if got != want {
+					t.Errorf("the panel shows a different script for %s:\n got %q\nwant %q", name, got, want)
+				}
+
+				if !strings.Contains(got, name) {
+					t.Errorf("the script for %s does not name it: %q", name, got)
+				}
+			}
 		})
-		if err != nil {
-			t.Fatalf("asking for the DDL of %s: %v", name, err)
-		}
-
-		if got != want {
-			t.Errorf("the panel shows a different script for %s:\n got %q\nwant %q", name, got, want)
-		}
-
-		if !strings.Contains(got, name) {
-			t.Errorf("the script for %s does not name it: %q", name, got)
-		}
 	}
 }
 
@@ -111,27 +117,33 @@ func TestTheDDLShownIsTheDDLTheGeneratorWrites(t *testing.T) {
 func TestThePropertiesOfATableAreItsColumns(t *testing.T) {
 	t.Parallel()
 
-	tree, id, corpus, _ := realTree(t)
+	for _, version := range testsupport.SupportedVersions {
+		t.Run(version, func(t *testing.T) {
+			t.Parallel()
 
-	shown, err := tree.Properties(t.Context(), id, ui.ObjectRef{
-		Database: testsupport.Database, Schema: corpus, Name: "column_shapes",
-	})
-	if err != nil {
-		t.Fatalf("asking for the properties of column_shapes: %v", err)
-	}
+			tree, id, corpus, _ := realTree(t, version)
 
-	if shown.Kind != "table" {
-		t.Errorf("column_shapes came back as %q, want table", shown.Kind)
-	}
+			shown, err := tree.Properties(t.Context(), id, ui.ObjectRef{
+				Database: testsupport.Database, Schema: corpus, Name: "column_shapes",
+			})
+			if err != nil {
+				t.Fatalf("asking for the properties of column_shapes: %v", err)
+			}
 
-	if len(shown.Columns) == 0 {
-		t.Fatal("the table came back with no columns")
-	}
+			if shown.Kind != "table" {
+				t.Errorf("column_shapes came back as %q, want table", shown.Kind)
+			}
 
-	for _, column := range shown.Columns {
-		if column.Name == "" || column.Type == "" {
-			t.Errorf("a column came back as %+v, with nothing to print", column)
-		}
+			if len(shown.Columns) == 0 {
+				t.Fatal("the table came back with no columns")
+			}
+
+			for _, column := range shown.Columns {
+				if column.Name == "" || column.Type == "" {
+					t.Errorf("a column came back as %+v, with nothing to print", column)
+				}
+			}
+		})
 	}
 }
 
@@ -147,24 +159,30 @@ func TestThePropertiesOfATableAreItsColumns(t *testing.T) {
 func TestASecondObjectInTheSameSchemaIsAnsweredToo(t *testing.T) {
 	t.Parallel()
 
-	tree, id, corpus, _ := realTree(t)
+	for _, version := range testsupport.SupportedVersions {
+		t.Run(version, func(t *testing.T) {
+			t.Parallel()
 
-	object := func(name string) ui.ObjectRef {
-		return ui.ObjectRef{Database: testsupport.Database, Schema: corpus, Name: name}
-	}
+			tree, id, corpus, _ := realTree(t, version)
 
-	if _, err := tree.Properties(t.Context(), id, object("parent")); err != nil {
-		t.Fatalf("asking for the first object: %v", err)
-	}
+			object := func(name string) ui.ObjectRef {
+				return ui.ObjectRef{Database: testsupport.Database, Schema: corpus, Name: name}
+			}
 
-	// The corpus holds a table whose name needs quoting, so this also says the
-	// cached model is addressed by the name and not by what it looks like.
-	shown, err := tree.Properties(t.Context(), id, object("Customer"))
-	if err != nil {
-		t.Fatalf("asking for the second object: %v", err)
-	}
+			if _, err := tree.Properties(t.Context(), id, object("parent")); err != nil {
+				t.Fatalf("asking for the first object: %v", err)
+			}
 
-	if shown.Name != "Customer" {
-		t.Errorf("the second object came back as %q", shown.Name)
+			// The corpus holds a table whose name needs quoting, so this also says the
+			// cached model is addressed by the name and not by what it looks like.
+			shown, err := tree.Properties(t.Context(), id, object("Customer"))
+			if err != nil {
+				t.Fatalf("asking for the second object: %v", err)
+			}
+
+			if shown.Name != "Customer" {
+				t.Errorf("the second object came back as %q", shown.Name)
+			}
+		})
 	}
 }
