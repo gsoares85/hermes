@@ -151,3 +151,23 @@ describe("closing a tab", () => {
     release();
   });
 });
+
+describe("opening a server that already has a tab", () => {
+  it("keeps one tab, and releases the connection that lost it", async () => {
+    render(<App />);
+    await connectTo("First");
+
+    // What the dialog does: the same saved connection, opened again, coming
+    // back as a connection with an identifier of its own.
+    backend.open.mockReturnValueOnce(cancellable(status("c-s1-again", "s1", "First")));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Manage First" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }));
+
+    await waitFor((): void => {
+      expect(backend.close).toHaveBeenCalledWith("c-s1");
+    });
+
+    expect(screen.getAllByRole("tab", { name: /First/ })).toHaveLength(1);
+  });
+});

@@ -28,6 +28,7 @@ import { TabBar } from "./features/workspace/TabBar";
 import {
   activeOf,
   closed,
+  displaced,
   noTabs,
   opened as openedTab,
   type Tabs,
@@ -164,6 +165,40 @@ export function App(): React.JSX.Element {
   }
 
   /**
+   * Put an open connection in front, and release whatever it replaced.
+   *
+   * A server gets one tab whichever door it was opened by. The sidebar already
+   * came back to a tab rather than opening a second connection; the dialog did
+   * not, so opening Manage on a connection that is already open and pressing
+   * Connect gave a second tab onto the same server — a second pool, a second
+   * cached catalog, and twice the resting memory the window is budgeted for.
+   *
+   * Taking the tab is only half of it. The connection that was in it is still
+   * open on the Go side with nothing on screen able to close it, so it is
+   * released here. Which is also the right reading of the gesture: someone who
+   * edits a connection and presses Connect means "again, with these settings".
+   */
+  function show(status: StatusView): void {
+    const released = displaced(tabs, status);
+
+    setTabs((held): Tabs => openedTab(held, status));
+
+    if (released !== "") {
+      setPicked((held): ReadonlyMap<string, ObjectRef> => {
+        const next = new Map(held);
+        next.delete(released);
+
+        return next;
+      });
+
+      closeConnection(released).catch((): void => {
+        // Gone already. The tab it had is gone too, which is the part anybody
+        // can see.
+      });
+    }
+  }
+
+  /**
    * Open a saved connection, or come back to it if it is already open.
    *
    * Clicking the name of a server means "show me that server", and a second
@@ -195,8 +230,7 @@ export function App(): React.JSX.Element {
     connectingWith.current = opening;
 
     try {
-      const status = await opening;
-      setTabs((held): Tabs => openedTab(held, status));
+      show(await opening);
     } catch (err) {
       setSavedNotice(wasCancelled(err) ? "Connecting was stopped." : String(err));
     } finally {
@@ -358,7 +392,7 @@ export function App(): React.JSX.Element {
               }}
               onOpened={(status): void => {
                 if (status !== null) {
-                  setTabs((held): Tabs => openedTab(held, status));
+                  show(status);
                 }
               }}
             />

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { StatusView } from "../../api/connection";
 
-import { activeOf, closed, moved, noTabs, opened, type Tabs } from "./tabs";
+import { activeOf, closed, displaced, moved, noTabs, opened, type Tabs } from "./tabs";
 
 function status(id: string): StatusView {
   return {
@@ -123,5 +123,63 @@ describe("moving between tabs with the keyboard", () => {
 
   it("says nothing when there are no tabs to move between", () => {
     expect(moved(noTabs, "ArrowRight")).toBeNull();
+  });
+});
+
+/**
+ * A saved connection has one tab, whichever door it was opened by.
+ *
+ * The sidebar knows to come back to the tab a server already has. The dialog
+ * did not: opening Manage on a connection that is already open and pressing
+ * Connect gave a second tab onto the same server, with a second pool of its
+ * own and a second cached catalog — the duplication the saved identifier was
+ * put on the state to prevent, and twice the resting memory it was budgeted
+ * for.
+ */
+describe("opening a connection that is already open by another route", () => {
+  it("replaces the tab it already had rather than adding one", () => {
+    const first = status("a");
+    const again = { ...status("b"), savedId: first.savedId };
+
+    const tabs = opened(opened(noTabs, first), again);
+
+    expect(ids(tabs)).toEqual(["b"]);
+    expect(tabs.activeId).toBe("b");
+  });
+
+  it("keeps the place the tab had", () => {
+    const middle = status("b");
+    const again = { ...status("d"), savedId: middle.savedId };
+
+    const tabs = opened(withOpen("a", "b", "c"), again);
+
+    expect(ids(tabs)).toEqual(["a", "d", "c"]);
+  });
+
+  it("says which connection was displaced, so it can be released", () => {
+    const first = status("a");
+    const again = { ...status("b"), savedId: first.savedId };
+
+    expect(displaced(opened(noTabs, first), again)).toBe("a");
+  });
+
+  it("displaces nothing when the tab is the same connection refreshed", () => {
+    const held = status("a");
+
+    expect(displaced(opened(noTabs, held), held)).toBe("");
+  });
+
+  // A connection opened from a form that was never saved has no saved
+  // identifier, and two of them are two different servers as far as anything
+  // here can tell. Matching on the empty string would fold every unsaved
+  // connection into one tab.
+  it("does not fold two unsaved connections together", () => {
+    const one = { ...status("a"), savedId: "" };
+    const two = { ...status("b"), savedId: "" };
+
+    const tabs = opened(opened(noTabs, one), two);
+
+    expect(ids(tabs)).toEqual(["a", "b"]);
+    expect(displaced(opened(noTabs, one), two)).toBe("");
   });
 });

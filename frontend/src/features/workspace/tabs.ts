@@ -16,14 +16,31 @@ export interface Tabs {
 export const noTabs: Tabs = { open: [], activeId: "" };
 
 /**
+ * Whether a tab is showing the server a state describes.
+ *
+ * Two questions, because a connection can be recognised two ways. The
+ * identifier is the same connection refreshed. The saved identifier is the
+ * same server opened again — a second connection to it, with an identifier of
+ * its own, which the window has no business showing twice: that is a second
+ * pool and a second cached catalog for one thing on screen.
+ *
+ * A connection opened from a form that was never saved has no saved
+ * identifier, and two of those are two different servers as far as anything
+ * here can tell, so the empty string matches nothing.
+ */
+function sameServer(tab: StatusView, status: StatusView): boolean {
+  return tab.id === status.id || (status.savedId !== "" && tab.savedId === status.savedId);
+}
+
+/**
  * A connection was opened: it goes in front.
  *
- * One it already has is replaced where it stands rather than appended. A tab
- * that jumped to the end when its state was refreshed would move under the
- * pointer of whoever was about to close it.
+ * A server that already has a tab keeps that tab, and keeps the place it had.
+ * A tab that jumped to the end when its state was refreshed would move under
+ * the pointer of whoever was about to close it.
  */
 export function opened(tabs: Tabs, status: StatusView): Tabs {
-  const at = tabs.open.findIndex((tab): boolean => tab.id === status.id);
+  const at = tabs.open.findIndex((tab): boolean => sameServer(tab, status));
   if (at < 0) {
     return { open: [...tabs.open, status], activeId: status.id };
   }
@@ -32,6 +49,20 @@ export function opened(tabs: Tabs, status: StatusView): Tabs {
   open[at] = status;
 
   return { open, activeId: status.id };
+}
+
+/**
+ * The connection this state pushes out of its tab, if it pushes one out.
+ *
+ * Replacing the tab is only half of it: the connection that was in it is still
+ * open on the Go side, holding its pools and its cached catalog with nothing
+ * on screen able to close it. Whoever replaces the tab has to release it, and
+ * this is how they know which.
+ */
+export function displaced(tabs: Tabs, status: StatusView): string {
+  const held = tabs.open.find((tab): boolean => sameServer(tab, status));
+
+  return held === undefined || held.id === status.id ? "" : held.id;
 }
 
 /**
