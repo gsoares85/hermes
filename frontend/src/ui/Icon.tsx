@@ -77,13 +77,6 @@ const glyphs = {
       <path d="M3.5 10h17M8 3v4M16 3v4" />
     </>
   ),
-  /** The column a table is keyed on. */
-  key: (
-    <>
-      <circle cx="8" cy="16" r="3.5" />
-      <path d="m10.6 13.4 8.4-8.4M16 8l2.2 2.2M19 5l2.2 2.2" />
-    </>
-  ),
 } as const;
 
 /**
