@@ -53,9 +53,21 @@ const settleDelay = 300;
  */
 export function ObjectTree({
   connectionId,
+  showing,
   onSelect,
 }: {
   connectionId: string;
+  /**
+   * Whether this is the tab in front.
+   *
+   * A tree that is not is hidden rather than unmounted. What it holds — which
+   * levels have been read, which nodes are open, which row is selected — costs
+   * a question to the server per level and cannot be rebuilt from anything the
+   * window still has once the component is gone. Taking it down means every
+   * switch between tabs cancels what is in flight, empties every level and asks
+   * for the root again, which is the one interaction a tab bar exists for.
+   */
+  showing: boolean;
   onSelect: (object: ObjectRef | null) => void;
 }): React.JSX.Element {
   const [levels, setLevels] = useState<Levels>(new Map());
@@ -394,7 +406,7 @@ export function ObjectTree({
   );
 
   return (
-    <section className="tree" aria-label="Objects">
+    <section className="tree" aria-label="Objects" hidden={!showing}>
       <div className="tree__filter">
         <Icon name="search" className="tree__filter-icon" />
         <input

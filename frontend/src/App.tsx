@@ -273,23 +273,36 @@ export function App(): React.JSX.Element {
 
           {shown.objects && connection !== null && (
             <>
-              <ObjectTree
-                key={connection.id}
-                connectionId={connection.id}
-                onSelect={(object): void => {
-                  setPicked((held): ReadonlyMap<string, ObjectRef> => {
-                    const next = new Map(held);
+              {/*
+                One tree per open connection, and the ones that are not in
+                front are hidden rather than taken down.
 
-                    if (object === null) {
-                      next.delete(connection.id);
-                    } else {
-                      next.set(connection.id, object);
-                    }
+                Keyed and mounted only for the active tab, every switch
+                unmounted a tree: what it had read was thrown away, what was in
+                flight was cancelled, and the root was asked for again. That is
+                a question to the server and every expanded node closed, on the
+                one interaction the tab bar exists for.
+              */}
+              {tabs.open.map((tab): React.JSX.Element => (
+                <ObjectTree
+                  key={tab.id}
+                  connectionId={tab.id}
+                  showing={tab.id === connection.id}
+                  onSelect={(object): void => {
+                    setPicked((held): ReadonlyMap<string, ObjectRef> => {
+                      const next = new Map(held);
 
-                    return next;
-                  });
-                }}
-              />
+                      if (object === null) {
+                        next.delete(tab.id);
+                      } else {
+                        next.set(tab.id, object);
+                      }
+
+                      return next;
+                    });
+                  }}
+                />
+              ))}
 
               {/*
                 Which server these objects came from. It is the question the

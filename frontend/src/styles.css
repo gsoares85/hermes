@@ -1,4 +1,23 @@
 /*
+ * The hidden attribute has to beat everything written below it.
+ *
+ * A browser hides `[hidden]` in its own stylesheet, and the cascade sorts by
+ * origin before it sorts by specificity: any rule in this file that gives an
+ * element a display wins against it, whatever the selectors weigh. That is how
+ * a closed <dialog> was on screen from the moment the window opened — with
+ * showModal never reached, so no backdrop, nothing inert behind it, no focus
+ * trap, and Escape doing nothing — and it shipped twice with every gate green.
+ *
+ * The tree of a tab that is not in front is hidden the same way, and `.tree`
+ * has a display of its own. So this is stated once, for every element, rather
+ * than remembered per rule; `!important` because it has to win against the
+ * whole file and against anything added to it later.
+ */
+[hidden] {
+  display: none !important;
+}
+
+/*
  * The page paints its own surface and text. Relying on the user-agent defaults
  * is what leaves a webview showing whatever colour sits behind it, so every
  * colour used here is declared, in both schemes.

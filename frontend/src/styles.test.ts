@@ -55,6 +55,26 @@ describe("the stylesheet", () => {
     expect(offenders).toEqual([]);
   });
 
+  /**
+   * The same trap, one element wider.
+   *
+   * `[hidden]` is hidden by the user agent and every rule in this file is an
+   * author rule, so a class that carries a display of its own is visible with
+   * the attribute set — and `.tree` carries one, because the column it draws
+   * has to grow. The tree of a tab that is not in front would be drawn on top
+   * of the tree of the tab that is.
+   *
+   * Stating it once with `!important` is what makes it true for every element
+   * and for rules nobody has written yet.
+   */
+  it("keeps the hidden attribute working", () => {
+    const hiding = rules().filter((rule): boolean => rule.selector === "[hidden]");
+
+    expect(hiding.some((rule): boolean => /display\s*:\s*none\s*!important/.test(rule.body))).toBe(
+      true,
+    );
+  });
+
   // The other half of the same rule: something has to lay it out when it is
   // open, or the dialog is a box with no direction and the header and the form
   // stack in whatever way the browser defaults to.
