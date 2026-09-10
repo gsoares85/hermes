@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/gsoares85/hermes/internal/core/catalog"
@@ -292,8 +293,10 @@ func (idlePool) Session(context.Context) (driver.Session, error) {
 	return nil, errors.New("not part of this test")
 }
 func (idlePool) ServerVersion(context.Context) (string, error) { return "16.2", nil }
-func (idlePool) Databases(context.Context) ([]string, error)   { return nil, nil }
-func (idlePool) Close()                                        {}
+func (idlePool) Databases(context.Context) ([]string, error) {
+	return []string{"app", "billing"}, nil
+}
+func (idlePool) Close() {}
 
 func reachable() ConnectionForm {
 	return ConnectionForm{Host: "db.example.com", Port: 5432, User: "hermes", SSLMode: "disable"}
@@ -439,5 +442,105 @@ func TestRefreshingAConnectionThatIsNotOpenIsRefused(t *testing.T) {
 
 	if err := catalogue.Refresh("nothing", ObjectRef{Database: "app", Schema: "sales"}); err == nil {
 		t.Error("a connection that is not open was refreshed")
+	}
+}
+
+// A cache per connection and per database, and one per pair.
+//
+// Per connection because what pg_catalog answers depends on the role that
+// asked, so two connections under two roles have two legitimately different
+// catalogs and a shared cache would show one person objects the other cannot
+// see, depending only on who arrived first. Per database because that is the
+// same argument one level down: it is a different catalog.
+//
+// And one per pair, because the point of the cache is that the second object
+// somebody clicks in a schema costs nothing.
+func TestACacheBelongsToOneConnectionAndOneDatabase(t *testing.T) {
+	t.Parallel()
+
+	connections := NewConnectionService(Dependencies{Opener: idleOpener{}})
+	catalogue := NewCatalogService(connections)
+
+	first, err := connections.Open(t.Context(), reachable())
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+	second, err := connections.Open(t.Context(), reachable())
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+
+	of := func(id, database string) *catalog.Cache {
+		t.Helper()
+
+		cache, err := catalogue.cacheOn(t.Context(), id, database)
+		if err != nil {
+			t.Fatalf("cacheOn(%s, %s) = %v", id, database, err)
+		}
+
+		return cache
+	}
+
+	app := of(first.ID, "app")
+
+	if of(first.ID, "app") != app {
+		t.Error("the same connection and database were given two caches")
+	}
+	if of(first.ID, "billing") == app {
+		t.Error("two databases of one connection share a cache")
+	}
+	if of(second.ID, "app") == app {
+		t.Error("two connections share a cache, so one would show the other's catalog")
+	}
+}
+
+// Two nodes expanded at once ask for the same cache at the same time, and must
+// get one cache rather than two — the second of which would read the schema
+// again and throw away what the first had waited for.
+func TestTheCacheOfADatabaseIsBuiltOnce(t *testing.T) {
+	t.Parallel()
+
+	connections := NewConnectionService(Dependencies{Opener: idleOpener{}})
+	catalogue := NewCatalogService(connections)
+
+	opened, err := connections.Open(t.Context(), reachable())
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+
+	const askers = 16
+
+	var (
+		start  sync.WaitGroup
+		done   sync.WaitGroup
+		mu     sync.Mutex
+		caches = map[*catalog.Cache]bool{}
+	)
+
+	start.Add(1)
+	done.Add(askers)
+
+	for range askers {
+		go func() {
+			defer done.Done()
+
+			start.Wait()
+
+			cache, err := catalogue.cacheOn(t.Context(), opened.ID, "app")
+			if err != nil {
+				return
+			}
+
+			mu.Lock()
+			caches[cache] = true
+			mu.Unlock()
+		}()
+	}
+
+	start.Done()
+	done.Wait()
+
+	if len(caches) != 1 {
+		t.Errorf("%d caches were built for one database", len(caches))
 	}
 }

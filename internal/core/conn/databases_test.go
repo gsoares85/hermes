@@ -464,3 +464,44 @@ func TestADatabaseNameIsUsedAsItWasGiven(t *testing.T) {
 		t.Errorf("the opener was asked for %v, want %q", opener.opened(), padded)
 	}
 }
+
+// Closing while a node is being expanded leaves no pool behind.
+//
+// The two calls race by design: expanding a node opens a database through this
+// connection, and closing it is a button beside the tree. Whichever wins, the
+// invariant is the same — every pool that was opened has been closed, and none
+// is left in a map nobody will walk again.
+func TestClosingWhileBrowsingLeavesNoPoolOpen(t *testing.T) {
+	t.Parallel()
+
+	opener := newPerDatabase()
+
+	connection, err := conn.Open(t.Context(), opener, sample())
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+
+	var browsing sync.WaitGroup
+
+	browsing.Add(1)
+	go func() {
+		defer browsing.Done()
+
+		// The error is not asserted on: losing the race is a legitimate
+		// outcome and is what ErrClosed is for. What is asserted is below,
+		// about pools rather than about who won.
+		_, _ = connection.Database(t.Context(), "reporting")
+	}()
+
+	connection.Close()
+	browsing.Wait()
+
+	opener.mu.Lock()
+	defer opener.mu.Unlock()
+
+	for database, pool := range opener.pools {
+		if !pool.isClosed() {
+			t.Errorf("the pool for %s was left open after the connection closed", database)
+		}
+	}
+}
