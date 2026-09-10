@@ -127,9 +127,9 @@ Four regions, and each answers one question.
 ├───────────────────┬────────────────────────────┬───────────────────┤
 │ CONNECTIONS     + │ ▣ billing ×  ▢ staging ×   │ Table             │
 │                   ├────────────────────────────┤ daily_revenue     │
-│  billing   PROD   │                            │                   │
-│  staging          │                            │                   │
-│  local            │ Pick an object in the      │ Column    Type    │
+│  billing   PROD ⚙ │                            │                   │
+│  staging        ⚙ │                            │                   │
+│  local          ⚙ │ Pick an object in the      │ Column    Type    │
 │                   │ navigator.                 │ id        bigint  │
 │ ▾ analytics       │                            │ …                 │
 │   ▾ reporting     │ Its columns and the DDL    │                   │
@@ -143,6 +143,11 @@ Four regions, and each answers one question.
 └────────────────────────────────────────────────────────────────────┘
    navigator            workspace             details
 ```
+
+A row in **CONNECTIONS** connects; the ⚙ beside it opens the form. The tabs across the
+workspace are the connections that are open — one each, with its own pools and its own cached
+catalog — and the one in front decides what the navigator lists, what the details pane
+describes and what the status bar says.
 
 - **The toolbar** carries the connection in front and what can be done to it. Only actions that
   exist: no greyed-out buttons standing in for features nobody has built. A production
@@ -213,7 +218,16 @@ postgres://reporting@db.example.com:5432
 ### Saving a connection
 
 Give the connection a name and press **Save connection**. It appears at the head of the
-navigator; clicking it opens the form again with its settings filled in.
+navigator, and from then on **clicking it connects** — that is what clicking the name of a
+server means, and it is one click from wanting to look at a database to looking at it.
+
+Editing one is the occasional job, so it has a control of its own: the ⚙ beside the name opens
+the form again with its settings filled in. While a connection is opening, that control becomes
+a **stop** — a server can take as long as it likes to answer, and a way out that has to be
+waited for is not one.
+
+Clicking a connection that is already open comes back to its tab rather than opening a second
+one. One server, one tab, whichever way you got there.
 
 **Forget** is in that form rather than beside the name in the list. It takes the password out of
 your keychain and nothing can put it back, so it asks twice — and it is better pressed by
