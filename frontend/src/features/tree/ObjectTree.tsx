@@ -348,7 +348,12 @@ function TreeRow({
       <button
         type="button"
         className="tree__toggle"
-        onClick={(): void => {
+        // The click stops here rather than reaching the row behind it. Without
+        // this, opening a schema also counts as picking it, and picking a
+        // schema clears the panel — so expanding a node threw away the object
+        // somebody was reading, from a click that meant "show me more".
+        onClick={(event): void => {
+          event.stopPropagation();
           onToggle(row);
         }}
         disabled={!row.node.expandable}
