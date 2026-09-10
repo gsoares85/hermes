@@ -12,6 +12,33 @@ import { wasCancelled, type CancellablePromise } from "../../api/tree";
 type Tab = "properties" | "ddl";
 
 /**
+ * What has been answered, and which object it was answered about.
+ *
+ * The second half is the point. Two objects clicked in a row are two questions
+ * with one answer between them for as long as the second is in flight, and
+ * without a name on the answer the panel draws the first object's columns under
+ * the second object's title — which is worse than an empty panel, because
+ * nothing on screen says it is wrong.
+ */
+interface Answer {
+  of: string;
+  shown: PropertiesView | null;
+  script: string;
+  failure: string;
+}
+
+const nothing: Answer = { of: "", shown: null, script: "", failure: "" };
+
+/**
+ * An object as a value, so that two references to the same object are the same
+ * thing. A NUL joins the parts for the reason the tree keys on one: every
+ * printable character is legal in an identifier.
+ */
+function nameOf(object: ObjectRef): string {
+  return [object.database, object.schema, object.name].join("\u0000");
+}
+
+/**
  * What the selected object is, beside the tree.
  *
  * Two tabs over one selection: what it holds, and the statements that would
@@ -28,44 +55,54 @@ export function ObjectPanel({
   object: ObjectRef;
 }): React.JSX.Element {
   const [tab, setTab] = useState<Tab>("properties");
-  const [shown, setShown] = useState<PropertiesView | null>(null);
-  const [script, setScript] = useState("");
-  const [failure, setFailure] = useState("");
+  const [answer, setAnswer] = useState<Answer>(nothing);
   // Bumped by the Refresh button, and nothing else reads it. It is what turns
   // "ask the same question again" into a change the effect below can see: the
   // object and the tab are the same, so without it the answer already on screen
   // is the answer to the new question too.
   const [asked, setAsked] = useState(0);
 
-  // Nothing is reset when the question changes: what is on screen stays until
-  // the answer to the new one lands, which is the same rule the tree follows
-  // for a level being refreshed. It is also the only shape the rule against
-  // setting state in the body of an effect leaves — and the rule is right, a
-  // reset here is a second render before anything has been asked.
+  // The object as a value rather than as an object, because the effect below
+  // depends on it and the tree builds a fresh ObjectRef on every click. Depending
+  // on the reference made clicking the highlighted row ask the server for what
+  // was already on screen.
+  const wanted = nameOf(object);
+
+  // What is held says which object it is about, so that the answer to the last
+  // question cannot be drawn under the title of the next one. Resetting in the
+  // body of the effect would be the other way, and the rule against it is right:
+  // it is a second render before anything has been asked.
   useEffect((): (() => void) => {
     const request: CancellablePromise<PropertiesView | string> =
       tab === "properties" ? properties(connectionId, object) : ddl(connectionId, object);
 
     request
-      .then((answer): void => {
-        setFailure("");
+      .then((got): void => {
+        setAnswer((held): Answer => {
+          const base = held.of === wanted ? held : nothing;
 
-        if (typeof answer === "string") {
-          setScript(answer);
-        } else {
-          setShown(answer);
-        }
+          return typeof got === "string"
+            ? { ...base, of: wanted, script: got, failure: "" }
+            : { ...base, of: wanted, shown: got, failure: "" };
+        });
       })
       .catch((err: unknown): void => {
         if (!wasCancelled(err)) {
-          setFailure(String(err));
+          setAnswer((held): Answer => ({
+            ...(held.of === wanted ? held : nothing),
+            of: wanted,
+            failure: String(err),
+          }));
         }
       });
 
     return (): void => {
       void request.cancel();
     };
-  }, [connectionId, object, tab, asked]);
+    // object is left out on purpose: wanted is the value of it, and the
+    // reference changes on every click of the same row.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId, wanted, tab, asked]);
 
   async function onRefresh(): Promise<void> {
     try {
@@ -73,14 +110,19 @@ export function ObjectPanel({
       setAsked((times): number => times + 1);
     } catch (err) {
       if (!wasCancelled(err)) {
-        setFailure(String(err));
+        setAnswer((held): Answer => ({ ...held, of: wanted, failure: String(err) }));
       }
     }
   }
 
+  // Only what was answered about the object on screen. Everything below reads
+  // this rather than the state, so the panel cannot show one object's DDL under
+  // another's name while the answer is on its way.
+  const held = answer.of === wanted ? answer : nothing;
+
   // There is nothing to show yet for the tab being looked at. It is derived
   // rather than held, so it cannot disagree with what is on screen.
-  const nothingYet = tab === "properties" ? shown === null : script === "";
+  const nothingYet = tab === "properties" ? held.shown === null : held.script === "";
 
   return (
     <section className="panel" aria-label={object.name}>
@@ -111,11 +153,11 @@ export function ObjectPanel({
         </TabButton>
       </div>
 
-      {failure !== "" && <p className="panel__error">{failure}</p>}
-      {nothingYet && failure === "" && <p className="panel__note">Reading…</p>}
+      {held.failure !== "" && <p className="panel__error">{held.failure}</p>}
+      {nothingYet && held.failure === "" && <p className="panel__note">Reading…</p>}
 
-      {tab === "properties" && shown !== null && <Properties shown={shown} />}
-      {tab === "ddl" && script !== "" && <pre className="panel__ddl">{script}</pre>}
+      {tab === "properties" && held.shown !== null && <Properties shown={held.shown} />}
+      {tab === "ddl" && held.script !== "" && <pre className="panel__ddl">{held.script}</pre>}
     </section>
   );
 }
