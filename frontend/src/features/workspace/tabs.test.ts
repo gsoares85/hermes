@@ -183,3 +183,29 @@ describe("opening a connection that is already open by another route", () => {
     expect(displaced(opened(noTabs, one), two)).toBe("");
   });
 });
+
+/**
+ * The identifier and the list are two pieces of state and can disagree for a
+ * render. activeOf already answers "no tab" when they do; this answered a tab,
+ * and answered a different one per key: ArrowRight gave the first, which looks
+ * deliberate, and ArrowLeft gave the second from the end, which is arithmetic
+ * on a position of -1 rather than a decision anybody made.
+ */
+describe("moving between tabs when the one in front is unknown", () => {
+  const adrift: Tabs = { ...withOpen("a", "b", "c"), activeId: "gone" };
+
+  it("moves nowhere, whichever key it was", () => {
+    for (const key of ["ArrowRight", "ArrowLeft", "Home", "End"]) {
+      expect(moved(adrift, key)).toBeNull();
+    }
+  });
+
+  it("still moves when the one in front is known", () => {
+    const tabs = withOpen("a", "b", "c");
+
+    expect(moved(tabs, "ArrowRight")).toBe("a");
+    expect(moved(tabs, "ArrowLeft")).toBe("b");
+    expect(moved(tabs, "Home")).toBe("a");
+    expect(moved(tabs, "End")).toBe("c");
+  });
+});

@@ -114,7 +114,15 @@ export function moved(tabs: Tabs, key: string): string | null {
     return null;
   }
 
+  // The identifier and the list are two pieces of state and can disagree for a
+  // render. activeOf answers "no tab" when they do, and so does this: with no
+  // position to move from, the arithmetic below is arithmetic on -1, which
+  // sends ArrowLeft to the second tab from the end for no reason anybody
+  // chose.
   const at = tabs.open.findIndex((tab): boolean => tab.id === tabs.activeId);
+  if (at < 0) {
+    return null;
+  }
 
   switch (key) {
     case "ArrowRight":
