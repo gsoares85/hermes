@@ -7,10 +7,22 @@
   color-scheme: light dark;
 
   --surface: #ffffff;
-  --surface-raised: #f7f7f8;
+  --surface-raised: #f1f1f4;
   --text: #17181c;
   --text-muted: #5f6169;
   --border: rgb(0 0 0 / 12%);
+
+  /* The one colour that is not a shade of the surface: it marks what is
+     focused and what is selected. The same hue in both themes — the surfaces
+     say which theme you are in, and this says where you are.
+
+     Two tokens because one value cannot do both jobs. --accent is for outlines
+     and borders, which need 3:1 against their background; --accent-text is for
+     accented words, which need 4.5:1, and on a dark ground the accent itself
+     only reaches 3.4:1. Using --accent as text there would be a contrast
+     failure that looks deliberate. */
+  --accent: #6d5aed;
+  --accent-text: #6d5aed;
 
   /* The environment marks. Production is the one that has to stop somebody
      mid-keystroke, so it is the only one that is red, and the other two are
@@ -32,11 +44,16 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --surface: #16181d;
-    --surface-raised: #1c1f26;
-    --text: #e7e8ec;
-    --text-muted: #a1a4ad;
-    --border: rgb(255 255 255 / 14%);
+    /* The page and what is lifted off it. A third ground for the chrome that
+       frames them arrives with the panels that need it. */
+    --surface: #1e1e24;
+    --surface-raised: #232329;
+    --text: #f3f4f6;
+    --text-muted: #a1a1aa;
+    --border: #2f2f37;
+
+    --accent: #6d5aed;
+    --accent-text: #ece6ff;
 
     --dev: #8ec0f5;
     --dev-surface: #12283f;
@@ -51,6 +68,24 @@ body {
   margin: 0;
   background: var(--surface);
   color: var(--text);
+}
+
+/*
+ * Where the keyboard is.
+ *
+ * There was no focus style at all, so the only indicator was whatever each
+ * webview draws by default — which on one of the three is nothing anybody
+ * would call visible. It is drawn for :focus-visible rather than :focus, so a
+ * click does not leave a ring behind: the ring is for the person who cannot
+ * see the pointer, and drawing it for everybody is how people learn to
+ * suppress it.
+ *
+ * :where() keeps the specificity at zero, so any rule below can still say
+ * something more specific about a control without fighting this one.
+ */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .app {
@@ -348,7 +383,8 @@ body {
 }
 
 .connection__databases button.is-selected {
-  border-color: var(--text);
+  border-color: var(--accent);
+  color: var(--accent-text);
   font-weight: 600;
 }
 
@@ -392,7 +428,7 @@ body {
 }
 
 .connection__saved button.is-selected {
-  border-color: var(--text);
+  border-color: var(--accent);
 }
 
 .connection__saved-name {
@@ -450,6 +486,23 @@ body {
   gap: 0.5rem;
   height: 26px;
   padding-right: 0.5rem;
+}
+
+.tree__line:hover {
+  background: var(--surface-raised);
+}
+
+/*
+ * The row that is selected, drawn from the attribute that already says so.
+ *
+ * The tree has told assistive technology which row is selected since it became
+ * a tree; nothing on screen said it. Reading the state off aria-selected rather
+ * than a second class is what keeps the two from disagreeing — there is one
+ * answer to "which row is selected" and both readers get it.
+ */
+.tree__line[aria-selected="true"] {
+  background: var(--surface-raised);
+  color: var(--accent-text);
 }
 
 .tree__toggle {
@@ -573,7 +626,8 @@ body {
 }
 
 .panel__tabs button.is-selected {
-  border-color: var(--text);
+  border-color: var(--accent);
+  color: var(--accent-text);
 }
 
 .panel__note {
