@@ -153,12 +153,43 @@ func TestTheSystemSchemasAreLeftOutUnlessTheyAreAskedFor(t *testing.T) {
 		t.Fatal("hiding the system schemas and showing them send the same query")
 	}
 
-	if !strings.Contains(hidden.sql[0], "pg\\_%") {
+	if !strings.Contains(hidden.sql[0], "'pg_'") {
 		t.Errorf("the default listing does not exclude the pg_ schemas: %s", hidden.sql[0])
 	}
 
-	if strings.Contains(shown.sql[0], "pg\\_%") {
+	if strings.Contains(shown.sql[0], "'pg_'") {
 		t.Errorf("the listing that was asked for everything still excludes some: %s", shown.sql[0])
+	}
+}
+
+// What hides the system schemas must not depend on a setting the connection can
+// change.
+//
+// The prefix used to be matched with LIKE and an escaped underscore, which
+// means a literal underscore only while standard_conforming_strings is on. It
+// is a GUC, it can be set in the session parameters of a connection, and with
+// it off the underscore becomes a wildcard: pgagent and pgbouncer are then
+// classified as system schemas and vanish from the tree, which is the tree
+// lying about what is on the server.
+//
+// Doubly worth pinning because the comment beside the pattern filter in this
+// package explains that strpos was chosen over LIKE for exactly this reason —
+// so that an underscore somebody types is an underscore.
+func TestHidingTheSystemSchemasDoesNotDependOnAGUC(t *testing.T) {
+	t.Parallel()
+
+	hidden := &asked{}
+	if _, err := catalog.NewLister(hidden).Schemas(t.Context(), catalog.Filter{}); err != nil {
+		t.Fatalf("listing the schemas: %v", err)
+	}
+
+	if strings.Contains(hidden.sql[0], `\_`) {
+		t.Errorf("the prefix is matched with an escape standard_conforming_strings can turn off: %s",
+			hidden.sql[0])
+	}
+
+	if strings.Contains(hidden.sql[0], "~~") {
+		t.Errorf("the prefix is still matched as a pattern rather than as a prefix: %s", hidden.sql[0])
 	}
 }
 

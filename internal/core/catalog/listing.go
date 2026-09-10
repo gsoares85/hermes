@@ -74,7 +74,7 @@ func NewLister(server Asker) *Lister { return &Lister{server: server} }
 const listUserSchemas = `SELECT n.nspname
 	FROM pg_catalog.pg_namespace n
 	WHERE pg_catalog.strpos(pg_catalog.lower(n.nspname), pg_catalog.lower($1)) OPERATOR(pg_catalog.>) 0
-	  AND NOT (n.nspname OPERATOR(pg_catalog.~~) 'pg\_%'
+	  AND NOT (pg_catalog.strpos(n.nspname, 'pg_') OPERATOR(pg_catalog.=) 1
 	           OR n.nspname OPERATOR(pg_catalog.=) 'information_schema')`
 
 // listEverySchema is the same question without the exclusion.
