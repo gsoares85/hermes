@@ -1,5 +1,7 @@
 import type { SavedView } from "../../api/connection";
 
+import { Icon } from "../../ui/Icon";
+
 import { ConnectionMarks } from "./ConnectionMarks";
 
 /**
@@ -35,7 +37,7 @@ export function SavedConnections({
       <div className="saved__header">
         <span>Connections</span>
         <button type="button" className="saved__new" aria-label="New connection" onClick={onNew}>
-          +
+          <Icon name="plus" />
         </button>
       </div>
 
@@ -55,6 +57,7 @@ export function SavedConnections({
                 }}
               >
                 <span className="saved__name">
+                  <Icon name="database" className="saved__icon" />
                   {connection.name === "" ? connection.host : connection.name}
                   <ConnectionMarks
                     environment={connection.environment}

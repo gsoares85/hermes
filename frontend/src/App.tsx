@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { fetchAppInfo, unknownAppInfo, type AppInfo } from "./api/appInfo";
 import { closeConnection, savedConnections, serverVersion, type SavedView } from "./api/connection";
 import type { ObjectRef } from "./api/object";
+import { Icon } from "./ui/Icon";
 import { ConnectionDialog } from "./features/connection/ConnectionDialog";
 import { ConnectionForm } from "./features/connection/ConnectionForm";
 import { SavedConnections } from "./features/connection/SavedConnections";
@@ -226,6 +227,7 @@ export function App(): React.JSX.Element {
                 what the session is doing, this says where it is.
               */}
               <p className="workspace__origin">
+                <Icon name="plug" />
                 {connection.user}@{connection.host}:{connection.port}
                 {version === "" ? "" : ` · PostgreSQL ${version}`}
               </p>

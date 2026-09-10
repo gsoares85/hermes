@@ -8,6 +8,7 @@ import {
   type PropertiesView,
 } from "../../api/object";
 import { wasCancelled, type CancellablePromise } from "../../api/tree";
+import { Icon } from "../../ui/Icon";
 
 type Tab = "properties" | "ddl";
 
@@ -140,6 +141,7 @@ export function ObjectPanel({
           it forgets one schema rather than the whole connection.
         */}
         <button type="button" className="panel__refresh" onClick={(): void => void onRefresh()}>
+          <Icon name="refresh" />
           Refresh
         </button>
       </header>

@@ -11,6 +11,7 @@ import {
 } from "../../api/tree";
 
 import type { ObjectRef } from "../../api/object";
+import { Icon, type IconName } from "../../ui/Icon";
 
 import {
   abandoned,
@@ -395,6 +396,7 @@ export function ObjectTree({
   return (
     <section className="tree" aria-label="Objects">
       <div className="tree__filter">
+        <Icon name="search" className="tree__filter-icon" />
         <input
           type="search"
           value={text}
@@ -473,6 +475,28 @@ export function ObjectTree({
   );
 }
 
+/**
+ * What each kind of node is drawn as.
+ *
+ * A kind the Go side learns to answer before this learns to draw it falls back
+ * to the table glyph rather than to nothing: a row with no icon looks broken,
+ * and the word beside it in the accessible name is still right.
+ */
+function glyphOf(kind: string): IconName {
+  switch (kind) {
+    case "database":
+      return "database";
+    case "schema":
+      return "folder";
+    case "view":
+      return "view";
+    case "sequence":
+      return "sequence";
+    default:
+      return "table";
+  }
+}
+
 /** One line: its indentation, whether it can open, and what it is. */
 function TreeRow({
   row,
@@ -527,10 +551,13 @@ function TreeRow({
         // rather than shifting by a character depending on their kind.
         aria-label={row.node.expandable ? `Expand ${row.node.name}` : row.node.name}
       >
-        {row.node.expandable ? (row.expanded ? "▾" : "▸") : "·"}
+        {row.node.expandable ? <Icon name="caret" /> : <span className="tree__leaf" />}
       </button>
 
-      <span className={`tree__kind tree__kind--${row.node.kind}`}>{row.node.kind}</span>
+      <span className="tree__kind">
+        <Icon name={glyphOf(row.node.kind)} />
+        <span className="visually-hidden">{row.node.kind}</span>
+      </span>
       <span className="tree__name">
         <Marked name={row.node.name} text={text} />
       </span>

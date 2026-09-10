@@ -931,3 +931,187 @@ body {
   font-size: 0.85em;
   opacity: 0.8;
 }
+
+/*
+ * The tree, and why its rows are positioned rather than laid out.
+ *
+ * The scroller takes the height of the column and the rows inside it are placed
+ * by the virtualiser: the spacer is as tall as every row would be, and only the
+ * rows on screen exist. That is why a row is absolute — it is put where it goes
+ * by a transform, and a row in flow would put every one of them back into the
+ * layout, which is the work the virtualiser exists to skip.
+ */
+.tree {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-height: 0;
+  padding: 0.5rem 0.4rem;
+}
+
+/*
+ * contain: strict includes contain: size, so this element is laid out as though
+ * it had no content at all: it takes the height the column gives it and never
+ * the height of the five thousand rows it could scroll. It is the reason the
+ * virtualiser can be trusted, and it is why it survived being moved out of a
+ * card of fixed height and into a panel that stretches.
+ */
+.tree__scroller {
+  contain: strict;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.tree__spacer {
+  position: relative;
+  width: 100%;
+}
+
+.tree__row {
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 100%;
+}
+
+.tree__line {
+  align-items: center;
+  border-radius: 4px;
+  cursor: default;
+  display: flex;
+  gap: 0.35rem;
+  height: 26px;
+  padding-right: 0.4rem;
+}
+
+.tree__line:hover {
+  background: var(--surface-raised);
+}
+
+/*
+ * The row that is selected, drawn from the attribute that already says so.
+ *
+ * The tree has told assistive technology which row is selected since it became
+ * a tree; nothing on screen said it. Reading the state off aria-selected rather
+ * than a second class is what keeps the two from disagreeing — there is one
+ * answer to "which row is selected" and both readers get it.
+ */
+.tree__line[aria-selected="true"] {
+  background: var(--surface-raised);
+  color: var(--accent-text);
+}
+
+.tree__toggle {
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  padding: 0;
+  width: 1.15em;
+}
+
+.tree__toggle:disabled {
+  cursor: default;
+}
+
+/*
+ * The glyphs.
+ *
+ * Sized in em rather than pixels, so an icon is the size of the text it sits
+ * beside wherever it is put and nobody has to remember a second number. They
+ * take their colour from that text for the same reason.
+ *
+ * flex: none, because a glyph beside a name that can be long is a glyph a flex
+ * container will happily squash into an ellipse.
+ */
+.icon {
+  flex: none;
+  height: 1.15em;
+  width: 1.15em;
+}
+
+/*
+ * Text that only a screen reader receives.
+ *
+ * Every icon in this window is decoration, and what it stands for is said in
+ * words beside it. Where those words would be noise on screen — the kind of a
+ * row, which the glyph already says — this is where they go. Clipped rather
+ * than hidden: display:none and visibility:hidden take it out of the
+ * accessibility tree as well, which is the opposite of the point.
+ */
+.visually-hidden {
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+/*
+ * The caret turns rather than being swapped for a second glyph: one shape that
+ * rotates reads as the same thing opening, and two shapes read as two things.
+ */
+.tree__toggle .icon {
+  transition: transform 120ms ease;
+}
+
+.tree__toggle[aria-expanded="true"] .icon {
+  transform: rotate(90deg);
+}
+
+/* A node with nothing under it still takes the space, so names line up rather
+   than shifting by a character depending on their kind. */
+.tree__leaf {
+  display: inline-block;
+  width: 1.15em;
+}
+
+.tree__kind {
+  align-items: center;
+  display: inline-flex;
+}
+
+.tree__filter {
+  align-items: center;
+  position: relative;
+}
+
+.tree__filter-icon {
+  color: var(--text-muted);
+  left: 0.5rem;
+  pointer-events: none;
+  position: absolute;
+}
+
+.tree__filter input[type="search"] {
+  padding-left: 1.9rem;
+}
+
+.saved__icon,
+.tabs__tab .icon,
+.workspace__origin .icon,
+.panel__refresh .icon {
+  color: var(--text-muted);
+}
+
+.saved__list button.is-open .saved__icon,
+.tabs__tab.is-active .icon {
+  color: var(--accent);
+}
+
+.workspace__origin {
+  align-items: center;
+  display: flex;
+  gap: 0.4rem;
+}
+
+.panel__refresh {
+  align-items: center;
+  display: flex;
+  gap: 0.3rem;
+}

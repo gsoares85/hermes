@@ -1,3 +1,4 @@
+import { Icon } from "../../ui/Icon";
 import { ConnectionMarks } from "../connection/ConnectionMarks";
 
 import { moved, type Tabs } from "./tabs";
@@ -44,6 +45,7 @@ export function TabBar({
                 onPick(to);
               }}
             >
+              <Icon name="database" />
               <span className="tabs__name">{tab.name === "" ? tab.host : tab.name}</span>
               <ConnectionMarks environment={tab.environment} readOnly={tab.readOnly} />
             </button>
@@ -61,7 +63,7 @@ export function TabBar({
                 onClose(tab.id);
               }}
             >
-              ×
+              <Icon name="close" />
             </button>
           </div>
         );
