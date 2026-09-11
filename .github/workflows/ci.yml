@@ -346,6 +346,31 @@ jobs:
       - name: Hand a credential to a real child process
         run: go test -race -count=1 -timeout=5m ./internal/credential/...
 
+  # A process group is three different mechanisms wearing one name: Setpgid on
+  # Linux and macOS, a Job Object on Windows. The test starts a process that
+  # starts another, kills the group and proves the grandchild died — which is
+  # the whole reason the package exists, and which nothing but a real process
+  # tree on a real system can say.
+  processes:
+    name: Process groups (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Kill a real process tree
+        run: go test -race -count=1 -timeout=5m ./internal/proc/...
+
   integration:
     name: Integration tests
     runs-on: ubuntu-latest

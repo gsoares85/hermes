@@ -62,6 +62,7 @@ var projectRules = []deps.Rule{
 			module + "/internal/vault",
 			module + "/internal/credential",
 			module + "/internal/filestore",
+			module + "/internal/proc",
 		},
 	},
 	{
@@ -121,6 +122,7 @@ var projectRules = []deps.Rule{
 			module + "/internal/vault",
 			module + "/internal/credential",
 			module + "/internal/filestore",
+			module + "/internal/proc",
 		},
 	},
 }
