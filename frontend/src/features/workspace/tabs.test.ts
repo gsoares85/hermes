@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { StatusView } from "../../api/connection";
 
-import { activeOf, closed, displaced, moved, noTabs, opened, type Tabs } from "./tabs";
+import { activeOf, closed, moved, noTabs, opened, released, type Tabs } from "./tabs";
 
 function status(id: string): StatusView {
   return {
@@ -156,17 +156,72 @@ describe("opening a connection that is already open by another route", () => {
     expect(ids(tabs)).toEqual(["a", "d", "c"]);
   });
 
-  it("says which connection was displaced, so it can be released", () => {
+  /**
+   * Answered by the replacement itself rather than asked beforehand.
+   *
+   * Two connections can be opening at once — a row in the sidebar and the
+   * dialog — and each answers from the tab list it was started with. Asking
+   * first and replacing afterwards let the second opening land in between, so
+   * the first one replaced a tab it had been told was not there and the
+   * connection that lost it stayed open with nothing able to close it.
+   */
+  it("queues the connection that lost its tab, so it can be released", () => {
     const first = status("a");
     const again = { ...status("b"), savedId: first.savedId };
 
-    expect(displaced(opened(noTabs, first), again)).toBe("a");
+    expect(opened(opened(noTabs, first), again).releasing).toEqual(["a"]);
   });
 
-  it("displaces nothing when the tab is the same connection refreshed", () => {
+  it("queues nothing when the tab is the same connection refreshed", () => {
     const held = status("a");
 
-    expect(displaced(opened(noTabs, held), held)).toBe("");
+    expect(opened(opened(noTabs, held), held).releasing).toEqual([]);
+  });
+
+  it("queues nothing when the connection is opening for the first time", () => {
+    expect(opened(noTabs, status("a")).releasing).toEqual([]);
+  });
+
+  it("keeps a queued release that a second replacement has not made yet", () => {
+    const first = status("a");
+    const again = { ...status("b"), savedId: first.savedId };
+    const third = { ...status("c"), savedId: first.savedId };
+
+    expect(opened(opened(opened(noTabs, first), again), third).releasing).toEqual(["a", "b"]);
+  });
+
+  it("keeps a queued release through the closing of another tab", () => {
+    const first = status("a");
+    const again = { ...status("b"), savedId: first.savedId };
+    const other = status("z");
+
+    const tabs = opened(opened(opened(noTabs, first), other), again);
+
+    expect(closed(tabs, "z").releasing).toEqual(["a"]);
+  });
+
+  it("takes a connection out of the queue once it has been released", () => {
+    const first = status("a");
+    const again = { ...status("b"), savedId: first.savedId };
+
+    expect(released(opened(opened(noTabs, first), again), "a").releasing).toEqual([]);
+  });
+
+  it("leaves the rest of the queue alone", () => {
+    const first = status("a");
+    const again = { ...status("b"), savedId: first.savedId };
+    const third = { ...status("c"), savedId: first.savedId };
+    const tabs = opened(opened(opened(noTabs, first), again), third);
+
+    expect(released(tabs, "a").releasing).toEqual(["b"]);
+  });
+
+  // Answering with the same object is what stops the effect that drains the
+  // queue from setting state it has already set, every time it runs.
+  it("answers with the tabs themselves when the connection is not queued", () => {
+    const tabs = withOpen("a");
+
+    expect(released(tabs, "a")).toBe(tabs);
   });
 
   // A connection opened from a form that was never saved has no saved
@@ -180,7 +235,7 @@ describe("opening a connection that is already open by another route", () => {
     const tabs = opened(opened(noTabs, one), two);
 
     expect(ids(tabs)).toEqual(["a", "b"]);
-    expect(displaced(opened(noTabs, one), two)).toBe("");
+    expect(tabs.releasing).toEqual([]);
   });
 });
 

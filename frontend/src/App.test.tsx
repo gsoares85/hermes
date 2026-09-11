@@ -197,6 +197,48 @@ describe("opening a server that already has a tab", () => {
 
     expect(screen.getAllByRole("tab", { name: /First/ })).toHaveLength(1);
   });
+
+  /**
+   * Two doors onto the same server, opened at once.
+   *
+   * The row in the sidebar and the dialog each start an opening, and each one
+   * used to work out which connection it pushed out of a tab from the tab list
+   * of the render it was started in. The dialog answering first moved the list
+   * on; the row then replaced a tab it had been told was empty, and the
+   * connection that lost it stayed open on the Go side — a pool and a cached
+   * catalog with nothing on screen able to close them.
+   */
+  it("releases the connection it pushed out even when another opening got there first", async () => {
+    let answerRow: (status: StatusView) => void = (): void => {};
+    backend.open.mockReturnValueOnce(
+      Object.assign(
+        new Promise<StatusView>((resolve): void => {
+          answerRow = resolve;
+        }),
+        { cancel: (): Promise<void> => Promise.resolve() },
+      ),
+    );
+
+    render(<App />);
+
+    // The row: held unanswered, so that the dialog can get there first.
+    fireEvent.click(await screen.findByRole("button", { name: /^First/ }));
+
+    fireEvent.click(
+      within(await screen.findByRole("banner")).getByRole("button", { name: "New connection" }),
+    );
+    backend.open.mockReturnValueOnce(cancellable(status("c-dialog", "s1", "First")));
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }));
+    await screen.findByRole("tab", { name: /First/ });
+
+    answerRow(status("c-row", "s1", "First"));
+
+    await waitFor((): void => {
+      expect(backend.close).toHaveBeenCalledWith("c-dialog");
+    });
+
+    expect(screen.getAllByRole("tab", { name: /First/ })).toHaveLength(1);
+  });
 });
 
 /**

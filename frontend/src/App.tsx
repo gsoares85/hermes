@@ -28,9 +28,9 @@ import { TabBar } from "./features/workspace/TabBar";
 import {
   activeOf,
   closed,
-  displaced,
   noTabs,
   opened as openedTab,
+  released,
   type Tabs,
 } from "./features/workspace/tabs";
 import { Toolbar } from "./features/workspace/Toolbar";
@@ -82,6 +82,9 @@ export function App(): React.JSX.Element {
   // than state: nothing on screen is drawn from it, and a render per keystroke
   // of a value only a handler reads is work for nothing.
   const connectingWith = useRef<CancellablePromise<StatusView> | null>(null);
+  // The connections the window has already asked the Go side to release. A ref
+  // for the same reason as the one above: nothing on screen is drawn from it.
+  const letting = useRef(new Set<string>());
 
   const connection = activeOf(tabs);
   const selected = connection === null ? null : (picked.get(connection.id) ?? null);
@@ -190,7 +193,7 @@ export function App(): React.JSX.Element {
   }
 
   /**
-   * Put an open connection in front, and release whatever it replaced.
+   * Put an open connection in front.
    *
    * A server gets one tab whichever door it was opened by. The sidebar already
    * came back to a tab rather than opening a second connection; the dialog did
@@ -198,24 +201,13 @@ export function App(): React.JSX.Element {
    * Connect gave a second tab onto the same server — a second pool, a second
    * cached catalog, and twice the resting memory the window is budgeted for.
    *
-   * Taking the tab is only half of it. The connection that was in it is still
-   * open on the Go side with nothing on screen able to close it, so it is
-   * released here. Which is also the right reading of the gesture: someone who
-   * edits a connection and presses Connect means "again, with these settings".
+   * Taking the tab is only half of it, and the other half is not done here:
+   * which connection this pushes out is a question for the tab list at the
+   * moment it is replaced, not for the one this render was drawn from. The
+   * effect below releases what the answer names.
    */
   function show(status: StatusView): void {
-    const released = displaced(tabs, status);
-
     setTabs((held): Tabs => openedTab(held, status));
-
-    if (released !== "") {
-      forget(released);
-
-      closeConnection(released).catch((): void => {
-        // Gone already. The tab it had is gone too, which is the part anybody
-        // can see.
-      });
-    }
   }
 
   /**
@@ -310,6 +302,42 @@ export function App(): React.JSX.Element {
       return next;
     });
   }
+
+  /**
+   * The connections that lost their tab, released once the tab list says which.
+   *
+   * Asked before the replacement instead, from the list the render held, the
+   * answer went stale the moment a second server was opening at the same time:
+   * the sidebar row and the dialog each start one, and the slower of the two
+   * replaced a tab it had been told was not there. What it pushed out then
+   * stayed open on the Go side — a pool per database and a cached catalog —
+   * with no tab on screen able to close it.
+   *
+   * The queue says what is owed, not what is in flight, and this runs again
+   * whenever another connection joins it. What has already been asked for is
+   * what the set is for: without it, a second displacement would ask the Go
+   * side to close the first one twice.
+   */
+  useEffect((): void => {
+    for (const id of tabs.releasing) {
+      if (letting.current.has(id)) {
+        continue;
+      }
+
+      letting.current.add(id);
+
+      void closeConnection(id)
+        .catch((): void => {
+          // Gone already. The tab it had is gone too, which is the part
+          // anybody can see.
+        })
+        .finally((): void => {
+          letting.current.delete(id);
+          forget(id);
+          setTabs((held): Tabs => released(held, id));
+        });
+    }
+  }, [tabs.releasing]);
 
   return (
     <Workspace

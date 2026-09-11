@@ -11,9 +11,20 @@ import type { StatusView } from "../../api/connection";
 export interface Tabs {
   open: StatusView[];
   activeId: string;
+  /**
+   * Connections whose tab is gone and which are still open on the Go side.
+   *
+   * Replacing a tab is only half of releasing what was in it, and which
+   * connection a replacement pushes out is a question only the tab list doing
+   * the replacing can answer. Two servers can be opening at once — a row in
+   * the sidebar and the dialog — so it is answered here, as the replacement
+   * happens, rather than by a caller holding a list that the other opening has
+   * already moved on from.
+   */
+  releasing: readonly string[];
 }
 
-export const noTabs: Tabs = { open: [], activeId: "" };
+export const noTabs: Tabs = { open: [], activeId: "", releasing: [] };
 
 /**
  * Whether a tab is showing the server a state describes.
@@ -42,27 +53,36 @@ function sameServer(tab: StatusView, status: StatusView): boolean {
 export function opened(tabs: Tabs, status: StatusView): Tabs {
   const at = tabs.open.findIndex((tab): boolean => sameServer(tab, status));
   if (at < 0) {
-    return { open: [...tabs.open, status], activeId: status.id };
+    return { ...tabs, open: [...tabs.open, status], activeId: status.id };
   }
 
   const open = [...tabs.open];
+  const held = open[at];
   open[at] = status;
 
-  return { open, activeId: status.id };
+  // The same connection refreshed pushes nothing out: it is the tab it is
+  // replacing. Anything else is a second connection to the server, and the
+  // first one is still open with nothing on screen able to close it.
+  const pushed = held !== undefined && held.id !== status.id;
+
+  return {
+    open,
+    activeId: status.id,
+    releasing: pushed ? [...tabs.releasing, held.id] : tabs.releasing,
+  };
 }
 
 /**
- * The connection this state pushes out of its tab, if it pushes one out.
+ * A queued connection has been released.
  *
- * Replacing the tab is only half of it: the connection that was in it is still
- * open on the Go side, holding its pools and its cached catalog with nothing
- * on screen able to close it. Whoever replaces the tab has to release it, and
- * this is how they know which.
+ * Answers with the tabs themselves when the identifier is not in the queue, so
+ * that whoever drains it can say so unconditionally without setting state that
+ * has not changed.
  */
-export function displaced(tabs: Tabs, status: StatusView): string {
-  const held = tabs.open.find((tab): boolean => sameServer(tab, status));
-
-  return held === undefined || held.id === status.id ? "" : held.id;
+export function released(tabs: Tabs, id: string): Tabs {
+  return tabs.releasing.includes(id)
+    ? { ...tabs, releasing: tabs.releasing.filter((held): boolean => held !== id) }
+    : tabs;
 }
 
 /**
@@ -81,14 +101,14 @@ export function closed(tabs: Tabs, id: string): Tabs {
 
   const open = tabs.open.filter((tab): boolean => tab.id !== id);
   if (open.length === 0) {
-    return noTabs;
+    return { ...noTabs, releasing: tabs.releasing };
   }
 
   if (tabs.activeId !== id) {
-    return { open, activeId: tabs.activeId };
+    return { ...tabs, open };
   }
 
-  return { open, activeId: (open[at] ?? open[open.length - 1])?.id ?? "" };
+  return { ...tabs, open, activeId: (open[at] ?? open[open.length - 1])?.id ?? "" };
 }
 
 /**
