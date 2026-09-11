@@ -1,0 +1,313 @@
+package ui
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/gsoares85/hermes/internal/core/job"
+)
+
+// How often the window is told where the running jobs are.
+//
+// The cap ADR-0015 put on emission, and the reason it is a cap rather than a
+// delay: a COPY of a million rows reports per row, and every one of those
+// crossing to the webview is the window not repainting. Sampling turns a
+// million reports into ten a second, whatever the work does.
+const defaultSampleEvery = 100 * time.Millisecond
+
+// The events this service pushes. Named here rather than spelled out at each
+// call, because the frontend subscribes to the same strings and a typo in one
+// of them is a panel that silently never updates.
+const (
+	stateEvent    = "job:state"
+	progressEvent = "job:progress"
+	logEvent      = "job:log"
+)
+
+// Emitter is how the Go side pushes state to the window.
+//
+// An interface this service is handed rather than a global it reaches for.
+// The gate already holds this package to that for the vault and the engine,
+// and the reason is the same one again: a service that called
+// application.Get() would need a running Wails application before it could be
+// tested at all, and the cap above would be untestable with it.
+type Emitter interface {
+	Emit(name string, data any)
+}
+
+// JobProgressView is how far along a job is, as the window reads it.
+//
+// Durations cross as milliseconds. A Go duration marshals as a count of
+// nanoseconds, which the window would have to know to divide by a billion —
+// and dividing by the wrong power of ten is invisible until an ETA reads three
+// hours for a job with three seconds left.
+type JobProgressView struct {
+	Step          string  `json:"step"`
+	Unit          string  `json:"unit"`
+	Done          int64   `json:"done"`
+	Total         int64   `json:"total"`
+	Fraction      float64 `json:"fraction"`
+	Indeterminate bool    `json:"indeterminate"`
+	ElapsedMs     int64   `json:"elapsedMs"`
+	RemainingMs   int64   `json:"remainingMs"`
+}
+
+// JobView is a job as the window draws it.
+//
+// The state crosses as its name. A number would make the frontend carry a copy
+// of an enumeration whose order is an implementation detail of a Go file, and
+// reordering the constants would silently relabel every row.
+//
+// The times cross as strings, and an empty one means there is none. A job that
+// has not ended has no end, and the zero time rendered by a date formatter is
+// 1 January year 1 — which it will print rather than refuse.
+type JobView struct {
+	ID        string          `json:"id"`
+	Kind      string          `json:"kind"`
+	Title     string          `json:"title"`
+	State     string          `json:"state"`
+	Err       string          `json:"error"`
+	Progress  JobProgressView `json:"progress"`
+	Dropped   int             `json:"dropped"`
+	StartedAt string          `json:"startedAt"`
+	EndedAt   string          `json:"endedAt"`
+}
+
+// JobLogView is what a job has said since the window was last told.
+type JobLogView struct {
+	ID    string   `json:"id"`
+	Lines []string `json:"lines"`
+}
+
+// JobServiceOption configures the service.
+type JobServiceOption func(*JobService)
+
+// WithSampleEvery sets how often the window is told where the jobs are.
+func WithSampleEvery(every time.Duration) JobServiceOption {
+	return func(s *JobService) { s.every = every }
+}
+
+// JobService is what the window uses to see and stop what is running.
+//
+// It assembles no SQL and carries no credential: a job is a title, a state and
+// a number, and the log it hands over has already had its secrets taken out on
+// the way into the queue.
+type JobService struct {
+	queue *job.Queue
+	emit  Emitter
+	every time.Duration
+
+	// What the window has already been told, so that a sample says only what
+	// changed. Without it the window is woken for every job in the history on
+	// every tick, for ever.
+	mu    sync.Mutex
+	said  map[string]JobProgressView
+	lines map[string]int
+}
+
+// NewJobService creates the service bound to the frontend.
+//
+// It starts nothing. Watch is what begins sampling, and the caller decides
+// when that stops.
+func NewJobService(queue *job.Queue, emit Emitter, options ...JobServiceOption) *JobService {
+	service := &JobService{
+		queue: queue,
+		emit:  emit,
+		every: defaultSampleEvery,
+		said:  make(map[string]JobProgressView),
+		lines: make(map[string]int),
+	}
+
+	for _, option := range options {
+		option(service)
+	}
+
+	return service
+}
+
+// Observing adapts an emitter to the queue's observer, so that a state change
+// reaches the window as it happens rather than at the next sample.
+//
+// It lives here rather than in the queue because the queue may not name an
+// event, and here rather than in the command that wires things together
+// because the name of the event belongs beside the ones above.
+func Observing(emit Emitter) job.Observer {
+	return func(view job.View) {
+		emit.Emit(stateEvent, viewOfJob(view))
+	}
+}
+
+// List answers every job the window knows about.
+//
+// It is the reconciliation half of ADR-0015: events are the fast path and this
+// is the truth. A window that missed an event is corrected by asking, and the
+// path that corrects it is the same one that filled the panel in the first
+// place — so it is exercised every time the panel opens, rather than only when
+// something has already gone wrong.
+func (s *JobService) List() []JobView {
+	held := s.queue.List()
+
+	views := make([]JobView, 0, len(held))
+	for _, one := range held {
+		views = append(views, viewOfJob(one))
+	}
+
+	return views
+}
+
+// Log answers everything a job has said.
+//
+// The whole log, unlike the events, because this is what a panel being opened
+// on a job that has been running for ten minutes needs.
+func (s *JobService) Log(id string) ([]string, error) {
+	lines, err := s.queue.Log(id)
+	if err != nil {
+		return nil, fmt.Errorf("reading the log of job %s: %w", id, err)
+	}
+
+	return lines, nil
+}
+
+// Cancel asks a job to stop.
+func (s *JobService) Cancel(id string) error {
+	if err := s.queue.Cancel(id); err != nil {
+		return fmt.Errorf("cancelling job %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// Forget drops a job that has ended from the list.
+func (s *JobService) Forget(id string) error {
+	if err := s.queue.Forget(id); err != nil {
+		return fmt.Errorf("forgetting job %s: %w", id, err)
+	}
+
+	s.mu.Lock()
+	delete(s.said, id)
+	delete(s.lines, id)
+	s.mu.Unlock()
+
+	return nil
+}
+
+// Watch tells the window where the jobs are, until the caller gives up.
+func (s *JobService) Watch(ctx context.Context) {
+	ticker := time.NewTicker(s.every)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.Sample()
+		}
+	}
+}
+
+// Sample tells the window what has changed since the last time it was told.
+//
+// Exported so that the cap is testable without waiting for a clock: what makes
+// a thousand reports one event is that a sample reads where a job is now, and
+// that is a property of this function rather than of the ticker above it.
+func (s *JobService) Sample() {
+	for _, one := range s.queue.List() {
+		s.progressOf(one)
+		s.logOf(one)
+	}
+}
+
+// progressOf tells the window where a job is, if that has moved.
+func (s *JobService) progressOf(one job.View) {
+	moved := progressOfJob(one.Progress)
+
+	s.mu.Lock()
+	same := s.said[one.ID] == moved
+	if !same {
+		s.said[one.ID] = moved
+	}
+	s.mu.Unlock()
+
+	if same {
+		return
+	}
+
+	s.emit.Emit(progressEvent, JobView{
+		ID:       one.ID,
+		State:    one.State.String(),
+		Progress: moved,
+		Dropped:  one.Dropped,
+	})
+}
+
+// logOf tells the window what a job has said since it was last told.
+//
+// Only the new lines. Sending the whole log every sample would send a megabyte
+// a tick for a verbose restore, which is the budget the ceiling on the log was
+// put there to keep.
+func (s *JobService) logOf(one job.View) {
+	lines, err := s.queue.Log(one.ID)
+	if err != nil {
+		// The job was forgotten between the listing and now. There is nothing
+		// to say about a job that is gone.
+		return
+	}
+
+	s.mu.Lock()
+	told := s.lines[one.ID]
+	// A log that has dropped its beginning is shorter than what was sent, and
+	// treating the count as an index into it would send nothing ever again.
+	if told > len(lines) {
+		told = 0
+	}
+
+	fresh := lines[told:]
+	s.lines[one.ID] = len(lines)
+	s.mu.Unlock()
+
+	if len(fresh) == 0 {
+		return
+	}
+
+	s.emit.Emit(logEvent, JobLogView{ID: one.ID, Lines: fresh})
+}
+
+func viewOfJob(one job.View) JobView {
+	return JobView{
+		ID:        one.ID,
+		Kind:      one.Kind,
+		Title:     one.Title,
+		State:     one.State.String(),
+		Err:       one.Err,
+		Progress:  progressOfJob(one.Progress),
+		Dropped:   one.Dropped,
+		StartedAt: timeOf(one.Started),
+		EndedAt:   timeOf(one.Ended),
+	}
+}
+
+func progressOfJob(said job.ProgressView) JobProgressView {
+	return JobProgressView{
+		Step:          said.Step,
+		Unit:          said.Unit,
+		Done:          said.Done,
+		Total:         said.Total,
+		Fraction:      said.Fraction,
+		Indeterminate: said.Indeterminate,
+		ElapsedMs:     said.Elapsed.Milliseconds(),
+		RemainingMs:   said.Remaining.Milliseconds(),
+	}
+}
+
+// timeOf answers a time the window can read, and an empty string for a time
+// there is not.
+func timeOf(at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+
+	return at.Format(time.RFC3339Nano)
+}

@@ -23,6 +23,9 @@ var (
 
 	// ErrNotFound is a job this queue does not have.
 	ErrNotFound = errors.New("no such job")
+
+	// ErrStillRunning is a job asked to be forgotten while it is working.
+	ErrStillRunning = errors.New("the job is still running")
 )
 
 // Runner is the work a job does.
@@ -68,6 +71,22 @@ func WithLogBytes(bytes int) Option {
 // WithCleanupTimeout sets how long a cancelled job's cleanup is given.
 func WithCleanupTimeout(within time.Duration) Option {
 	return func(q *Queue) { q.cleanupTimeout = within }
+}
+
+// Observer is told whenever a job moves from one state to another.
+//
+// Only transitions, and never progress: a transition is rare and is what takes
+// a bar off the screen, so it is worth telling somebody about the moment it
+// happens. Progress is a million reports a second and is read by sampling
+// instead.
+//
+// It is called with no lock held, but it is called from the goroutine of the
+// job that moved. An observer that blocks blocks that job.
+type Observer func(View)
+
+// WithObserver gives the queue somebody to tell when a job changes state.
+func WithObserver(observe Observer) Option {
+	return func(q *Queue) { q.observe = observe }
 }
 
 // Spec is what a job is, as opposed to what it does.
@@ -118,6 +137,7 @@ type Queue struct {
 	logLines       int
 	logBytes       int
 	cleanupTimeout time.Duration
+	observe        Observer
 }
 
 // record is a job as the queue holds it. Everything mutable about a job lives
@@ -298,6 +318,9 @@ func (r reporter) Report(said Progress) {
 // finish puts a job into the end its outcome calls for and releases whoever is
 // waiting on it.
 func (q *Queue) finish(held *record, end State, failure error) {
+	var announce *View
+	defer func() { q.tell(announce) }()
+
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -318,6 +341,9 @@ func (q *Queue) finish(held *record, end State, failure error) {
 	}
 
 	close(held.done)
+
+	ended := q.viewOf(held)
+	announce = &ended
 }
 
 // moveTo applies a transition, ignoring one the job cannot make.
@@ -326,6 +352,9 @@ func (q *Queue) finish(held *record, end State, failure error) {
 // itself acting on a job it has just looked at: a refused move means the job
 // moved underneath, and the move that got there first is the one that counts.
 func (q *Queue) moveTo(held *record, to State) bool {
+	var announce *View
+	defer func() { q.tell(announce) }()
+
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -339,7 +368,23 @@ func (q *Queue) moveTo(held *record, to State) bool {
 		held.view.Started = q.now()
 	}
 
+	told := q.viewOf(held)
+	announce = &told
+
 	return true
+}
+
+// tell passes a transition on, once the lock is gone.
+//
+// After the lock rather than inside it: the observer is code this package did
+// not write, and running it while holding the queue is how one slow window
+// stops every job in it.
+func (q *Queue) tell(announce *View) {
+	if announce == nil || q.observe == nil {
+		return
+	}
+
+	q.observe(*announce)
 }
 
 // Get answers what the queue knows about one job.
@@ -394,6 +439,29 @@ func (q *Queue) Log(id string) ([]string, error) {
 	}
 
 	return held.log.read(), nil
+}
+
+// Forget drops a job the queue no longer needs to remember.
+//
+// Only one that has ended. Forgetting a running job would take the row off the
+// screen and leave the work going, with nothing able to stop it — which is a
+// leak with a person watching the space where the Stop button was.
+func (q *Queue) Forget(id string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	held, found := q.jobs[id]
+	if !found {
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+
+	if !held.view.State.Over() {
+		return fmt.Errorf("%w: %s is %v", ErrStillRunning, id, held.view.State)
+	}
+
+	delete(q.jobs, id)
+
+	return nil
 }
 
 // List answers every job the queue holds.
