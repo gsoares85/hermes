@@ -82,6 +82,11 @@ export function ConnectionForm({
   // and the binding hands back a promise that carries the handle — this is
   // where it stops being dropped on the floor.
   const running = useRef<CancellablePromise<unknown> | null>(null);
+  // Whether the connection in `status` is one this form opened. It starts as
+  // whatever the window has in front, which is a different connection than the
+  // one this dialog is about as soon as somebody opens Manage on a second
+  // server — and that one is nothing this form may rewrite.
+  const openedHere = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -191,6 +196,7 @@ export function ConnectionForm({
   async function onOpen(): Promise<void> {
     try {
       const opened = await run(openConnection(form));
+      openedHere.current = true;
       setStatus(opened);
       // The window above is handed the whole state, not just the identifier.
       // The object tree is drawn from the identifier, and the environment mark
@@ -224,7 +230,12 @@ export function ConnectionForm({
       // in the sidebar belongs to a server that is already open and nothing
       // knows it, so clicking it opens a second connection with a second pool
       // and a second cached catalog.
-      if (status !== null && status.savedId !== stored.id) {
+      //
+      // Only that connection, though. Asking whether the identifiers differ
+      // says yes for the connection that merely happens to be in front, and
+      // answering the question that way filed one server's connection under
+      // another server's saved row.
+      if (openedHere.current && status !== null && status.savedId === "") {
         const linked = { ...status, savedId: stored.id };
         setStatus(linked);
         onOpened(linked);
