@@ -81,50 +81,24 @@ type JobLogView struct {
 	Lines []string `json:"lines"`
 }
 
-// JobServiceOption configures the service.
-type JobServiceOption func(*JobService)
-
-// WithSampleEvery sets how often the window is told where the jobs are.
-func WithSampleEvery(every time.Duration) JobServiceOption {
-	return func(s *JobService) { s.every = every }
-}
-
 // JobService is what the window uses to see and stop what is running.
+//
+// Every exported method here becomes a binding, which is why pushing lives in
+// JobWatcher and not on this type: Watch never returns, and a window able to
+// call it could hold a goroutine open for the life of the application by
+// accident. This half answers questions; the other half talks without being
+// asked.
 //
 // It assembles no SQL and carries no credential: a job is a title, a state and
 // a number, and the log it hands over has already had its secrets taken out on
 // the way into the queue.
 type JobService struct {
 	queue *job.Queue
-	emit  Emitter
-	every time.Duration
-
-	// What the window has already been told, so that a sample says only what
-	// changed. Without it the window is woken for every job in the history on
-	// every tick, for ever.
-	mu    sync.Mutex
-	said  map[string]JobProgressView
-	lines map[string]int
 }
 
 // NewJobService creates the service bound to the frontend.
-//
-// It starts nothing. Watch is what begins sampling, and the caller decides
-// when that stops.
-func NewJobService(queue *job.Queue, emit Emitter, options ...JobServiceOption) *JobService {
-	service := &JobService{
-		queue: queue,
-		emit:  emit,
-		every: defaultSampleEvery,
-		said:  make(map[string]JobProgressView),
-		lines: make(map[string]int),
-	}
-
-	for _, option := range options {
-		option(service)
-	}
-
-	return service
+func NewJobService(queue *job.Queue) *JobService {
+	return &JobService{queue: queue}
 }
 
 // Observing adapts an emitter to the queue's observer, so that a state change
@@ -185,16 +159,56 @@ func (s *JobService) Forget(id string) error {
 		return fmt.Errorf("forgetting job %s: %w", id, err)
 	}
 
-	s.mu.Lock()
-	delete(s.said, id)
-	delete(s.lines, id)
-	s.mu.Unlock()
-
 	return nil
 }
 
+// JobWatcherOption configures a watcher.
+type JobWatcherOption func(*JobWatcher)
+
+// WithSampleEvery sets how often the window is told where the jobs are.
+func WithSampleEvery(every time.Duration) JobWatcherOption {
+	return func(w *JobWatcher) { w.every = every }
+}
+
+// JobWatcher tells the window where the jobs are, without being asked.
+//
+// Deliberately not a bound service. Nothing here is a question the frontend
+// asks, and everything here would become a binding if it were.
+type JobWatcher struct {
+	queue *job.Queue
+	emit  Emitter
+	every time.Duration
+
+	// What the window has already been told, so that a sample says only what
+	// changed. Without it the window is woken for every job in the history on
+	// every tick, for ever.
+	mu    sync.Mutex
+	said  map[string]JobProgressView
+	lines map[string]int
+}
+
+// NewJobWatcher creates the watcher.
+//
+// It starts nothing. Watch is what begins sampling, and the caller decides
+// when that stops.
+func NewJobWatcher(queue *job.Queue, emit Emitter, options ...JobWatcherOption) *JobWatcher {
+	watcher := &JobWatcher{
+		queue: queue,
+		emit:  emit,
+		every: defaultSampleEvery,
+		said:  make(map[string]JobProgressView),
+		lines: make(map[string]int),
+	}
+
+	for _, option := range options {
+		option(watcher)
+	}
+
+	return watcher
+}
+
 // Watch tells the window where the jobs are, until the caller gives up.
-func (s *JobService) Watch(ctx context.Context) {
+func (s *JobWatcher) Watch(ctx context.Context) {
 	ticker := time.NewTicker(s.every)
 	defer ticker.Stop()
 
@@ -213,15 +227,41 @@ func (s *JobService) Watch(ctx context.Context) {
 // Exported so that the cap is testable without waiting for a clock: what makes
 // a thousand reports one event is that a sample reads where a job is now, and
 // that is a property of this function rather than of the ticker above it.
-func (s *JobService) Sample() {
-	for _, one := range s.queue.List() {
+func (s *JobWatcher) Sample() {
+	held := s.queue.List()
+
+	for _, one := range held {
 		s.progressOf(one)
 		s.logOf(one)
+	}
+
+	s.prune(held)
+}
+
+// prune drops what was remembered about jobs the queue no longer has.
+//
+// Here rather than in Forget, so that the two halves stay apart: what the
+// window has been told is this type's business, and a service that reached in
+// to clear it would be the coupling the split was made to avoid.
+func (s *JobWatcher) prune(held []job.View) {
+	alive := make(map[string]bool, len(held))
+	for _, one := range held {
+		alive[one.ID] = true
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for id := range s.said {
+		if !alive[id] {
+			delete(s.said, id)
+			delete(s.lines, id)
+		}
 	}
 }
 
 // progressOf tells the window where a job is, if that has moved.
-func (s *JobService) progressOf(one job.View) {
+func (s *JobWatcher) progressOf(one job.View) {
 	moved := progressOfJob(one.Progress)
 
 	s.mu.Lock()
@@ -248,7 +288,7 @@ func (s *JobService) progressOf(one job.View) {
 // Only the new lines. Sending the whole log every sample would send a megabyte
 // a tick for a verbose restore, which is the budget the ceiling on the log was
 // put there to keep.
-func (s *JobService) logOf(one job.View) {
+func (s *JobWatcher) logOf(one job.View) {
 	lines, err := s.queue.Log(one.ID)
 	if err != nil {
 		// The job was forgotten between the listing and now. There is nothing

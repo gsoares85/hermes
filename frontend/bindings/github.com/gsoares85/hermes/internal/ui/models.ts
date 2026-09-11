@@ -104,6 +104,48 @@ export interface DiagnosisView {
 }
 
 /**
+ * JobProgressView is how far along a job is, as the window reads it.
+ * 
+ * Durations cross as milliseconds. A Go duration marshals as a count of
+ * nanoseconds, which the window would have to know to divide by a billion —
+ * and dividing by the wrong power of ten is invisible until an ETA reads three
+ * hours for a job with three seconds left.
+ */
+export interface JobProgressView {
+    "step": string;
+    "unit": string;
+    "done": number;
+    "total": number;
+    "fraction": number;
+    "indeterminate": boolean;
+    "elapsedMs": number;
+    "remainingMs": number;
+}
+
+/**
+ * JobView is a job as the window draws it.
+ * 
+ * The state crosses as its name. A number would make the frontend carry a copy
+ * of an enumeration whose order is an implementation detail of a Go file, and
+ * reordering the constants would silently relabel every row.
+ * 
+ * The times cross as strings, and an empty one means there is none. A job that
+ * has not ended has no end, and the zero time rendered by a date formatter is
+ * 1 January year 1 — which it will print rather than refuse.
+ */
+export interface JobView {
+    "id": string;
+    "kind": string;
+    "title": string;
+    "state": string;
+    "error": string;
+    "progress": JobProgressView;
+    "dropped": number;
+    "startedAt": string;
+    "endedAt": string;
+}
+
+/**
  * NodeRef says which node of the tree is being opened.
  * 
  * It is a place rather than a query: the frontend names where it is and gets

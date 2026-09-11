@@ -80,9 +80,8 @@ func finished(t *testing.T, queue *job.Queue, run job.Runner) string {
 func TestTheServiceListsWhatIsRunning(t *testing.T) {
 	t.Parallel()
 
-	into := &recorder{}
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue, into)
+	service := ui.NewJobService(queue)
 
 	if _, err := queue.Submit(
 		job.Spec{Kind: "backup", Title: "shop on db.example.com"},
@@ -123,9 +122,8 @@ func TestTheServiceListsWhatIsRunning(t *testing.T) {
 func TestTheStateCrossesAsAName(t *testing.T) {
 	t.Parallel()
 
-	into := &recorder{}
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue, into)
+	service := ui.NewJobService(queue)
 
 	finished(t, queue, runnerFunc(func(context.Context, job.Reporter) error { return nil }))
 
@@ -141,9 +139,8 @@ func TestTheStateCrossesAsAName(t *testing.T) {
 func TestAJobThatHasNotEndedSaysSo(t *testing.T) {
 	t.Parallel()
 
-	into := &recorder{}
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue, into)
+	service := ui.NewJobService(queue)
 
 	started := make(chan struct{})
 	if _, err := queue.Submit(spec("a job"), runnerFunc(func(ctx context.Context, _ job.Reporter) error {
@@ -178,9 +175,8 @@ func TestAJobThatHasNotEndedSaysSo(t *testing.T) {
 func TestDurationsCrossAsMilliseconds(t *testing.T) {
 	t.Parallel()
 
-	into := &recorder{}
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue, into)
+	service := ui.NewJobService(queue)
 
 	finished(t, queue, runnerFunc(func(_ context.Context, report job.Reporter) error {
 		report.Report(job.Progress{Done: 1, Total: 4, Unit: "rows", Step: "copying"})
@@ -205,9 +201,8 @@ func TestDurationsCrossAsMilliseconds(t *testing.T) {
 func TestCancellingThroughTheService(t *testing.T) {
 	t.Parallel()
 
-	into := &recorder{}
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue, into)
+	service := ui.NewJobService(queue)
 
 	started := make(chan struct{})
 	id, err := queue.Submit(spec("a job"), runnerFunc(func(ctx context.Context, _ job.Reporter) error {
@@ -242,9 +237,8 @@ func TestCancellingThroughTheService(t *testing.T) {
 func TestForgettingAJobThatHasEnded(t *testing.T) {
 	t.Parallel()
 
-	into := &recorder{}
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue, into)
+	service := ui.NewJobService(queue)
 
 	id := finished(t, queue, runnerFunc(func(context.Context, job.Reporter) error { return nil }))
 
@@ -263,9 +257,8 @@ func TestForgettingAJobThatHasEnded(t *testing.T) {
 func TestForgettingAJobThatIsStillRunning(t *testing.T) {
 	t.Parallel()
 
-	into := &recorder{}
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue, into)
+	service := ui.NewJobService(queue)
 
 	started := make(chan struct{})
 	id, err := queue.Submit(spec("a job"), runnerFunc(func(ctx context.Context, _ job.Reporter) error {
@@ -297,7 +290,6 @@ func TestAStateChangeIsAnnouncedAsItHappens(t *testing.T) {
 
 	into := &recorder{}
 	queue := job.NewQueue(job.WithObserver(ui.Observing(into)))
-	ui.NewJobService(queue, into)
 
 	finished(t, queue, runnerFunc(func(context.Context, job.Reporter) error { return nil }))
 
@@ -331,7 +323,7 @@ func TestAThousandReportsDoNotBecomeAThousandEvents(t *testing.T) {
 
 	into := &recorder{}
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue, into)
+	watcher := ui.NewJobWatcher(queue, into)
 
 	reported := make(chan struct{})
 	release := make(chan struct{})
@@ -354,8 +346,8 @@ func TestAThousandReportsDoNotBecomeAThousandEvents(t *testing.T) {
 
 	// Sampling is what the cap is: the loop looks at where each job is now,
 	// and a thousand reports between two looks are one look's worth.
-	service.Sample()
-	service.Sample()
+	watcher.Sample()
+	watcher.Sample()
 
 	progress := into.named("job:progress")
 	if len(progress) > 2 {
@@ -374,7 +366,7 @@ func TestSamplingSaysNothingWhenNothingChanged(t *testing.T) {
 
 	into := &recorder{}
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue, into)
+	watcher := ui.NewJobWatcher(queue, into)
 
 	finished(t, queue, runnerFunc(func(_ context.Context, report job.Reporter) error {
 		report.Report(job.Progress{Done: 1, Total: 1})
@@ -382,11 +374,11 @@ func TestSamplingSaysNothingWhenNothingChanged(t *testing.T) {
 		return nil
 	}))
 
-	service.Sample()
+	watcher.Sample()
 	before := len(into.all())
 
-	service.Sample()
-	service.Sample()
+	watcher.Sample()
+	watcher.Sample()
 
 	if after := len(into.all()); after != before {
 		t.Errorf("sampling an unchanged job told the window %d more times, want none", after-before)
@@ -398,7 +390,7 @@ func TestNewLogLinesReachTheWindow(t *testing.T) {
 
 	into := &recorder{}
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue, into)
+	watcher := ui.NewJobWatcher(queue, into)
 
 	finished(t, queue, runnerFunc(func(_ context.Context, report job.Reporter) error {
 		if _, err := fmt.Fprintln(report.Log(), "pg_dump: dumping contents of table public.orders"); err != nil {
@@ -408,7 +400,7 @@ func TestNewLogLinesReachTheWindow(t *testing.T) {
 		return nil
 	}))
 
-	service.Sample()
+	watcher.Sample()
 
 	logs := into.named("job:log")
 	if len(logs) != 1 {
@@ -432,7 +424,7 @@ func TestOnlyTheNewLinesAreSent(t *testing.T) {
 
 	into := &recorder{}
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue, into)
+	watcher := ui.NewJobWatcher(queue, into)
 
 	release := make(chan struct{})
 	started := make(chan struct{})
@@ -458,11 +450,11 @@ func TestOnlyTheNewLinesAreSent(t *testing.T) {
 	}
 
 	<-started
-	service.Sample()
+	watcher.Sample()
 
 	close(wrote)
 	<-release
-	service.Sample()
+	watcher.Sample()
 
 	logs := into.named("job:log")
 	if len(logs) != 2 {
@@ -486,13 +478,13 @@ func TestWatchingStopsWhenItIsToldTo(t *testing.T) {
 
 	into := &recorder{}
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue, into, ui.WithSampleEvery(time.Millisecond))
+	watcher := ui.NewJobWatcher(queue, into, ui.WithSampleEvery(time.Millisecond))
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan struct{})
 	go func() {
-		service.Watch(ctx)
+		watcher.Watch(ctx)
 		close(done)
 	}()
 
@@ -508,9 +500,8 @@ func TestWatchingStopsWhenItIsToldTo(t *testing.T) {
 func TestAskingAboutAJobTheQueueDoesNotHave(t *testing.T) {
 	t.Parallel()
 
-	into := &recorder{}
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue, into)
+	service := ui.NewJobService(queue)
 
 	if err := service.Cancel("no-such-job"); !errors.Is(err, job.ErrNotFound) {
 		t.Errorf("Cancel(...) = %v, want %v", err, job.ErrNotFound)

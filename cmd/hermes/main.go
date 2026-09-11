@@ -111,7 +111,8 @@ func run() error {
 	// announced before there is an application to announce it to.
 	emitter := windowEvents{}
 	jobs := job.NewQueue(job.WithObserver(ui.Observing(emitter)))
-	jobService := ui.NewJobService(jobs, emitter)
+	jobService := ui.NewJobService(jobs)
+	jobWatcher := ui.NewJobWatcher(jobs, emitter)
 
 	app := application.New(application.Options{
 		Name:        "Hermes",
@@ -155,7 +156,7 @@ func run() error {
 	watching, stopWatching := context.WithCancel(context.Background())
 	defer stopWatching()
 
-	go jobService.Watch(watching)
+	go jobWatcher.Watch(watching)
 
 	if err := app.Run(); err != nil {
 		return fmt.Errorf("running the application: %w", err)
