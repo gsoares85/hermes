@@ -446,3 +446,119 @@ func statusOf(t *testing.T, service *ui.ConnectionService, id string) ui.StatusV
 
 	return status
 }
+
+// The version the server reports, for the corner of the window that says which
+// server this is.
+//
+// A call of its own rather than a field on the state: reading the state must
+// not reach the network — a window repaints far more often than a server
+// changes version, and a status read that dialled would turn every repaint into
+// a round trip and every unreachable server into a freeze.
+func TestTheServerSaysWhichVersionItIs(t *testing.T) {
+	t.Parallel()
+
+	service := service(stubOpener{})
+
+	opened, err := service.Open(t.Context(), form())
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+
+	version, err := service.ServerVersion(t.Context(), opened.ID)
+	if err != nil {
+		t.Fatalf("ServerVersion returned error: %v", err)
+	}
+
+	if version != "16.2" {
+		t.Errorf("ServerVersion() = %q, want what the server answered", version)
+	}
+}
+
+func TestAConnectionThatIsNotOpenHasNoVersion(t *testing.T) {
+	t.Parallel()
+
+	if _, err := service(stubOpener{}).ServerVersion(t.Context(), "nope"); err == nil {
+		t.Error("a connection that was never opened answered a version")
+	}
+}
+
+// The status carries where the connection goes, so that a window can say which
+// database and which role it is looking at without asking a second question.
+// None of it is a secret: it is what the form was filled in with.
+func TestTheStateOfAConnectionSaysWhereItGoes(t *testing.T) {
+	t.Parallel()
+
+	service := service(stubOpener{})
+
+	opened, err := service.Open(t.Context(), form())
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+
+	if opened.Host != "db.example.com" || opened.Port != 5432 {
+		t.Errorf("address = %s:%d, want db.example.com:5432", opened.Host, opened.Port)
+	}
+	if opened.Database != "hermes" || opened.User != "hermes" {
+		t.Errorf("database/user = %s/%s, want hermes/hermes", opened.Database, opened.User)
+	}
+
+	// By value, not by the name of a field.
+	//
+	// TestNothingReturnedCarriesACredential next door checks that no field is
+	// called anything like "password", and that is a different question: a
+	// field named Host holding a URI with the password in it passes it, and
+	// this is the first state built out of several fields of a conn.Config that
+	// does hold one. The rest of the address is not a secret — it is what the
+	// form was filled in with, minus the one field that is.
+	if rendered := renderAll(opened); strings.Contains(rendered, password) {
+		t.Errorf("the state of the connection carried the password: %s", rendered)
+	}
+}
+
+// The state of an open connection says which saved connection it came from.
+//
+// Without it the window cannot tell that the row somebody just clicked is
+// already open: the identifier a connection is addressed by is minted when it
+// opens and has nothing to do with the one the file keeps. Two identifiers that
+// are never equal, compared, is a highlight that never shows and a second tab
+// onto a server that already has one.
+func TestTheStateSaysWhichSavedConnectionItCameFrom(t *testing.T) {
+	t.Parallel()
+
+	service, _, _ := saved(t)
+
+	stored, err := service.Save(t.Context(), form())
+	if err != nil {
+		t.Fatalf("Save() = %v", err)
+	}
+
+	from := form()
+	from.ID = stored.ID
+
+	opened, err := service.Open(t.Context(), from)
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+
+	if opened.SavedID != stored.ID {
+		t.Errorf("SavedID = %q, want the identifier of the saved connection %q", opened.SavedID, stored.ID)
+	}
+	if opened.ID == opened.SavedID {
+		t.Error("the handle and the saved identifier are the same value, so neither says anything the other does not")
+	}
+}
+
+// One opened from a form that was never saved has none, which is the honest
+// answer rather than a made-up one.
+func TestAConnectionThatWasNeverSavedHasNoSavedIdentifier(t *testing.T) {
+	t.Parallel()
+
+	opened, err := service(stubOpener{}).Open(t.Context(), form())
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+
+	if opened.SavedID != "" {
+		t.Errorf("SavedID = %q, want empty for a connection that is not in the file", opened.SavedID)
+	}
+}

@@ -1,50 +1,89 @@
 /*
+ * The hidden attribute has to beat everything written below it.
+ *
+ * A browser hides `[hidden]` in its own stylesheet, and the cascade sorts by
+ * origin before it sorts by specificity: any rule in this file that gives an
+ * element a display wins against it, whatever the selectors weigh. That is how
+ * a closed <dialog> was on screen from the moment the window opened — with
+ * showModal never reached, so no backdrop, nothing inert behind it, no focus
+ * trap, and Escape doing nothing — and it shipped twice with every gate green.
+ *
+ * The tree of a tab that is not in front is hidden the same way, and `.tree`
+ * has a display of its own. So this is stated once, for every element, rather
+ * than remembered per rule; `!important` because it has to win against the
+ * whole file and against anything added to it later.
+ */
+[hidden] {
+  display: none !important;
+}
+
+/*
  * The page paints its own surface and text. Relying on the user-agent defaults
  * is what leaves a webview showing whatever colour sits behind it, so every
  * colour used here is declared, in both schemes.
  */
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
 
-  --surface: #ffffff;
-  --surface-raised: #f7f7f8;
-  --text: #17181c;
-  --text-muted: #5f6169;
-  --border: rgb(0 0 0 / 12%);
+  /* Three grounds and a fourth for what is hovered: the chrome that frames the
+     window, the page itself, what is lifted off the page, and what the pointer
+     is on. The chrome is darker than the page rather than lighter — panels
+     recede and content comes forward. */
+  --panel: #18181d;
+  --surface: #1e1e24;
+  --surface-raised: #232329;
+  --surface-hover: #2a2a31;
+  --text: #f3f4f6;
+  --text-muted: #a1a1aa;
+  --border: #2f2f37;
+
+  /* The one colour that is not a shade of the surface: it marks what is
+     focused and what is selected.
+
+     Two tokens because one value cannot do both jobs. --accent is for outlines
+     and borders, which need 3:1 against their background and reach 3.4:1 here;
+     --accent-text is for accented words, which need 4.5:1, and the accent
+     itself does not get there on this ground. Using it as text would be a
+     contrast failure that looks deliberate. */
+  --accent: #6d5aed;
+  --accent-text: #ece6ff;
+  /* The one that carries white text on top of it. */
+  --accent-deep: #4b3fc4;
+
+  /* The chrome of the window. Named here because two of them are read by the
+     script that drags the dividers, and a size that lives in one place is a
+     size that cannot disagree with itself. */
+  --toolbar-height: 48px;
+  --status-height: 28px;
+  --objects-width: 252px;
+  --details-width: 260px;
 
   /* The environment marks. Production is the one that has to stop somebody
      mid-keystroke, so it is the only one that is red, and the other two are
      quiet enough that a window full of them stays readable. */
-  --dev: #0b6bcb;
-  --dev-surface: #e8f1fd;
-  --staging: #9a5b00;
-  --staging-surface: #fdf3e3;
-  --production: #b42318;
-  --production-surface: #fdeceb;
+  --dev: #8ec0f5;
+  --dev-surface: #12283f;
+  --staging: #e8b269;
+  --staging-surface: #3a2a12;
+  --production: #ff9a92;
+  --production-surface: #401713;
 
-  font-family:
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    sans-serif;
-  font-size: 14px;
-}
+  /* Inter for the interface and JetBrains Mono for anything that is data
+     rather than prose — a column name, a type, a definition, a script. The
+     fallbacks matter: a font file that failed to load must leave a readable
+     window, not a serif one. */
+  --font-sans: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --surface: #16181d;
-    --surface-raised: #1c1f26;
-    --text: #e7e8ec;
-    --text-muted: #a1a4ad;
-    --border: rgb(255 255 255 / 14%);
+  font-family: var(--font-sans);
 
-    --dev: #8ec0f5;
-    --dev-surface: #12283f;
-    --staging: #e8b269;
-    --staging-surface: #3a2a12;
-    --production: #ff9a92;
-    --production-surface: #401713;
-  }
+  /* Thirteen rather than sixteen, and that is the density of the design rather
+     than a preference. A database window is a window full of names, types and
+     definitions: what it needs is more rows on screen, not larger ones. The
+     places that have to be read as prose — a diagnosis, an empty state — say so
+     themselves. */
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 body {
@@ -53,19 +92,129 @@ body {
   color: var(--text);
 }
 
-.app {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  background: var(--surface);
+/*
+ * Where the keyboard is.
+ *
+ * There was no focus style at all, so the only indicator was whatever each
+ * webview draws by default — which on one of the three is nothing anybody
+ * would call visible. It is drawn for :focus-visible rather than :focus, so a
+ * click does not leave a ring behind: the ring is for the person who cannot
+ * see the pointer, and drawing it for everybody is how people learn to
+ * suppress it.
+ *
+ * :where() keeps the specificity at zero, so any rule below can still say
+ * something more specific about a control without fighting this one.
+ */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
-.app__header {
+/*
+ * The window: a toolbar across the top, a body of up to three columns, and a
+ * status bar across the bottom.
+ *
+ * minmax(0, 1fr) rather than 1fr on the body row, and min-height: 0 on every
+ * box below it. A grid or flex child is at least as tall as its content by
+ * default, which for a column holding a scroller means the scroller is as tall
+ * as everything it could scroll — and a virtualiser given an unbounded height
+ * draws every row it has loaded. That failure is silent: the benchmark in CI
+ * measures the listing on the Go side, not the drawing, so a schema of five
+ * thousand tables would go back to costing five thousand rows per repaint with
+ * nothing turning red.
+ */
+.workspace {
+  background: var(--surface);
+  display: grid;
+  grid-template-rows: var(--toolbar-height) minmax(0, 1fr) var(--status-height);
+  height: 100vh;
+}
+
+.workspace__toolbar {
+  align-items: center;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
   display: flex;
   gap: 1rem;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 1.5rem 1.5rem 0;
+  padding: 0 0.75rem;
+}
+
+.workspace__brand {
+  align-items: center;
+  display: flex;
+  font-size: 1.05rem;
+  font-weight: 700;
+  gap: 0.5rem;
+  letter-spacing: -0.01em;
+}
+
+/*
+ * Flex rather than a grid of fixed columns, because two of the three are
+ * optional: with no connection open there is no navigator and no details, and a
+ * grid would keep their tracks and the empty space with them.
+ */
+.workspace__body {
+  display: flex;
+  min-height: 0;
+}
+
+/*
+ * No border of their own: the divider beside each pane draws that line, and two
+ * hairlines a pixel apart read as a mistake rather than as an edge.
+ */
+.workspace__objects,
+.workspace__details {
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.workspace__objects {
+  flex: 0 0 var(--objects-width);
+}
+
+.workspace__details {
+  flex: 0 0 var(--details-width);
+}
+
+/*
+ * No padding of its own: the tab bar has to sit flush against the top and the
+ * edges, the way a tab bar does. What goes inside brings its own.
+ */
+.workspace__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+}
+
+/*
+ * The status bar is the one solid band of colour in the window.
+ *
+ * It is not decoration. The strip is the same height and in the same place on
+ * every screen this application will ever have, and a band of the accent is
+ * what makes the bottom of the window a fixed point rather than more panel.
+ *
+ * White on this ground is 7.5:1 and the muted white 5.5:1, both past AA — so
+ * the band carries its text without needing a palette of its own.
+ */
+.workspace__status {
+  align-items: center;
+  background: var(--accent-deep);
+  color: rgb(255 255 255 / 80%);
+  display: flex;
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  gap: 1rem;
+  overflow: hidden;
+  padding: 0 0.75rem;
+  user-select: none;
+  white-space: nowrap;
 }
 
 /*
@@ -73,28 +222,28 @@ body {
  *
  * It is on the window and not on a panel because the requirement is that a
  * production server be unmistakable wherever the person is looking, and every
- * panel is inside this. A band across the top and a coloured header are what
+ * panel is inside this. A band across the top and a coloured toolbar are what
  * survive being ignored: neither scrolls away, and neither has to be redrawn by
- * whichever screen is on top.
+ * whichever panel is on top.
  */
-.app--production {
+.workspace--production {
   border-top: 4px solid var(--production);
 }
 
-.app--production .app__header {
+.workspace--production .workspace__toolbar {
   background: var(--production-surface);
-  padding-bottom: 1rem;
 }
 
-.app__connection {
+.workspace__connection {
+  align-items: center;
+  color: var(--text-muted);
   display: flex;
   gap: 0.5rem;
-  align-items: center;
   margin: 0;
-  color: var(--text-muted);
+  margin-left: auto;
 }
 
-.app__connection-name {
+.workspace__connection-name {
   font-weight: 600;
   color: var(--text);
 }
@@ -144,41 +293,6 @@ body {
   color: var(--text-muted);
 }
 
-.app__header h1 {
-  margin: 0;
-  font-size: 1.5rem;
-}
-
-.app__header p {
-  margin: 0.25rem 0 0;
-  color: var(--text-muted);
-}
-
-/*
- * min-height is what pins the footer. A flex item is sized by its content
- * before it is sized by the container, so a screen taller than the window used
- * to push the status bar past the bottom edge and take the version with it —
- * the one line that says which build is running is the one nobody can go and
- * look up. The overflow puts the scrollbar on this block instead of the page.
- */
-.app__main {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 1.5rem;
-}
-
-.app__status {
-  display: flex;
-  gap: 1rem;
-  justify-content: flex-end;
-  padding: 0.5rem 1.5rem;
-  border-top: 1px solid var(--border);
-  background: var(--surface-raised);
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-}
-
 /*
  * The armed state of Forget. Removing a connection takes its password out of
  * the keychain and nothing can put it back, so the button says what the second
@@ -195,11 +309,13 @@ body {
  * because it is three separate things — what happened, why, and what to do —
  * and running them together is how a message stops being actionable.
  */
+/* No width of its own: the dialog that holds it decides how wide it is. The cap
+   was here when the form was the whole middle of the window, and left inside a
+   dialog it only shows as a strip of empty on the right. */
 .connection {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  max-width: 42rem;
 }
 
 .connection__row {
@@ -348,7 +464,8 @@ body {
 }
 
 .connection__databases button.is-selected {
-  border-color: var(--text);
+  border-color: var(--accent);
+  color: var(--accent-text);
   font-weight: 600;
 }
 
@@ -363,120 +480,6 @@ body {
   border-radius: 6px;
   background: var(--surface-raised);
   color: var(--text-muted);
-}
-
-.connection__saved ul {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  list-style: none;
-  margin: 0.35rem 0 1rem;
-  padding: 0;
-}
-
-.connection__saved li {
-  display: flex;
-  align-items: stretch;
-  gap: 0.35rem;
-}
-
-/* The row grows and the Forget button does not, so a long host name pushes
-   against the edge of the panel rather than against the button. */
-.connection__saved li > button:first-child {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.1rem;
-  text-align: left;
-}
-
-.connection__saved button.is-selected {
-  border-color: var(--text);
-}
-
-.connection__saved-name {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  font-weight: 600;
-}
-
-.connection__saved-target {
-  color: var(--text-muted);
-  font-size: 0.85em;
-}
-
-/*
-  The object tree.
-
-  The scroller has a fixed height and the rows inside it are placed by the
-  virtualiser: the spacer is as tall as every row would be, and only the rows on
-  screen exist. That is why the rows are absolute — they are positioned by
-  transform rather than by flow, and a row in flow would put every one of them
-  back into the layout.
-*/
-.tree {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-top: 1.5rem;
-  max-width: 42rem;
-}
-
-.tree__scroller {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  contain: strict;
-  height: 24rem;
-  overflow: auto;
-}
-
-.tree__spacer {
-  position: relative;
-  width: 100%;
-}
-
-.tree__row {
-  left: 0;
-  position: absolute;
-  top: 0;
-  width: 100%;
-}
-
-.tree__line {
-  align-items: center;
-  display: flex;
-  gap: 0.5rem;
-  height: 26px;
-  padding-right: 0.5rem;
-}
-
-.tree__toggle {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 0.8em;
-  padding: 0;
-  width: 1rem;
-}
-
-.tree__toggle:disabled {
-  cursor: default;
-}
-
-.tree__kind {
-  color: var(--text-muted);
-  font-size: 0.75em;
-  min-width: 4.5rem;
-  text-transform: uppercase;
-}
-
-.tree__name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .tree__note,
@@ -495,10 +498,13 @@ body {
   align-items: center;
   display: flex;
   gap: 0.75rem;
+  position: relative;
 }
 
 .tree__filter input[type="search"] {
   flex: 1;
+  /* Room for the glyph sitting inside the field. */
+  padding-left: 1.9rem;
 }
 
 .tree__system {
@@ -508,6 +514,10 @@ body {
   font-size: 0.85em;
   gap: 0.35rem;
   white-space: nowrap;
+}
+
+.tree__name {
+  font-family: var(--font-mono);
 }
 
 .tree__name mark {
@@ -521,29 +531,15 @@ body {
   collapses to one column when the window is narrow, because a panel squeezed
   beside a tree shows neither.
 */
-.app__browser {
-  display: grid;
-  gap: 1.5rem;
-  grid-template-columns: minmax(0, 1fr);
-  margin-top: 1.5rem;
-}
-
-@media (min-width: 60rem) {
-  .app__browser {
-    grid-template-columns: minmax(0, 24rem) minmax(0, 1fr);
-  }
-}
-
-.tree {
-  margin-top: 0;
-  max-width: none;
-}
-
 .panel {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 0.75rem;
+  min-height: 0;
   min-width: 0;
+  overflow: auto;
+  padding: 0.75rem;
 }
 
 .panel__header {
@@ -554,17 +550,37 @@ body {
 }
 
 .panel__refresh {
+  align-items: center;
+  display: flex;
   flex: none;
+  gap: 0.3rem;
+}
+
+/*
+ * Where the object is, then what it is called. That order and not the other,
+ * because the pane is read after a row was clicked: the name is already known
+ * and the schema it came from is the part that answers "which one".
+ */
+.panel__title {
+  min-width: 0;
 }
 
 .panel__header h3 {
+  font-family: var(--font-mono);
+  font-size: 1rem;
   margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panel__where {
   color: var(--text-muted);
-  font-size: 0.85em;
-  margin: 0.15rem 0 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin: 0 0 0.1rem;
+  text-transform: uppercase;
 }
 
 .panel__tabs {
@@ -573,7 +589,8 @@ body {
 }
 
 .panel__tabs button.is-selected {
-  border-color: var(--text);
+  border-color: var(--accent);
+  color: var(--accent-text);
 }
 
 .panel__note {
@@ -584,36 +601,127 @@ body {
   color: #e03131;
 }
 
-.panel__columns {
-  border-collapse: collapse;
-  font-size: 0.9em;
-  width: 100%;
+/*
+ * What the model read about this object, as three numbers in a box.
+ *
+ * Three and not five: the design also counts rows and measures the table on
+ * disk, and both come from the statistics of the server rather than from its
+ * catalog. A card with a dash where a number belongs is worse than a smaller
+ * card.
+ */
+.panel__stats {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  overflow: hidden;
 }
 
-.panel__columns th,
-.panel__columns td {
-  border-bottom: 1px solid var(--border);
-  padding: 0.25rem 0.5rem 0.25rem 0;
-  text-align: left;
-  vertical-align: top;
+.panel__stat {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.4rem 0.25rem;
+}
+
+.panel__stat + .panel__stat {
+  border-left: 1px solid var(--border);
+}
+
+.panel__stat-label {
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.panel__stat-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The label above a list. Small and quiet: it names a group, and a heading that
+   competes with the rows under it makes the pane a list of headings. */
+.panel__section h4 {
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin: 0 0 0.2rem;
+  text-transform: uppercase;
+}
+
+/*
+ * A column is a name on the left and its type on the right, which is the shape
+ * of the question: you scan the names to find one, and read the type of the one
+ * you found. A table of four columns made both of them a scan.
+ */
+.panel__columns {
+  font-family: var(--font-mono);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.panel__columns li {
+  align-items: baseline;
+  border-radius: 4px;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: space-between;
+  padding: 0.15rem 0.3rem;
+}
+
+.panel__columns li:hover {
+  background: var(--surface-raised);
+}
+
+.panel__column-name {
+  align-items: center;
+  display: flex;
+  gap: 0.4rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel__column-name .icon {
+  color: var(--text-muted);
+}
+
+/* The key is the one thing about a column that changes how the rest of the
+   table is read, so it is the one glyph in the pane with a colour of its own. */
+.panel__key {
+  color: #e0a800;
+}
+
+.panel__column-type {
+  color: var(--text-muted);
+  flex: none;
+  font-size: 0.85em;
+}
+
+.panel__flag {
+  opacity: 0.75;
 }
 
 .panel__notes,
 .panel__listing ul {
   color: var(--text-muted);
-  font-size: 0.9em;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
   margin: 0;
   padding-left: 1.1rem;
-}
-
-.panel__listing h4 {
-  margin: 0 0 0.25rem;
 }
 
 /* The script is read as code and copied out of the window, so it wraps rather
    than scrolling sideways: a statement cut off at the right edge is one nobody
    can check before running. */
 .panel__ddl {
+  font-family: var(--font-mono);
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -624,4 +732,728 @@ body {
   padding: 0.75rem;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/*
+ * The divider between a side pane and the middle of the window.
+ *
+ * A hairline to look at and eight pixels to grab: a one-pixel target is a
+ * target people miss, and the difference between the two is why the line is
+ * drawn with a border on a wider box rather than by making the box itself thin.
+ *
+ * It stays when its pane is put away — a divider is the only way back to a pane
+ * that is not on screen.
+ */
+.workspace__separator {
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  cursor: col-resize;
+  flex: 0 0 8px;
+  touch-action: none;
+}
+
+.workspace__separator:hover,
+.workspace__separator:focus-visible {
+  background: var(--accent);
+  border-right-color: var(--accent);
+}
+
+/*
+ * The saved connections, at the top of the navigator.
+ *
+ * A row connects, because that is what clicking the name of a server means.
+ * Managing one is the occasional job and is a small control beside the name;
+ * removing one lives inside that, where somebody has the connection in front of
+ * them rather than aiming at a target in a list.
+ */
+.saved {
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  gap: 0.25rem;
+  max-height: 40%;
+  padding: 0.5rem;
+}
+
+.saved__header {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  font-size: 0.7rem;
+  font-weight: 600;
+  justify-content: space-between;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.saved__new {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.125rem 0.375rem;
+}
+
+.saved__new:hover {
+  color: var(--text);
+}
+
+.saved__list {
+  list-style: none;
+  margin: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0;
+}
+
+/*
+ * A row is the whole name and the manage button is a small target beside it.
+ *
+ * The row connects, because that is what clicking the name of a server means.
+ * Managing it is the occasional thing, so it is the small control — and it only
+ * appears under the pointer or the keyboard, because a list of names with a
+ * button on every line is a list of buttons.
+ */
+.saved__list li {
+  align-items: center;
+  border-radius: 4px;
+  display: flex;
+  gap: 0.1rem;
+}
+
+.saved__list li:hover,
+.saved__list li:focus-within {
+  background: var(--surface-raised);
+}
+
+.saved__list li.is-open {
+  background: var(--surface-raised);
+}
+
+.saved__list li.is-open .saved__name {
+  color: var(--accent-text);
+}
+
+.saved__open {
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  padding: 0.3rem 0.4rem;
+  text-align: left;
+}
+
+.saved__open:disabled {
+  cursor: default;
+}
+
+.saved__manage {
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  flex: none;
+  opacity: 0;
+  padding: 0.25rem;
+}
+
+.saved__list li:hover .saved__manage,
+.saved__manage:focus-visible {
+  opacity: 1;
+}
+
+.saved__manage:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/*
+  The way out of a connection that is taking its time.
+
+  It does not hide until hovered the way Manage does. Manage is a thing you go
+  looking for; this is the answer to "why is nothing happening", and a way out
+  that has to be found first is not one.
+*/
+.saved__stop {
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  flex: none;
+  padding: 0.25rem;
+}
+
+.saved__stop:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.saved__name {
+  align-items: center;
+  display: flex;
+  font-weight: 600;
+  gap: 0.5rem;
+}
+
+.saved__target {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved__empty,
+.saved__notice {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  margin: 0;
+}
+
+/*
+ * The dialog the connection form is shown in.
+ *
+ * A native <dialog>, so the backdrop and the inertness of what is behind it are
+ * the browser's job. What is left here is how big it is and where the scrollbar
+ * goes: a form taller than the window scrolls inside the dialog rather than
+ * taking the page with it.
+ */
+/*
+ * A dialog has to look like one, and in a window that is already dark a panel
+ * of the same colour on a slightly darker page does not.
+ *
+ * Three things say it. It is lifted onto the raised ground rather than sharing
+ * the page's; it casts a shadow deep enough to read as being in front of
+ * something; and what is behind it is dimmed and blurred rather than merely
+ * tinted. The blur is what does the work at a glance — a tint darkens the
+ * window, a blur says the window is not the thing you are looking at.
+ */
+.dialog {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgb(0 0 0 / 55%);
+  color: var(--text);
+  max-height: 85vh;
+  max-width: min(46rem, 92vw);
+  overflow: hidden;
+  padding: 0;
+  width: 100%;
+}
+
+/*
+ * The display goes on [open] and nowhere else, and this is not a nicety.
+ *
+ * A closed dialog is hidden by `display: none` in the user agent's stylesheet,
+ * and a rule written here is an author rule: it beats the user agent whatever
+ * the specificity says, because the cascade sorts by origin before it sorts by
+ * anything else. So `.dialog { display: flex }` made the dialog visible always
+ * — on screen from the moment the window opened, with showModal never called,
+ * which means no backdrop, no focus trap, nothing inert behind it, and Escape
+ * doing nothing because none of it was a modal. Closing it removed an attribute
+ * that changed nothing, so the button and the key both looked broken.
+ *
+ * Anything that lays a dialog out has to be conditioned on it being open, or it
+ * un-hides the thing the browser hid.
+ */
+.dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog::backdrop {
+  backdrop-filter: blur(3px);
+  background: rgb(0 0 0 / 60%);
+}
+
+/*
+ * The header is what says "dialog" before a word of it is read: a title, a way
+ * out, and a line under both. It stays put while the form scrolls, which is the
+ * moment somebody most wants a way out — when they have scrolled and can no
+ * longer see where they are.
+ */
+.dialog__header {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex: none;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+}
+
+.dialog__header h2 {
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.dialog__body {
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem;
+}
+
+/*
+ * The buttons of the toolbar. Quiet by default and lit on hover, because the
+ * strip is above everything and a row of loud buttons across the top of a
+ * window is a row people stop seeing.
+ */
+.workspace__toolbar button {
+  background: var(--surface-raised);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  padding: 0.25rem 0.6rem;
+}
+
+.workspace__toolbar button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.workspace--production .workspace__toolbar button {
+  background: rgb(255 255 255 / 6%);
+}
+
+.workspace--production .workspace__toolbar button:hover {
+  background: rgb(255 255 255 / 12%);
+}
+
+/*
+ * The status bar. Everything on it is a fact about now, so it never wraps and
+ * never grows: what does not fit is cut rather than allowed to push the strip
+ * taller and take a row of the window with it.
+ */
+.status__state {
+  align-items: center;
+  color: #fff;
+  display: flex;
+  gap: 0.4rem;
+}
+
+/* Read against the band rather than against a theme: the greens and reds that
+   work on a panel disappear on this one. */
+.status__dot {
+  background: rgb(255 255 255 / 60%);
+  border-radius: 50%;
+  height: 0.5rem;
+  width: 0.5rem;
+}
+
+.status__state--connected .status__dot {
+  background: #86efac;
+}
+
+.status__state--down .status__dot {
+  background: #fda4a4;
+}
+
+.status__idle {
+  color: rgb(255 255 255 / 70%);
+}
+
+.status__build {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * Which server the objects above came from. It sits at the foot of the
+ * navigator because that is the question the tree raises — the status bar says
+ * what the session is doing, this says where it is.
+ */
+.workspace__origin {
+  align-items: center;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  display: flex;
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+  gap: 0.4rem;
+  margin: 0;
+  overflow: hidden;
+  padding: 0.4rem 0.6rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * One tab per open connection, across the top of the middle column.
+ *
+ * The close button is a sibling of the tab rather than a child: a button inside
+ * a button is not markup a browser will give you, and a close target that is
+ * part of the tab is a close somebody hits while trying to select.
+ */
+.tabs {
+  align-items: flex-end;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  height: 36px;
+  overflow-x: auto;
+  padding: 0 0.4rem;
+}
+
+.tabs__tab {
+  align-items: center;
+  border-radius: 5px 5px 0 0;
+  color: var(--text-muted);
+  display: flex;
+  font-size: 0.85rem;
+  height: 28px;
+  padding-right: 0.2rem;
+}
+
+.tabs__tab:hover {
+  background: var(--surface-raised);
+}
+
+.tabs__tab.is-active {
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.tabs__tab button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0 0.5rem;
+}
+
+.tabs__name {
+  margin-right: 0.4rem;
+  white-space: nowrap;
+}
+
+.tabs__close {
+  border-radius: 4px;
+  line-height: 1;
+  opacity: 0.6;
+}
+
+.tabs__close:hover {
+  background: var(--border);
+  opacity: 1;
+}
+
+/*
+ * What the middle says while there is nothing in it. Centred and narrow,
+ * because it is a sentence rather than a panel: making it fill the column would
+ * be making it look like a feature.
+ */
+.empty {
+  color: var(--text-muted);
+  margin: auto;
+  max-width: 28rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+.empty p {
+  margin: 0 0 0.6rem;
+}
+
+.empty__lead {
+  color: var(--text);
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.empty__later {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+/*
+ * The tree, and why its rows are positioned rather than laid out.
+ *
+ * The scroller takes the height of the column and the rows inside it are placed
+ * by the virtualiser: the spacer is as tall as every row would be, and only the
+ * rows on screen exist. That is why a row is absolute — it is put where it goes
+ * by a transform, and a row in flow would put every one of them back into the
+ * layout, which is the work the virtualiser exists to skip.
+ */
+/*
+ * flex: 1 is not tidiness here, it is the whole thing working.
+ *
+ * The scroller below carries contain: strict, which includes contain: size — it
+ * is laid out as though it had no content, which is what stops five thousand
+ * rows deciding how tall it is. The other half of that bargain is that it
+ * reports no height to its parent either: without a flex that grows, this box
+ * is as tall as the filter row, the scroller is nought pixels, and the tree is
+ * a filter with nothing under it. The rows are all there in the DOM. None of
+ * them is on screen.
+ *
+ * It shipped that way. The check that would have caught it is the first item of
+ * the manual list — count the rows the tree draws — and nothing automated sees
+ * a pane of zero height.
+ */
+.tree {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-height: 0;
+  padding: 0.5rem 0.4rem;
+}
+
+/*
+ * contain: strict includes contain: size, so this element is laid out as though
+ * it had no content at all: it takes the height the column gives it and never
+ * the height of the five thousand rows it could scroll. It is the reason the
+ * virtualiser can be trusted, and it is why it survived being moved out of a
+ * card of fixed height and into a panel that stretches.
+ */
+.tree__scroller {
+  contain: strict;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.tree__spacer {
+  position: relative;
+  width: 100%;
+}
+
+.tree__row {
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 100%;
+}
+
+.tree__line {
+  align-items: center;
+  border-radius: 4px;
+  cursor: default;
+  display: flex;
+  gap: 0.35rem;
+  height: 26px;
+  padding-right: 0.4rem;
+}
+
+.tree__line:hover {
+  background: var(--surface-raised);
+}
+
+/*
+ * The row that is selected, drawn from the attribute that already says so.
+ *
+ * The tree has told assistive technology which row is selected since it became
+ * a tree; nothing on screen said it. Reading the state off aria-selected rather
+ * than a second class is what keeps the two from disagreeing — there is one
+ * answer to "which row is selected" and both readers get it.
+ */
+.tree__line[aria-selected="true"] {
+  background: var(--surface-raised);
+  color: var(--accent-text);
+}
+
+.tree__toggle {
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  padding: 0;
+  width: 1.15em;
+}
+
+.tree__toggle:disabled {
+  cursor: default;
+}
+
+/*
+ * The glyphs.
+ *
+ * Sized in em rather than pixels, so an icon is the size of the text it sits
+ * beside wherever it is put and nobody has to remember a second number. They
+ * take their colour from that text for the same reason.
+ *
+ * flex: none, because a glyph beside a name that can be long is a glyph a flex
+ * container will happily squash into an ellipse.
+ */
+.icon {
+  flex: none;
+  height: 1.15em;
+  width: 1.15em;
+}
+
+/*
+ * Text that only a screen reader receives.
+ *
+ * Every icon in this window is decoration, and what it stands for is said in
+ * words beside it. Where those words would be noise on screen — the kind of a
+ * row, which the glyph already says — this is where they go. Clipped rather
+ * than hidden: display:none and visibility:hidden take it out of the
+ * accessibility tree as well, which is the opposite of the point.
+ */
+.visually-hidden {
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+/*
+ * The caret turns rather than being swapped for a second glyph: one shape that
+ * rotates reads as the same thing opening, and two shapes read as two things.
+ */
+.tree__toggle .icon {
+  transition: transform 120ms ease;
+}
+
+.tree__toggle[aria-expanded="true"] .icon {
+  transform: rotate(90deg);
+}
+
+/* A node with nothing under it still takes the space, so names line up rather
+   than shifting by a character depending on their kind. */
+.tree__leaf {
+  display: inline-block;
+  width: 1.15em;
+}
+
+.tree__kind {
+  align-items: center;
+  display: inline-flex;
+}
+
+.tree__filter-icon {
+  color: var(--text-muted);
+  left: 0.5rem;
+  pointer-events: none;
+  position: absolute;
+}
+
+.saved__icon,
+.tabs__tab .icon,
+.workspace__origin .icon,
+.panel__refresh .icon {
+  color: var(--text-muted);
+}
+
+.saved__list button.is-open .saved__icon,
+.tabs__tab.is-active .icon {
+  color: var(--accent);
+}
+
+/*
+ * The product's own mark: a square of the accent with the one solid glyph in
+ * the window inside it.
+ *
+ * It keeps its colour when the toolbar turns red for a production connection.
+ * The red says which server you are on; this says which application you are in,
+ * and one is not allowed to restate the other.
+ */
+.workspace__mark {
+  align-items: center;
+  background: var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgb(109 90 237 / 25%);
+  color: #fff;
+  display: flex;
+  flex: none;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.workspace__mark .icon {
+  height: 1rem;
+  width: 1rem;
+}
+
+/*
+ * The scrollbars.
+ *
+ * The ones the platform draws are sized for a page: on a pane of 252 pixels a
+ * default scrollbar is a visible fraction of the width, and three of them in
+ * one window is a window of scrollbars. Eight pixels, a thumb that is a shade
+ * of the border rather than a colour of its own, and no track at all.
+ *
+ * WebKit and WebView2 both read these; a browser that reads neither gets its
+ * own, which is the right fallback and needs no second rule.
+ */
+::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* The panes have a ground of their own, so a section inside one needs room of
+   its own rather than the padding of the pane doing for everything. */
+.panel__section {
+  display: flex;
+  flex-direction: column;
+}
+
+.panel__properties {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+/* The way out, in the corner people look in. */
+.dialog__close {
+  align-items: center;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  flex: none;
+  justify-content: center;
+  padding: 0.25rem;
+}
+
+.dialog__close:hover {
+  background: var(--surface-raised);
+  color: var(--text);
 }

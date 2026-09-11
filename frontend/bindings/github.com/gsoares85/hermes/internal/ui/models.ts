@@ -5,6 +5,16 @@
  * ColumnView is one column as the panel shows it.
  */
 export interface ColumnView {
+    /**
+     * PrimaryKey says the column is part of the key of its table.
+     * 
+     * It is a fact handed over rather than one the window works out. The
+     * alternative is reading "PRIMARY KEY (id)" out of the text of a constraint
+     * and matching names against it, which is the frontend interpreting SQL —
+     * the one thing this boundary exists to prevent, and wrong the first time a
+     * column is called `id, note`.
+     */
+    "primaryKey": boolean;
     "name": string;
     "type": string;
     "notNull": boolean;
@@ -184,12 +194,37 @@ export interface SavedView {
  * being looked up separately by whoever remembers to.
  */
 export interface StatusView {
+    /**
+     * ID addresses this connection while it is open. It is minted when the
+     * connection opens and means nothing to the file.
+     */
     "id": string;
+
+    /**
+     * SavedID is the connection in the file this was opened from, and empty for
+     * one opened from a form that was never saved.
+     * 
+     * The two are never equal, so a window that compared them would have a list
+     * in which nothing is ever marked as open, and would open a second
+     * connection to a server that already has one.
+     */
+    "savedId": string;
     "state": string;
     "diagnosis": DiagnosisView;
     "name": string;
     "environment": string;
     "readOnly": boolean;
+
+    /**
+     * Where the connection goes, so that a window can say which database and
+     * which role it is looking at without asking a second question. None of it
+     * is a secret — it is what the form was filled in with, minus the one field
+     * that is.
+     */
+    "host": string;
+    "port": number;
+    "database": string;
+    "user": string;
 }
 
 /**

@@ -11,6 +11,7 @@ import {
 } from "../../api/tree";
 
 import type { ObjectRef } from "../../api/object";
+import { Icon, type IconName } from "../../ui/Icon";
 
 import {
   abandoned,
@@ -52,9 +53,21 @@ const settleDelay = 300;
  */
 export function ObjectTree({
   connectionId,
+  showing,
   onSelect,
 }: {
   connectionId: string;
+  /**
+   * Whether this is the tab in front.
+   *
+   * A tree that is not is hidden rather than unmounted. What it holds — which
+   * levels have been read, which nodes are open, which row is selected — costs
+   * a question to the server per level and cannot be rebuilt from anything the
+   * window still has once the component is gone. Taking it down means every
+   * switch between tabs cancels what is in flight, empties every level and asks
+   * for the root again, which is the one interaction a tab bar exists for.
+   */
+  showing: boolean;
   onSelect: (object: ObjectRef | null) => void;
 }): React.JSX.Element {
   const [levels, setLevels] = useState<Levels>(new Map());
@@ -393,8 +406,9 @@ export function ObjectTree({
   );
 
   return (
-    <section className="tree" aria-label="Objects">
+    <section className="tree" aria-label="Objects" hidden={!showing}>
       <div className="tree__filter">
+        <Icon name="search" className="tree__filter-icon" />
         <input
           type="search"
           value={text}
@@ -473,6 +487,28 @@ export function ObjectTree({
   );
 }
 
+/**
+ * What each kind of node is drawn as.
+ *
+ * A kind the Go side learns to answer before this learns to draw it falls back
+ * to the table glyph rather than to nothing: a row with no icon looks broken,
+ * and the word beside it in the accessible name is still right.
+ */
+function glyphOf(kind: string): IconName {
+  switch (kind) {
+    case "database":
+      return "database";
+    case "schema":
+      return "folder";
+    case "view":
+      return "view";
+    case "sequence":
+      return "sequence";
+    default:
+      return "table";
+  }
+}
+
 /** One line: its indentation, whether it can open, and what it is. */
 function TreeRow({
   row,
@@ -527,10 +563,13 @@ function TreeRow({
         // rather than shifting by a character depending on their kind.
         aria-label={row.node.expandable ? `Expand ${row.node.name}` : row.node.name}
       >
-        {row.node.expandable ? (row.expanded ? "▾" : "▸") : "·"}
+        {row.node.expandable ? <Icon name="caret" /> : <span className="tree__leaf" />}
       </button>
 
-      <span className={`tree__kind tree__kind--${row.node.kind}`}>{row.node.kind}</span>
+      <span className="tree__kind">
+        <Icon name={glyphOf(row.node.kind)} />
+        <span className="visually-hidden">{row.node.kind}</span>
+      </span>
       <span className="tree__name">
         <Marked name={row.node.name} text={text} />
       </span>

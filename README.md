@@ -28,12 +28,12 @@ The bet is focus: do for **one** engine what the competition tries to do for twe
 
 ## Project status
 
-**Pre-alpha — under active development.** You can connect to a server, save the connection with
-its password in your system keychain, mark it as production or as read-only, and browse what is
-on it — databases, schemas, tables, views and sequences, with an object's properties and its
-DDL beside the tree. There is no SQL editor and no backup yet. This README grows with every
-feature shipped: anything documented below with an example works. Anything in the *Roadmap*
-section does not.
+**Pre-alpha — under active development.** You can open several servers at once and save each
+connection — with its password in your system keychain where there is one, and held for the
+session where there is not — mark one as production or as read-only, and browse what is on it — databases, schemas, tables, views and sequences, with an object's
+properties and its DDL in a pane of their own. There is no SQL editor and no backup yet. This
+README grows with every feature shipped: anything documented below with an example works.
+Anything in the *Roadmap* section does not.
 
 Reading a schema out of `pg_catalog` and writing it back as DDL is what the *DDL* tab shows,
 and it is what the structure diff will be built on. The diff itself does not exist yet: it is
@@ -117,12 +117,58 @@ make package # package for the current platform
 
 ## Features
 
+### The window
+
+Four regions, and each answers one question.
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│ Hermes   New connection   Disconnect      billing  PRODUCTION      │
+├───────────────────┬────────────────────────────┬───────────────────┤
+│ CONNECTIONS     + │ ▣ billing ×  ▢ staging ×   │ Table             │
+│                   ├────────────────────────────┤ daily_revenue     │
+│  billing   PROD ⚙ │                            │                   │
+│  staging        ⚙ │                            │                   │
+│  local          ⚙ │ Pick an object in the      │ Column    Type    │
+│                   │ navigator.                 │ id        bigint  │
+│ ▾ analytics       │                            │ …                 │
+│   ▾ reporting     │ Its columns and the DDL    │                   │
+│      daily_reven… │ that would build it        │ Constraints       │
+│   ▸ public        │ appear on the right.       │ Indexes           │
+│                   │                            │                   │
+│ reporting@db:5432 │                            │                   │
+│ · PostgreSQL 16.2 │                            │                   │
+├───────────────────┴────────────────────────────┴───────────────────┤
+│ ● connected   analytics · reporting     Hermes v0.4.0 · linux/amd64│
+└────────────────────────────────────────────────────────────────────┘
+   navigator            workspace             details
+```
+
+A row in **CONNECTIONS** connects; the ⚙ beside it opens the form. The tabs across the
+workspace are the connections that are open — one each, with its own pools and its own cached
+catalog — and the one in front decides what the navigator lists, what the details pane
+describes and what the status bar says.
+
+- **The toolbar** carries the connection in front and what can be done to it. Only actions that
+  exist: no greyed-out buttons standing in for features nobody has built. A production
+  connection colours it and puts a band across the top of the window, and neither scrolls away.
+- **The navigator** lists the connections you have saved and, under the one that is open, its
+  objects. Its foot says which server those objects came from.
+- **The workspace** holds one tab per open connection. It is where a query editor and its
+  results will go; until there is one, it says so rather than drawing an empty grid.
+- **The details pane** describes the object you picked, with the DDL that would build it.
+- **The status bar** says what the connection in front is doing.
+
+Both side panes are resizable: drag the divider, or focus it and use the arrow keys, `Home` and
+`End`. `Enter` puts a pane away and brings it back — the divider stays on screen when its pane
+does not, because it is the way back. The widths are remembered between runs.
+
 ### Connecting
 
-Open Hermes and fill in the connection form: host, port, user, password. **The database name is
-optional.** Leave it empty and Hermes connects to the server's maintenance database, then shows
-you every database that user is actually allowed to open — so you can look before you know what
-you are looking for.
+Press **New connection**, in the toolbar or at the head of the navigator, and fill in the form:
+host, port, user, password. **The database name is optional.** Leave it empty and Hermes
+connects to the server's maintenance database, then shows you every database that user is
+actually allowed to open — so you can look before you know what you are looking for.
 
 ```
 Host       db.example.com
@@ -136,6 +182,11 @@ SSL mode   require
 Press **Test connection** to check the settings without keeping anything open, or **Connect** to
 open the connection. Once connected, the databases you can reach appear as a list; picking one
 fills the database field.
+
+**Connecting again does not cost you the connection you had.** Each one gets a tab in the
+workspace, with its own pool per database and its own cached catalog, and the tab in front is
+what the navigator, the details pane, the toolbar and the status bar are all about. Closing a
+tab closes that connection.
 
 While Hermes is working, a **Stop** button appears beside the others and is the only one that
 stays live. Every long step on this screen ends either in your keychain or in a server, and both
@@ -166,9 +217,22 @@ postgres://reporting@db.example.com:5432
 
 ### Saving a connection
 
-Give the connection a name and press **Save connection**. It appears in the *Saved connections*
-list at the top of the form; clicking one loads it back, and **Forget** removes it along with
-its password.
+Give the connection a name and press **Save connection**. It appears at the head of the
+navigator, and from then on **clicking it connects** — that is what clicking the name of a
+server means, and it is one click from wanting to look at a database to looking at it.
+
+Editing one is the occasional job, so it has a control of its own: the ⚙ beside the name opens
+the form again with its settings filled in. While a connection is opening, that control becomes
+a **stop** — a server can take as long as it likes to answer, and a way out that has to be
+waited for is not one.
+
+Clicking a connection that is already open comes back to its tab rather than opening a second
+one. One server, one tab, whichever way you got there.
+
+**Forget** is in that form rather than beside the name in the list. It takes the password out of
+your keychain and nothing can put it back, so it asks twice — and it is better pressed by
+somebody who has the connection open in front of them than by somebody aiming at a small target
+in a list.
 
 The settings go in a file you can read, version and copy between machines:
 
@@ -296,10 +360,10 @@ Read-only    [x] The server is asked to refuse every statement that writes.
 
 The form shows the value that goes in the file; the window draws it in words. A connection
 labelled `prod` marks the **window** and not a panel: a band across the top and a **PRODUCTION**
-badge in a coloured header, both of which stay put while you move between the tree, an object's
-properties and its DDL. The mark belongs to the connection rather than to the screen showing
-it, so it looks the same everywhere the connection appears — in the list of saved connections,
-beside the state of the open one, and above everything you do with it.
+badge in a coloured toolbar, both of which stay put while you move between the navigator, the
+workspace and the details pane. The mark belongs to the connection rather than to the screen
+showing it, so it looks the same everywhere the connection appears — in the list of saved
+connections, on its tab, and above everything you do with it.
 
 **Read-only is enforced by the server, not by the window.** A connection marked read-only is
 opened with `default_transaction_read_only` on, so PostgreSQL is what refuses. Nothing Hermes
@@ -351,8 +415,8 @@ read_only = true
 
 ### Browsing objects
 
-Once a connection is open, its object tree appears: **server → databases → schemas → tables,
-views and sequences.**
+Once a connection is open, its object tree appears in the navigator, under the connection it
+belongs to: **server → databases → schemas → tables, views and sequences.**
 
 ```
 ▾ analytics                   database
@@ -396,7 +460,7 @@ schema called `Relatórios Mensais` reads as `Relatórios Mensais`, without the 
 need. A database your role may not open reports why on its own node, and the databases beside it
 stay usable.
 
-Selecting an object opens a panel beside the tree, with two tabs:
+Selecting an object fills the details pane on the right, which has two tabs:
 
 **Properties** — the columns with their types and what is declared on them, the constraints and
 the indexes, and the facts that are not a column: that a table is unlogged, that it is a

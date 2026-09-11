@@ -8,6 +8,9 @@ import {
   type PropertiesView,
 } from "../../api/object";
 import { wasCancelled, type CancellablePromise } from "../../api/tree";
+import { Icon } from "../../ui/Icon";
+
+import { glyphOf, saidOf } from "./columns";
 
 type Tab = "properties" | "ddl";
 
@@ -127,11 +130,11 @@ export function ObjectPanel({
   return (
     <section className="panel" aria-label={object.name}>
       <header className="panel__header">
-        <div>
-          <h3>{object.name}</h3>
+        <div className="panel__title">
           <p className="panel__where">
             {object.database} · {object.schema}
           </p>
+          <h3>{object.name}</h3>
         </div>
         {/*
           The tree reads the server every time a node is opened and this panel
@@ -140,6 +143,7 @@ export function ObjectPanel({
           it forgets one schema rather than the whole connection.
         */}
         <button type="button" className="panel__refresh" onClick={(): void => void onRefresh()}>
+          <Icon name="refresh" />
           Refresh
         </button>
       </header>
@@ -188,10 +192,38 @@ function TabButton({
   );
 }
 
+/*
+ * One name for one number.
+ *
+ * The card counted every constraint the model read and called the total
+ * "Keys", while the list underneath rendered the same array under the heading
+ * "Constraints" — so a table with three CHECK constraints and no key at all
+ * reported three keys. Both now read the name from here, which is what stops
+ * them saying different things about one array again.
+ */
+const constraintsTitle = "Constraints";
+const indexesTitle = "Indexes";
+
 /** The columns and everything else declared on the object. */
 function Properties({ shown }: { shown: PropertiesView }): React.JSX.Element {
+  const columns = shown.columns ?? [];
+  const constraints = shown.constraints ?? [];
+  const indexes = shown.indexes ?? [];
+
   return (
     <div className="panel__properties">
+      {/*
+        What the model actually read. The design this is drawn from also counts
+        rows and measures the table on disk; those come from the statistics of
+        the server rather than from its catalog, and a card that showed a dash
+        where a number belongs would be worse than a card with three facts on it.
+      */}
+      <div className="panel__stats">
+        <Stat label="Columns" value={columns.length} />
+        <Stat label={constraintsTitle} value={constraints.length} />
+        <Stat label={indexesTitle} value={indexes.length} />
+      </div>
+
       {shown.notes !== null && shown.notes.length > 0 && (
         <ul className="panel__notes">
           {shown.notes.map((note) => (
@@ -200,31 +232,46 @@ function Properties({ shown }: { shown: PropertiesView }): React.JSX.Element {
         </ul>
       )}
 
-      {shown.columns !== null && shown.columns.length > 0 && (
-        <table className="panel__columns">
-          <thead>
-            <tr>
-              <th>Column</th>
-              <th>Type</th>
-              <th>Null</th>
-              <th>Default</th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.columns.map((column) => (
-              <tr key={column.name}>
-                <td>{column.name}</td>
-                <td>{column.type}</td>
-                <td>{column.notNull ? "not null" : ""}</td>
-                <td>{column.generated === "" ? column.default : column.generated}</td>
-              </tr>
+      {columns.length > 0 && (
+        <div className="panel__section">
+          <h4>Columns</h4>
+          <ul className="panel__columns">
+            {columns.map((column) => (
+              <li key={column.name}>
+                <span className="panel__column-name">
+                  {column.primaryKey ? (
+                    <Icon name={glyphOf(column)} className="panel__key" />
+                  ) : (
+                    <Icon name={glyphOf(column)} />
+                  )}
+                  {column.name}
+                </span>
+                <span className="panel__column-type">
+                  {column.type}
+                  {saidOf(column).map((said) => (
+                    <span key={said} className="panel__flag">
+                      {" "}
+                      {said}
+                    </span>
+                  ))}
+                </span>
+              </li>
             ))}
-          </tbody>
-        </table>
+          </ul>
+        </div>
       )}
 
-      <Listing title="Constraints" items={shown.constraints} />
-      <Listing title="Indexes" items={shown.indexes} />
+      <Listing title={constraintsTitle} items={shown.constraints} />
+      <Listing title={indexesTitle} items={shown.indexes} />
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }): React.JSX.Element {
+  return (
+    <div className="panel__stat">
+      <span className="panel__stat-label">{label}</span>
+      <span className="panel__stat-value">{value}</span>
     </div>
   );
 }
@@ -241,7 +288,7 @@ function Listing({
   }
 
   return (
-    <div className="panel__listing">
+    <div className="panel__section panel__listing">
       <h4>{title}</h4>
       <ul>
         {items.map((item) => (

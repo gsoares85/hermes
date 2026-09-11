@@ -172,13 +172,33 @@ type DiagnosisView struct {
 // draw what it was handed — so the label travels with the state rather than
 // being looked up separately by whoever remembers to.
 type StatusView struct {
-	ID        string        `json:"id"`
+	// ID addresses this connection while it is open. It is minted when the
+	// connection opens and means nothing to the file.
+	ID string `json:"id"`
+
+	// SavedID is the connection in the file this was opened from, and empty for
+	// one opened from a form that was never saved.
+	//
+	// The two are never equal, so a window that compared them would have a list
+	// in which nothing is ever marked as open, and would open a second
+	// connection to a server that already has one.
+	SavedID string `json:"savedId"`
+
 	State     string        `json:"state"`
 	Diagnosis DiagnosisView `json:"diagnosis"`
 
 	Name        string `json:"name"`
 	Environment string `json:"environment"`
 	ReadOnly    bool   `json:"readOnly"`
+
+	// Where the connection goes, so that a window can say which database and
+	// which role it is looking at without asking a second question. None of it
+	// is a secret — it is what the form was filled in with, minus the one field
+	// that is.
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Database string `json:"database"`
+	User     string `json:"user"`
 }
 
 // ConnectionStore is where saved connections live between runs.
@@ -678,6 +698,25 @@ func (s *ConnectionService) Close(id string) error {
 	return nil
 }
 
+// ServerVersion answers what the server reports itself to be.
+//
+// A call of its own rather than a field on the state. Reading the state is a
+// read of memory and nothing else — a window repaints far more often than a
+// server changes version, and a status read that dialled would turn every
+// repaint into a round trip and every unreachable server into a freeze. This
+// one reaches the server, so the window asks for it once, when a connection
+// opens.
+func (s *ConnectionService) ServerVersion(ctx context.Context, id string) (string, error) {
+	connection, err := s.lookup(id)
+	if err != nil {
+		return "", err
+	}
+
+	version, err := connection.ServerVersion(ctx)
+
+	return version, secret.Error(err)
+}
+
 // Databases lists what the open connection may reach, which is how someone who
 // connected without naming a database chooses one.
 func (s *ConnectionService) Databases(ctx context.Context, id string) ([]string, error) {
@@ -842,10 +881,15 @@ func diagnosisView(d conn.Diagnosis) DiagnosisView {
 func statusView(id string, config conn.Config, status conn.Status) StatusView {
 	return StatusView{
 		ID:          id,
+		SavedID:     config.ID,
 		State:       string(status.State),
 		Diagnosis:   diagnosisView(status.Diagnosis),
 		Name:        config.Name,
 		Environment: string(config.Environment),
 		ReadOnly:    config.ReadOnly,
+		Host:        config.Host,
+		Port:        config.Port,
+		Database:    config.EffectiveDatabase(),
+		User:        config.User,
 	}
 }

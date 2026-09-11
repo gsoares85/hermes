@@ -21,6 +21,15 @@ type ObjectRef struct {
 
 // ColumnView is one column as the panel shows it.
 type ColumnView struct {
+	// PrimaryKey says the column is part of the key of its table.
+	//
+	// It is a fact handed over rather than one the window works out. The
+	// alternative is reading "PRIMARY KEY (id)" out of the text of a constraint
+	// and matching names against it, which is the frontend interpreting SQL —
+	// the one thing this boundary exists to prevent, and wrong the first time a
+	// column is called `id, note`.
+	PrimaryKey bool `json:"primaryKey"`
+
 	Name      string `json:"name"`
 	Type      string `json:"type"`
 	NotNull   bool   `json:"notNull"`
@@ -285,15 +294,18 @@ func propertiesOf(slice catalog.Schema, name string) PropertiesView {
 func tableProperties(table catalog.Table) PropertiesView {
 	shown := PropertiesView{Kind: string(catalog.ObjectTable), Name: table.Name.String()}
 
+	keyed := keyOf(table)
+
 	for _, column := range table.Columns {
 		shown.Columns = append(shown.Columns, ColumnView{
-			Name:      column.Name.String(),
-			Type:      column.Type.String(),
-			NotNull:   column.NotNull,
-			Default:   column.Default,
-			Identity:  column.Identity,
-			Generated: column.Generated,
-			Collation: column.Collation.String(),
+			PrimaryKey: keyed[column.Name],
+			Name:       column.Name.String(),
+			Type:       column.Type.String(),
+			NotNull:    column.NotNull,
+			Default:    column.Default,
+			Identity:   column.Identity,
+			Generated:  column.Generated,
+			Collation:  column.Collation.String(),
 		})
 	}
 
@@ -308,6 +320,28 @@ func tableProperties(table catalog.Table) PropertiesView {
 	shown.Notes = tableNotes(table)
 
 	return shown
+}
+
+// keyOf answers the columns the primary key is on.
+//
+// The primary key and nothing else: a unique constraint looks like one from a
+// distance and is not one, and a table can have several of those and only ever
+// one key.
+func keyOf(table catalog.Table) map[catalog.Name]bool {
+	for _, constraint := range table.Constraints {
+		if constraint.Kind != catalog.ConstraintPrimaryKey {
+			continue
+		}
+
+		keyed := make(map[catalog.Name]bool, len(constraint.Columns))
+		for _, column := range constraint.Columns {
+			keyed[column] = true
+		}
+
+		return keyed
+	}
+
+	return nil
 }
 
 // tableNotes are the facts a copy would behave differently without, which is

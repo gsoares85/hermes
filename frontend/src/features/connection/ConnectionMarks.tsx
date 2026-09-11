@@ -23,6 +23,20 @@ const wording: Record<string, string> = {
   prod: "Production",
 };
 
+/**
+ * The label in words, from the map itself rather than from what it inherits.
+ *
+ * Indexing an object walks the prototype chain, so a label like "constructor"
+ * answers with a function — and React renders a function by throwing, with no
+ * error boundary above this to catch it. Nothing can produce that value today:
+ * Go validates the label on the way in and again when the file is read. But
+ * the type that says so is erased at runtime, this is drawn in three places
+ * now, and the guard is one call.
+ */
+function wordFor(environment: string): string {
+  return Object.hasOwn(wording, environment) ? (wording[environment] ?? environment) : environment;
+}
+
 export function ConnectionMarks({
   environment,
   readOnly,
@@ -37,7 +51,7 @@ export function ConnectionMarks({
   return (
     <span className="marks">
       {environment !== "" && (
-        <span className={`mark mark--${environment}`}>{wording[environment] ?? environment}</span>
+        <span className={`mark mark--${environment}`}>{wordFor(environment)}</span>
       )}
       {readOnly && <span className="mark mark--read-only">Read-only</span>}
     </span>
