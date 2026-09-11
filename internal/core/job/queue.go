@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // Errors a caller can tell apart, because it has something different to do
@@ -35,7 +36,23 @@ var (
 // job cancellable, and work that ignores it is work that cannot be cancelled
 // however loudly the window says otherwise.
 type Runner interface {
-	Run(ctx context.Context) error
+	Run(ctx context.Context, report Reporter) error
+}
+
+// Clock is where this package reads the time.
+//
+// Injected rather than taken from the package, because every duration derived
+// here is a duration somebody reads off the screen, and a test about one that
+// waits for real time to pass is a test that is slow when it passes and flaky
+// when it does not.
+type Clock func() time.Time
+
+// Option configures a queue.
+type Option func(*Queue)
+
+// WithClock gives the queue somewhere other than the wall to read the time.
+func WithClock(clock Clock) Option {
+	return func(q *Queue) { q.now = clock }
 }
 
 // Spec is what a job is, as opposed to what it does.
@@ -55,11 +72,17 @@ type Spec struct {
 // the window and goes into the history. What a caller does with a failed job
 // is show it or store it, never unwrap it.
 type View struct {
-	ID    string
-	Kind  string
-	Title string
-	State State
-	Err   string
+	ID       string
+	Kind     string
+	Title    string
+	State    State
+	Err      string
+	Progress ProgressView
+	// Started is when the work began. Ended is the zero time until it has
+	// ended: a caller that renders the zero time shows year 1, which is loud
+	// enough to catch, unlike an end quietly equal to the start.
+	Started time.Time
+	Ended   time.Time
 }
 
 // Queue holds every job the application has run since it started, and runs
@@ -72,6 +95,7 @@ type View struct {
 type Queue struct {
 	mu   sync.RWMutex
 	jobs map[string]*record
+	now  Clock
 }
 
 // record is a job as the queue holds it. Everything mutable about a job lives
@@ -79,12 +103,22 @@ type Queue struct {
 // job reaches a state it cannot leave.
 type record struct {
 	view View
+	// said is the last thing the work reported. Kept raw, so that what is
+	// derived from it is derived at the moment it is read and not at the
+	// moment it was said — which is what lets Elapsed grow while a job runs
+	// without the work having to report anything for it to.
+	said Progress
 	done chan struct{}
 }
 
 // NewQueue creates an empty queue.
-func NewQueue() *Queue {
-	return &Queue{jobs: make(map[string]*record)}
+func NewQueue(options ...Option) *Queue {
+	queue := &Queue{jobs: make(map[string]*record), now: time.Now}
+	for _, option := range options {
+		option(queue)
+	}
+
+	return queue
 }
 
 // Submit files the work and starts it, answering the identifier it is filed
@@ -140,7 +174,34 @@ func (q *Queue) work(held *record, run Runner) {
 
 	q.moveTo(held, Running)
 
-	failure = run.Run(context.Background())
+	failure = run.Run(context.Background(), reporterFor(q, held))
+}
+
+// reporter is the Reporter one job is handed. It holds the queue and the job
+// it belongs to, so that work cannot report against a job it was not given.
+type reporter struct {
+	queue *Queue
+	held  *record
+}
+
+func reporterFor(queue *Queue, held *record) Reporter {
+	return reporter{queue: queue, held: held}
+}
+
+// Report keeps the latest word and discards the rest.
+//
+// Work that keeps talking after it returned — a goroutine of its own that
+// nobody joined — must not rewrite the progress of a job somebody has already
+// been told is over, so a job that has ended stops listening.
+func (r reporter) Report(said Progress) {
+	r.queue.mu.Lock()
+	defer r.queue.mu.Unlock()
+
+	if r.held.view.State.Over() {
+		return
+	}
+
+	r.held.said = said
 }
 
 // finish puts a job into the end its outcome calls for and releases whoever is
@@ -164,6 +225,8 @@ func (q *Queue) finish(held *record, failure error) {
 	}
 
 	held.view.State = moved
+	held.view.Ended = q.now()
+
 	if failure != nil {
 		held.view.Err = failure.Error()
 	}
@@ -186,6 +249,9 @@ func (q *Queue) moveTo(held *record, to State) {
 	}
 
 	held.view.State = moved
+	if moved == Running {
+		held.view.Started = q.now()
+	}
 }
 
 // Get answers what the queue knows about one job.
@@ -198,7 +264,31 @@ func (q *Queue) Get(id string) (View, error) {
 		return View{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 
-	return held.view, nil
+	return q.viewOf(held), nil
+}
+
+// viewOf assembles what a job looks like from outside. The caller holds the
+// lock; everything here only reads.
+//
+// Elapsed is worked out at the moment of reading rather than kept on the
+// record, which is what lets it grow while a job runs without the work
+// reporting anything, and stop the moment the job ends.
+func (q *Queue) viewOf(held *record) View {
+	view := held.view
+
+	until := held.view.Ended
+	if until.IsZero() {
+		until = q.now()
+	}
+
+	var elapsed time.Duration
+	if !held.view.Started.IsZero() {
+		elapsed = until.Sub(held.view.Started)
+	}
+
+	view.Progress = viewOf(held.said, elapsed)
+
+	return view
 }
 
 // List answers every job the queue holds.
@@ -213,7 +303,7 @@ func (q *Queue) List() []View {
 
 	views := make([]View, 0, len(q.jobs))
 	for _, held := range q.jobs {
-		views = append(views, held.view)
+		views = append(views, q.viewOf(held))
 	}
 
 	return views

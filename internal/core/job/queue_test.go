@@ -17,9 +17,9 @@ import (
 const waited = 5 * time.Second
 
 // runnerFunc adapts a function to the Runner the queue takes.
-type runnerFunc func(ctx context.Context) error
+type runnerFunc func(ctx context.Context, report job.Reporter) error
 
-func (f runnerFunc) Run(ctx context.Context) error { return f(ctx) }
+func (f runnerFunc) Run(ctx context.Context, report job.Reporter) error { return f(ctx, report) }
 
 func spec(title string) job.Spec {
 	return job.Spec{Kind: "test", Title: title}
@@ -51,7 +51,7 @@ func TestWorkThatSucceedsIsDone(t *testing.T) {
 
 	queue := job.NewQueue()
 
-	view := submitted(t, queue, runnerFunc(func(context.Context) error { return nil }))
+	view := submitted(t, queue, runnerFunc(func(context.Context, job.Reporter) error { return nil }))
 
 	if view.State != job.Done {
 		t.Errorf("the job is %v, want %v", view.State, job.Done)
@@ -68,7 +68,7 @@ func TestWorkThatReturnsAnErrorFails(t *testing.T) {
 	queue := job.NewQueue()
 	boom := errors.New("the server said no")
 
-	view := submitted(t, queue, runnerFunc(func(context.Context) error { return boom }))
+	view := submitted(t, queue, runnerFunc(func(context.Context, job.Reporter) error { return boom }))
 
 	if view.State != job.Failed {
 		t.Errorf("the job is %v, want %v", view.State, job.Failed)
@@ -88,7 +88,7 @@ func TestWorkThatPanicsFailsInsteadOfTakingTheProcessDown(t *testing.T) {
 
 	queue := job.NewQueue()
 
-	view := submitted(t, queue, runnerFunc(func(context.Context) error {
+	view := submitted(t, queue, runnerFunc(func(context.Context, job.Reporter) error {
 		panic("a parser met something it did not expect")
 	}))
 
@@ -111,7 +111,7 @@ func TestAPanicInOneJobLeavesTheOthersAlone(t *testing.T) {
 	queue := job.NewQueue()
 
 	release := make(chan struct{})
-	slow, err := queue.Submit(spec("the survivor"), runnerFunc(func(context.Context) error {
+	slow, err := queue.Submit(spec("the survivor"), runnerFunc(func(context.Context, job.Reporter) error {
 		<-release
 
 		return nil
@@ -120,7 +120,7 @@ func TestAPanicInOneJobLeavesTheOthersAlone(t *testing.T) {
 		t.Fatalf("Submit(...) = _, %v, want no error", err)
 	}
 
-	submitted(t, queue, runnerFunc(func(context.Context) error { panic("boom") }))
+	submitted(t, queue, runnerFunc(func(context.Context, job.Reporter) error { panic("boom") }))
 
 	close(release)
 
@@ -145,7 +145,7 @@ func TestAJobIsRunningWhileItRuns(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 
-	id, err := queue.Submit(spec("a job"), runnerFunc(func(context.Context) error {
+	id, err := queue.Submit(spec("a job"), runnerFunc(func(context.Context, job.Reporter) error {
 		close(started)
 		<-release
 
@@ -176,7 +176,7 @@ func TestTheQueueKeepsWhatWasSubmitted(t *testing.T) {
 
 	id, err := queue.Submit(
 		job.Spec{Kind: "backup", Title: "shop on db.example.com"},
-		runnerFunc(func(context.Context) error { return nil }),
+		runnerFunc(func(context.Context, job.Reporter) error { return nil }),
 	)
 	if err != nil {
 		t.Fatalf("Submit(...) = _, %v, want no error", err)
@@ -205,7 +205,7 @@ func TestAJobNeedsAKind(t *testing.T) {
 	// Without one the history cannot say what a row was, and the panel cannot
 	// choose an icon for it. It is cheaper to refuse than to invent a default
 	// that means nothing.
-	_, err := queue.Submit(job.Spec{Title: "nameless"}, runnerFunc(func(context.Context) error {
+	_, err := queue.Submit(job.Spec{Title: "nameless"}, runnerFunc(func(context.Context, job.Reporter) error {
 		return nil
 	}))
 
@@ -251,7 +251,7 @@ func TestWaitingGivesUpWhenTheCallerDoes(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 
-	id, err := queue.Submit(spec("a job"), runnerFunc(func(context.Context) error {
+	id, err := queue.Submit(spec("a job"), runnerFunc(func(context.Context, job.Reporter) error {
 		<-release
 
 		return nil
@@ -275,7 +275,7 @@ func TestWaitingForAJobThatIsAlreadyOver(t *testing.T) {
 
 	queue := job.NewQueue()
 
-	view := submitted(t, queue, runnerFunc(func(context.Context) error { return nil }))
+	view := submitted(t, queue, runnerFunc(func(context.Context, job.Reporter) error { return nil }))
 
 	ctx, cancel := context.WithTimeout(context.Background(), waited)
 	defer cancel()
@@ -296,7 +296,7 @@ func TestTheQueueListsWhatItHas(t *testing.T) {
 	queue := job.NewQueue()
 
 	for _, title := range []string{"first", "second", "third"} {
-		if _, err := queue.Submit(spec(title), runnerFunc(func(context.Context) error {
+		if _, err := queue.Submit(spec(title), runnerFunc(func(context.Context, job.Reporter) error {
 			return nil
 		})); err != nil {
 			t.Fatalf("Submit(%q, ...) = _, %v, want no error", title, err)
@@ -319,7 +319,7 @@ func TestTheQueueIsReachedFromEverywhereAtOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 20 {
 		wg.Go(func() {
-			id, err := queue.Submit(spec("a job"), runnerFunc(func(context.Context) error {
+			id, err := queue.Submit(spec("a job"), runnerFunc(func(context.Context, job.Reporter) error {
 				return nil
 			}))
 			if err != nil {
