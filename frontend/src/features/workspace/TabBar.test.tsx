@@ -123,6 +123,31 @@ describe("the tab bar", () => {
     outside.remove();
   });
 
+  /**
+   * Home on the first tab, End on the last, either arrow with one tab open:
+   * the key is handled and the selection does not move. Nothing should be left
+   * armed by that, or the next selection change — a click, a connection
+   * opening — takes the focus on behalf of a key pressed some time ago.
+   */
+  it("leaves nothing armed by a key that moves the selection nowhere", () => {
+    render(<Harness />);
+
+    const [first] = screen.getAllByRole("tab");
+    first?.focus();
+
+    fireEvent.keyDown(first as HTMLElement, { key: "Home" });
+
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+
+    fireEvent.click(screen.getAllByRole("tab")[1] as HTMLElement);
+
+    expect(screen.getAllByRole("tab")[1]?.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
+
   it("closes from the control beside the name", () => {
     const onClose = vi.fn();
     render(<Harness onClose={onClose} />);

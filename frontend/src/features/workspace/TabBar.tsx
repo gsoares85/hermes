@@ -83,7 +83,14 @@ export function TabBar({
                 }
 
                 event.preventDefault();
-                byKey.current = true;
+                // Only when the key actually moves it. Home on the first tab,
+                // End on the last and either arrow with one tab open are all
+                // handled and all land where they started, and a flag left
+                // armed by one of those is taken by whatever changes the
+                // selection next — a click, a connection opening — which
+                // moves the focus for somebody who pressed a key some time
+                // ago and got nothing.
+                byKey.current = to !== tabs.activeId;
                 onPick(to);
               }}
             >
