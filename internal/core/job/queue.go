@@ -65,6 +65,11 @@ func WithLogBytes(bytes int) Option {
 	return func(q *Queue) { q.logBytes = bytes }
 }
 
+// WithCleanupTimeout sets how long a cancelled job's cleanup is given.
+func WithCleanupTimeout(within time.Duration) Option {
+	return func(q *Queue) { q.cleanupTimeout = within }
+}
+
 // Spec is what a job is, as opposed to what it does.
 //
 // Kind is what the panel and the history group by — "backup", "restore",
@@ -107,11 +112,12 @@ type View struct {
 // is the server's, not the window's, and inventing a number here would be
 // inventing a policy nobody has needed.
 type Queue struct {
-	mu       sync.RWMutex
-	jobs     map[string]*record
-	now      Clock
-	logLines int
-	logBytes int
+	mu             sync.RWMutex
+	jobs           map[string]*record
+	now            Clock
+	logLines       int
+	logBytes       int
+	cleanupTimeout time.Duration
 }
 
 // record is a job as the queue holds it. Everything mutable about a job lives
@@ -125,16 +131,20 @@ type record struct {
 	// without the work having to report anything for it to.
 	said Progress
 	log  *logbook
+	// stop tells the work to wind down. Kept per job rather than derived from
+	// a context the queue holds, so that cancelling one job is exactly that.
+	stop context.CancelFunc
 	done chan struct{}
 }
 
 // NewQueue creates an empty queue.
 func NewQueue(options ...Option) *Queue {
 	queue := &Queue{
-		jobs:     make(map[string]*record),
-		now:      time.Now,
-		logLines: defaultLogLines,
-		logBytes: defaultLogBytes,
+		jobs:           make(map[string]*record),
+		now:            time.Now,
+		logLines:       defaultLogLines,
+		logBytes:       defaultLogBytes,
+		cleanupTimeout: defaultCleanupTimeout,
 	}
 	for _, option := range options {
 		option(queue)
@@ -159,9 +169,11 @@ func (q *Queue) Submit(spec Spec, run Runner) (string, error) {
 	}
 
 	id := newID()
+	ctx, stop := context.WithCancel(context.Background())
 	held := &record{
 		view: View{ID: id, Kind: spec.Kind, Title: spec.Title, State: Pending},
 		log:  newLogbook(q.logLines, q.logBytes),
+		stop: stop,
 		done: make(chan struct{}),
 	}
 
@@ -169,7 +181,7 @@ func (q *Queue) Submit(spec Spec, run Runner) (string, error) {
 	q.jobs[id] = held
 	q.mu.Unlock()
 
-	go q.work(held, run)
+	go q.work(ctx, held, run)
 
 	return id, nil
 }
@@ -180,7 +192,15 @@ func (q *Queue) Submit(spec Spec, run Runner) (string, error) {
 // whether the work returned, returned an error or panicked, so there is no
 // path out of here that leaves a job stuck in Running with nobody coming back
 // for it.
-func (q *Queue) work(held *record, run Runner) {
+func (q *Queue) work(ctx context.Context, held *record, run Runner) {
+	// Cancelled before it was picked up. The work must not run: the job is
+	// already over, and starting it would begin a backup somebody called off.
+	if !q.moveTo(held, Running) {
+		held.stop()
+
+		return
+	}
+
 	var failure error
 
 	defer func() {
@@ -193,12 +213,54 @@ func (q *Queue) work(held *record, run Runner) {
 		}
 
 		held.log.close()
-		q.finish(held, failure)
+
+		end, reported := q.endOf(held, run, failure)
+		q.finish(held, end, reported)
+		held.stop()
 	}()
 
-	q.moveTo(held, Running)
+	failure = run.Run(ctx, reporterFor(q, held))
+}
 
-	failure = run.Run(context.Background(), reporterFor(q, held))
+// endOf decides where a job that has stopped working belongs, and undoes what
+// it started if it was cancelled.
+//
+// The cleanup runs here rather than beside the cancellation, so that it
+// happens after the work has stopped: removing the partial file while the
+// thing writing it is still writing races one against the other.
+func (q *Queue) endOf(held *record, run Runner, failure error) (State, error) {
+	if q.stateOf(held) != Cancelling {
+		if failure != nil {
+			return Failed, failure
+		}
+
+		return Done, nil
+	}
+
+	// Cancelling is a request, not a promise. Work that reached its end before
+	// it noticed finished, and there is nothing partial to clean up after it:
+	// reporting otherwise would call a backup that exists one that does not.
+	if failure == nil {
+		return Done, nil
+	}
+
+	// What the work returned is discarded from here on. Work that stops
+	// because it was cancelled returns context.Canceled, and telling somebody
+	// their backup failed because they pressed Stop is not a report, it is
+	// noise dressed as one.
+	if err := q.cleanup(run); err != nil {
+		return Failed, err
+	}
+
+	return Cancelled, nil
+}
+
+// stateOf answers where a job is, for a caller that holds no lock.
+func (q *Queue) stateOf(held *record) State {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	return held.view.State
 }
 
 // reporter is the Reporter one job is handed. It holds the queue and the job
@@ -235,14 +297,9 @@ func (r reporter) Report(said Progress) {
 
 // finish puts a job into the end its outcome calls for and releases whoever is
 // waiting on it.
-func (q *Queue) finish(held *record, failure error) {
+func (q *Queue) finish(held *record, end State, failure error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
-	end := Done
-	if failure != nil {
-		end = Failed
-	}
 
 	// The state machine is asked rather than assigned to. It is what refuses
 	// an end for a job that already reached one — cancelled while it was still
@@ -268,19 +325,21 @@ func (q *Queue) finish(held *record, failure error) {
 // Ignoring rather than reporting, because every caller here is the queue
 // itself acting on a job it has just looked at: a refused move means the job
 // moved underneath, and the move that got there first is the one that counts.
-func (q *Queue) moveTo(held *record, to State) {
+func (q *Queue) moveTo(held *record, to State) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	moved, err := Transitioned(held.view.State, to)
 	if err != nil {
-		return
+		return false
 	}
 
 	held.view.State = moved
 	if moved == Running {
 		held.view.Started = q.now()
 	}
+
+	return true
 }
 
 // Get answers what the queue knows about one job.
