@@ -55,6 +55,16 @@ func WithClock(clock Clock) Option {
 	return func(q *Queue) { q.now = clock }
 }
 
+// WithLogLines sets how many lines of a job's log are kept.
+func WithLogLines(lines int) Option {
+	return func(q *Queue) { q.logLines = lines }
+}
+
+// WithLogBytes sets how much of a job's log is kept.
+func WithLogBytes(bytes int) Option {
+	return func(q *Queue) { q.logBytes = bytes }
+}
+
 // Spec is what a job is, as opposed to what it does.
 //
 // Kind is what the panel and the history group by — "backup", "restore",
@@ -78,6 +88,10 @@ type View struct {
 	State    State
 	Err      string
 	Progress ProgressView
+	// Dropped is how many lines the log's ceiling took. A log truncated in
+	// silence is worse than a short one: somebody reads the first line kept as
+	// the beginning of the operation.
+	Dropped int
 	// Started is when the work began. Ended is the zero time until it has
 	// ended: a caller that renders the zero time shows year 1, which is loud
 	// enough to catch, unlike an end quietly equal to the start.
@@ -93,9 +107,11 @@ type View struct {
 // is the server's, not the window's, and inventing a number here would be
 // inventing a policy nobody has needed.
 type Queue struct {
-	mu   sync.RWMutex
-	jobs map[string]*record
-	now  Clock
+	mu       sync.RWMutex
+	jobs     map[string]*record
+	now      Clock
+	logLines int
+	logBytes int
 }
 
 // record is a job as the queue holds it. Everything mutable about a job lives
@@ -108,12 +124,18 @@ type record struct {
 	// moment it was said — which is what lets Elapsed grow while a job runs
 	// without the work having to report anything for it to.
 	said Progress
+	log  *logbook
 	done chan struct{}
 }
 
 // NewQueue creates an empty queue.
 func NewQueue(options ...Option) *Queue {
-	queue := &Queue{jobs: make(map[string]*record), now: time.Now}
+	queue := &Queue{
+		jobs:     make(map[string]*record),
+		now:      time.Now,
+		logLines: defaultLogLines,
+		logBytes: defaultLogBytes,
+	}
 	for _, option := range options {
 		option(queue)
 	}
@@ -139,6 +161,7 @@ func (q *Queue) Submit(spec Spec, run Runner) (string, error) {
 	id := newID()
 	held := &record{
 		view: View{ID: id, Kind: spec.Kind, Title: spec.Title, State: Pending},
+		log:  newLogbook(q.logLines, q.logBytes),
 		done: make(chan struct{}),
 	}
 
@@ -169,6 +192,7 @@ func (q *Queue) work(held *record, run Runner) {
 			failure = fmt.Errorf("the job panicked: %v", panicked)
 		}
 
+		held.log.close()
 		q.finish(held, failure)
 	}()
 
@@ -186,6 +210,11 @@ type reporter struct {
 
 func reporterFor(queue *Queue, held *record) Reporter {
 	return reporter{queue: queue, held: held}
+}
+
+// Log is where this job's work writes what it is doing.
+func (r reporter) Log() Log {
+	return r.held.log
 }
 
 // Report keeps the latest word and discards the rest.
@@ -287,8 +316,25 @@ func (q *Queue) viewOf(held *record) View {
 	}
 
 	view.Progress = viewOf(held.said, elapsed)
+	view.Dropped = held.log.droppedCount()
 
 	return view
+}
+
+// Log answers the lines a job's log holds, oldest first.
+//
+// A copy, so that what a caller is reading cannot change under it while a
+// subprocess keeps writing.
+func (q *Queue) Log(id string) ([]string, error) {
+	q.mu.RLock()
+	held, found := q.jobs[id]
+	q.mu.RUnlock()
+
+	if !found {
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+
+	return held.log.read(), nil
 }
 
 // List answers every job the queue holds.

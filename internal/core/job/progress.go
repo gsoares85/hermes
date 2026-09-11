@@ -31,6 +31,10 @@ type Progress struct {
 // not given.
 type Reporter interface {
 	Report(Progress)
+	// Log is where the work writes what it is doing. Handed out on demand
+	// rather than passed alongside, so that work reporting from more than one
+	// place does not have to carry it.
+	Log() Log
 }
 
 // ProgressView is progress as everything outside this package reads it: what
