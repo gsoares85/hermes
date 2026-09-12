@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { JobView } from "../../api/job";
@@ -23,7 +23,7 @@ const backend = vi.hoisted(() => ({
 
 const listeners = vi.hoisted(() => new Map<string, (event: { data: unknown }) => void>());
 
-function cancellable<T>(value: T): Promise<T> & { cancel: () => Promise<void> } {
+function cancellable<T>(value: T | Promise<T>): Promise<T> & { cancel: () => Promise<void> } {
   return Object.assign(Promise.resolve(value), {
     cancel: (): Promise<void> => Promise.resolve(),
   });
@@ -210,6 +210,51 @@ describe("the jobs panel", () => {
     push("job:log", { id: "one", lines: ["pg_dump: dumping public.customers"] });
 
     expect(await screen.findByText(/dumping public.customers/)).toBeTruthy();
+  });
+
+  /**
+   * Two logs asked for in quick succession are two answers in flight, and the
+   * slower one can land after the faster. Written into whatever is open at the
+   * time, the log of the job somebody left shows under the name of the job
+   * they went to.
+   */
+  it("does not write the log of one job under the name of another", async () => {
+    backend.list.mockReturnValue(cancellable([job("one"), job("two")]));
+
+    let answerForOne = (): void => undefined;
+    backend.log.mockImplementation((id: string) => {
+      if (id === "one") {
+        return cancellable(
+          new Promise<string[]>((resolve): void => {
+            answerForOne = (): void => {
+              resolve(["the log of the first job"]);
+            };
+          }),
+        );
+      }
+
+      return cancellable(["the log of the second job"]);
+    });
+
+    render(<JobsPanel onClose={vi.fn()} />);
+    await screen.findByText("shop one");
+
+    fireEvent.click(screen.getByRole("button", { name: "Log of shop one" }));
+    fireEvent.click(screen.getByRole("button", { name: "Log of shop two" }));
+
+    expect(await screen.findByText(/the log of the second job/)).toBeTruthy();
+
+    // And now the first one answers, too late. Flushed inside act, so that
+    // what it does to the panel has happened by the time it is asked about:
+    // asserting on an update that has not been applied yet passes whatever
+    // the update was.
+    await act(async (): Promise<void> => {
+      answerForOne();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText(/the log of the first job/)).toBeNull();
+    expect(screen.queryByText(/the log of the second job/)).toBeTruthy();
   });
 
   // A log truncated in silence is read as the beginning of the operation.

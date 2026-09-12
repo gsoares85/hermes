@@ -90,6 +90,7 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
   function open(id: string): void {
     const next = id === opened ? "" : id;
     setOpened(next);
+    openedRef.current = next;
     setLog([]);
 
     if (next === "") {
@@ -98,7 +99,17 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
 
     jobLog(next)
       .then((lines): void => {
-        setLog(lines);
+        // Somebody opened another job while this was being asked for, or
+        // closed this one. Two answers are in flight and the older of them
+        // must not land in the newer one's place.
+        if (openedRef.current !== next) {
+          return;
+        }
+
+        // What arrived by event while the asking was in flight is kept: the
+        // whole log answers what was there when it was asked, and the lines
+        // that came after it have already been counted as sent.
+        setLog((current): readonly string[] => [...lines, ...current]);
       })
       .catch((): void => {
         // The job was forgotten while the log was being asked for. An empty
@@ -126,6 +137,10 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
       });
   }
 
+  // Kept in step for anything that changes what is open without going through
+  // open() — closing the panel on a job that was forgotten, for one. open()
+  // writes it itself, because the answer it is waiting for has to be checked
+  // against what is open now rather than against what it was a render ago.
   useEffect((): void => {
     openedRef.current = opened;
   }, [opened]);
