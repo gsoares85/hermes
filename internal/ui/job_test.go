@@ -965,3 +965,43 @@ func TestNothingIsRememberedAboutAJobThatIsGone(t *testing.T) {
 		t.Errorf("the watcher still remembers %d things about jobs the queue no longer has", held)
 	}
 }
+
+// The panel orders its rows by comparing these strings, so the text order has
+// to be the time order. A format that trims trailing zeros off the fraction
+// breaks that: ".12Z" and ".123Z" are the same second three milliseconds
+// apart, and "Z" sorts after "3", so the earlier one is drawn as the later.
+func TestTheTimesSortAsTextInTheOrderTheyHappened(t *testing.T) {
+	t.Parallel()
+
+	queue := job.NewQueue()
+	history := store.NewJobMemory()
+	service := ui.NewJobService(queue, history)
+
+	// Inside one second, and the earlier of the two is the one a trimmed
+	// format writes shorter.
+	second := time.Date(2026, time.September, 11, 3, 12, 0, 0, time.UTC)
+	for i, at := range []time.Time{
+		second.Add(120 * time.Millisecond),
+		second.Add(123 * time.Millisecond),
+	} {
+		record := lastNight(fmt.Sprintf("job-%d", i), job.Done)
+		record.Started = at
+		record.Ended = at
+		remember(t, history, record)
+	}
+
+	jobs := listedJobs(t, service)
+	if len(jobs) != 2 {
+		t.Fatalf("the panel shows %d rows, want 2", len(jobs))
+	}
+
+	earlier, later := jobs[0], jobs[1]
+	if earlier.ID != "job-0" {
+		earlier, later = later, earlier
+	}
+
+	if earlier.EndedAt >= later.EndedAt {
+		t.Errorf("%q does not sort before %q, so the panel draws them the wrong way round",
+			earlier.EndedAt, later.EndedAt)
+	}
+}

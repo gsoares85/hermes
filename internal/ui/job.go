@@ -563,17 +563,29 @@ func progressOfJob(said job.ProgressView) JobProgressView {
 // timeOf answers a time the window can read, and an empty string for a time
 // there is not.
 //
-// Always in UTC, because the window sorts its rows by comparing these strings
-// and the two halves of the list come from different places: a running job
-// carries the clock of this machine, a finished one comes back from a file
-// that keeps UTC. Left in local time, the same instant reads as two different
-// strings, and "16:00+02:00" sorts after "15:00Z" although it is the earlier
-// of the two. Rendering it in the reader's own zone is the window's business
-// and it has the instant to do it with.
+// One zone and a fixed width, because the window sorts its rows by comparing
+// these strings and text order has to be time order.
+//
+// UTC, because the two halves of the list come from different places: a
+// running job carries the clock of this machine, a finished one comes back
+// from a file that keeps UTC. Left in local time, the same instant reads as
+// two different strings, and "16:00+02:00" sorts after "15:00Z" although it is
+// the earlier of the two.
+//
+// Three digits of fraction always, because a format that trims trailing zeros
+// makes the fraction a different length from one value to the next: ".12Z" and
+// ".123Z" are three milliseconds apart in one direction and the other way
+// round as text, since "Z" sorts after "3". Milliseconds because that is what
+// the history keeps and therefore all there is to say.
+//
+// Rendering it in the reader's own zone is the window's business, and it has
+// the instant to do it with.
+const instantFormat = "2006-01-02T15:04:05.000Z07:00"
+
 func timeOf(at time.Time) string {
 	if at.IsZero() {
 		return ""
 	}
 
-	return at.UTC().Format(time.RFC3339Nano)
+	return at.UTC().Format(instantFormat)
 }
