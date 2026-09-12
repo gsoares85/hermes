@@ -38,9 +38,17 @@ type Command struct {
 
 	mu      sync.Mutex
 	started bool
-	// group is what the operating system uses to name the group, on the one
-	// that needs a handle to name it. Unix leaves it zero: there the group is
-	// named by the identifier of the process that leads it.
+	// finished says the child has been waited for and collected. Its
+	// identifier means nothing from that moment: the kernel is free to give it
+	// to somebody else, and signalling it would reach whoever got it.
+	finished bool
+	// group is how the operating system names the group, written once when the
+	// process starts and never read from the process afterwards. On Unix it is
+	// the identifier of the process that leads the group, which is the child
+	// itself; on Windows it is the handle of the job object holding it.
+	//
+	// Captured rather than asked for at the moment of killing, because by then
+	// the child may have been collected and its identifier reused.
 	group uintptr
 }
 
@@ -94,7 +102,17 @@ func (c *Command) Wait() error {
 		return ErrNotStarted
 	}
 
-	if err := c.cmd.Wait(); err != nil {
+	err := c.cmd.Wait()
+
+	// Collected: from here the identifier belongs to the kernel again, and
+	// Kill must not send anything anywhere. Marked after the wait, because
+	// that is when it becomes true, and under the lock Kill holds while it
+	// signals, so the two cannot overlap.
+	c.mu.Lock()
+	c.finished = true
+	c.mu.Unlock()
+
+	if err != nil {
 		return fmt.Errorf("waiting for %s: %w", c.cmd.Path, err)
 	}
 
@@ -107,8 +125,21 @@ func (c *Command) Wait() error {
 // cancellation, and the second attempt lands on a process that is already
 // gone.
 func (c *Command) Kill() error {
-	if !c.running() {
+	// Held across the signal rather than only to read the flags: a process
+	// that has been collected has an identifier the kernel may have given to
+	// somebody else, and the lock is what stops Wait from marking it collected
+	// while this is signalling.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.started {
 		return ErrNotStarted
+	}
+
+	if c.finished {
+		// Waited for and gone. There is nothing to kill, and the identifier it
+		// used to have is not ours to signal any more.
+		return nil
 	}
 
 	return c.killGroup()

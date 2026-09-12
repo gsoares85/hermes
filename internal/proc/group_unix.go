@@ -18,10 +18,17 @@ func (c *Command) prepare() {
 	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
-// adopt has nothing to do here: the group exists from the moment the process
-// does, because the kernel made it as part of starting it. It is the Windows
-// half of this pair that has work to do after the fact.
+// adopt writes down which group the kernel made, which is no work at all here:
+// Setpgid makes the child the leader of its own group, so the group's
+// identifier is the child's. It is the Windows half of this pair that has real
+// work to do after the fact.
+//
+// Written down rather than asked for later, because "later" is the moment the
+// process may already have been collected — and then the identifier belongs to
+// whoever the kernel gave it to next.
 func (c *Command) adopt() error {
+	c.group = uintptr(c.cmd.Process.Pid) //nolint:gosec // a pid is not a signed quantity
+
 	return nil
 }
 
@@ -36,12 +43,7 @@ func (c *Command) adopt() error {
 // may choose to ignore would make the deadline on that cleanup the only thing
 // standing between a person and a button that did nothing.
 func (c *Command) killGroup() error {
-	group, err := syscall.Getpgid(c.cmd.Process.Pid)
-	if err != nil {
-		// There is no group because there is no process: it ended between the
-		// decision to kill it and the attempt. Nothing left to do.
-		return nil
-	}
+	group := int(c.group) //nolint:gosec // it is the pid this package wrote down at Start
 
 	if err := syscall.Kill(-group, syscall.SIGKILL); err != nil {
 		// The same race, one step later.
