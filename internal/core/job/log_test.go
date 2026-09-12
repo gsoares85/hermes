@@ -471,3 +471,45 @@ func TestALogReaderThatFellBehindGetsWhatSurvived(t *testing.T) {
 		t.Errorf("a sequence past the end answered %q at %d, want nothing at 4", beyond, at)
 	}
 }
+
+// The same enormous line, with nothing to end it — a server that answered
+// with a table inside an error message and a subprocess that has not flushed a
+// newline yet. It is the path that does not go through the ordinary filing of
+// a line, and it used to cut the line by itself: at an arbitrary byte, and
+// without counting what it threw away.
+func TestALineLongerThanTheLogWillHoldAndStillUnfinished(t *testing.T) {
+	t.Parallel()
+
+	const ceiling = 51
+
+	queue := job.NewQueue(job.WithLogBytes(ceiling))
+
+	// Two bytes each, so a cut at an odd offset lands inside one.
+	view := submitted(t, queue, runnerFunc(func(_ context.Context, report job.Reporter) error {
+		// No newline: the line is still being written when the ceiling is hit.
+		if _, err := report.Log().Write([]byte(strings.Repeat("é", 100))); err != nil {
+			return err
+		}
+
+		return nil
+	}))
+
+	lines, err := queue.Log(view.ID)
+	if err != nil {
+		t.Fatalf("Log(...) = _, %v, want no error", err)
+	}
+
+	whole := strings.Join(lines, "\n")
+	if !utf8.ValidString(whole) {
+		t.Errorf("the log holds invalid UTF-8: %q", whole)
+	}
+	if len(whole) > ceiling {
+		t.Errorf("the log holds %d bytes, want at most %d", len(whole), ceiling)
+	}
+
+	// And it says so. A log cut in silence is read as the whole of what
+	// happened, which is worse than a log that is visibly short.
+	if view.Dropped == 0 {
+		t.Error("the log threw away most of a line and reports having dropped nothing")
+	}
+}

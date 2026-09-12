@@ -88,9 +88,12 @@ func (l *logbook) Write(p []byte) (int, error) {
 	}
 
 	// A line longer than the whole log would otherwise sit in partial growing
-	// for ever, since nothing trims what has not ended yet.
+	// for ever, since nothing trims what has not ended yet. It is filed whole
+	// and cut by the same code that cuts every other over-long line: that is
+	// what counts the loss and what keeps the cut off the middle of a
+	// character. Cutting it here instead would do neither.
 	if len(l.partial) > l.maxBytes {
-		l.keep(string(l.partial[:l.maxBytes]))
+		l.keep(string(l.partial))
 		l.partial = nil
 	}
 
