@@ -249,3 +249,52 @@ func TestAJobCancelledBeforeItStartedReachesTheHistory(t *testing.T) {
 type runnerFunc func(ctx context.Context, report job.Reporter) error
 
 func (f runnerFunc) Run(ctx context.Context, report job.Reporter) error { return f(ctx, report) }
+
+// The history is where a secret would last longest: the window is closed at
+// the end of the day and the file is not. What reaches the record is what the
+// queue holds, and the queue takes the password out on the way in — this is
+// the proof that the two halves meet.
+func TestNoSecretReachesTheHistory(t *testing.T) {
+	t.Parallel()
+
+	history := store.NewJobMemory()
+
+	var queue *job.Queue
+	recorder := store.NewRecorder(history, func(id string) ([]string, error) {
+		return queue.Log(id)
+	}, refuseFailure(t))
+
+	queue = job.NewQueue(job.WithObserver(recorder.Observe))
+
+	id, err := queue.Submit(
+		job.Spec{Kind: "backup", Title: "postgres://reporting:hunter2@db.example.com/analytics"},
+		runnerFunc(func(_ context.Context, report job.Reporter) error {
+			if _, err := report.Log().Write(
+				[]byte("pg_dump: postgres://reporting:hunter2@db.example.com/analytics\n"),
+			); err != nil {
+				return err
+			}
+
+			return errors.New("connecting to postgres://reporting:hunter2@db.example.com/analytics: refused")
+		}))
+	if err != nil {
+		t.Fatalf("submitting: %v", err)
+	}
+
+	ctx, give := context.WithTimeout(t.Context(), 5*time.Second)
+	defer give()
+
+	if _, err := queue.Wait(ctx, id); err != nil {
+		t.Fatalf("waiting for the job to end: %v", err)
+	}
+
+	got := onlyRecord(t, history)
+	written := got.Title + "\n" + got.Err + "\n" + strings.Join(got.Log, "\n")
+
+	if strings.Contains(written, "hunter2") {
+		t.Errorf("the history holds the password: %q", written)
+	}
+	if strings.Count(written, "xxxxx") != 3 {
+		t.Errorf("the history reads %q, want the password replaced in the title, the error and the log", written)
+	}
+}

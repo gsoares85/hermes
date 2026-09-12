@@ -3,6 +3,7 @@ package job_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -392,5 +393,78 @@ func heard(t *testing.T, told chan job.State, want job.State) bool {
 		case <-giveUp:
 			return false
 		}
+	}
+}
+
+// The other half of the promise the log already keeps. An error is the second
+// piece of free text a job produces, it reaches the same two places — the
+// window and the history on disk — and it is the one most likely to carry a
+// connection string, because that is what a driver puts in the message when it
+// cannot connect.
+func TestTheSecretIsGoneFromWhatAFailedJobReports(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]job.Runner{
+		"the work returned it": runnerFunc(func(context.Context, job.Reporter) error {
+			return fmt.Errorf("connecting to %s: refused",
+				"postgres://reporting:hunter2@db.example.com:5432/analytics")
+		}),
+		"the work panicked with it": runnerFunc(func(context.Context, job.Reporter) error {
+			panic("dialling postgres://reporting:hunter2@db.example.com:5432/analytics")
+		}),
+	}
+
+	for name, run := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			view := submitted(t, job.NewQueue(), run)
+
+			if strings.Contains(view.Err, "hunter2") {
+				t.Errorf("the job reports %q, want the password taken out of it", view.Err)
+			}
+			if !strings.Contains(view.Err, "xxxxx") {
+				t.Errorf("the job reports %q, want the password replaced in place", view.Err)
+			}
+		})
+	}
+}
+
+// The two other strings a caller hands the queue. A title is written by
+// whoever submits the job, and the step by the work as it goes; both are drawn
+// in the window and both are kept in the history, so both go through the same
+// door as everything else.
+func TestTheSecretIsGoneFromTheTitleAndTheStep(t *testing.T) {
+	t.Parallel()
+
+	queue := job.NewQueue()
+
+	id, err := queue.Submit(job.Spec{
+		Kind:  "backup",
+		Title: "postgres://reporting:hunter2@db.example.com/analytics",
+	}, runnerFunc(func(_ context.Context, report job.Reporter) error {
+		report.Report(job.Progress{
+			Step: "copying from postgres://reporting:hunter2@db.example.com/analytics",
+		})
+
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("Submit(...) = _, %v, want no error", err)
+	}
+
+	ctx, give := context.WithTimeout(t.Context(), 5*time.Second)
+	defer give()
+
+	view, err := queue.Wait(ctx, id)
+	if err != nil {
+		t.Fatalf("Wait(...) = _, %v, want no error", err)
+	}
+
+	if strings.Contains(view.Title, "hunter2") {
+		t.Errorf("the title reads %q, want the password taken out of it", view.Title)
+	}
+	if strings.Contains(view.Progress.Step, "hunter2") {
+		t.Errorf("the step reads %q, want the password taken out of it", view.Progress.Step)
 	}
 }

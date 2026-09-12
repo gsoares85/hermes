@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/gsoares85/hermes/internal/core/secret"
 )
 
 // Errors a caller can tell apart, because it has something different to do
@@ -196,7 +198,11 @@ func (q *Queue) Submit(spec Spec, run Runner) (string, error) {
 	id := newID()
 	ctx, stop := context.WithCancel(context.Background())
 	held := &record{
-		view: View{ID: id, Kind: spec.Kind, Title: spec.Title, State: Pending},
+		// The title is free text from whoever submitted the job, and it is
+		// drawn in the window and kept in the history — the same two places the
+		// log goes, through the same door. A title assembled from a connection
+		// string is the obvious way a password arrives here.
+		view: View{ID: id, Kind: spec.Kind, Title: secret.Redact(spec.Title), State: Pending},
 		log:  newLogbook(q.logLines, q.logBytes),
 		stop: stop,
 		done: make(chan struct{}),
@@ -317,6 +323,10 @@ func (r reporter) Report(said Progress) {
 		return
 	}
 
+	// The step is what the work says it is doing, in its own words, and those
+	// words are often a table or a server it was given. Same door as the title
+	// and the log.
+	said.Step = secret.Redact(said.Step)
 	r.held.said = said
 }
 
@@ -341,8 +351,14 @@ func (q *Queue) finish(held *record, end State, failure error) {
 	held.view.State = moved
 	held.view.Ended = q.now()
 
+	// Redacted here, where the log is redacted too, and for the same reason:
+	// what a driver says when it cannot connect is the connection string it
+	// was handed. This is the second piece of free text a job produces, it
+	// reaches the same window and the same file on disk, and doing it on the
+	// way out instead would leave the password in memory until then — and in
+	// the history for ever.
 	if failure != nil {
-		held.view.Err = failure.Error()
+		held.view.Err = secret.Redact(failure.Error())
 	}
 
 	close(held.done)
