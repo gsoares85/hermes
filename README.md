@@ -602,8 +602,13 @@ pg_dump: dumping contents of table "reporting.invoices"
 
 A log is the one thing here whose size somebody else decides, so it is capped — 5,000 lines or
 a megabyte, whichever comes first — and the **beginning** is what goes, because the end of a log
-is where the failure is. It says how many lines it dropped rather than quietly presenting the
-rest as the whole story.
+is where the failure is. The panel draws the last 500 lines of what it holds, for the same
+reason. Both say how much they are not showing rather than quietly presenting the rest as the
+whole story.
+
+Lines keep arriving while you watch, whatever the job is doing and however long it has been
+doing it — including after the cap has been reached and the log has started losing its
+beginning, which is exactly when a verbose restore has the most to say.
 
 Passwords are taken out on the way **in**, not on the way to the screen, so a connection string
 that arrives inside the stderr of `pg_dump` never reaches memory or the history with its secret
@@ -620,22 +625,46 @@ Jobs that have ended are written to a small local database, so the panel of the 
 shows what the last one did — including what failed while nobody was watching. **Forget** takes
 a row out of the panel and out of that file, so a row you dismissed does not come back.
 
+The panel opens on what is running plus the most recent page of what has run. **Show earlier
+jobs** at the foot of the list walks back through the rest, a page at a time, and stops
+offering itself when you reach the beginning of what happened.
+
 | Platform | Job history |
 |---|---|
 | Linux | `~/.config/hermes/hermes.db` |
 | macOS | `~/Library/Application Support/hermes/hermes.db` |
 | Windows | `%AppData%\hermes\hermes.db` |
 
-The file is created private to you, and losing it is never a reason to refuse to start: a
-history that cannot be opened — a disk that filled mid-write, a restore that half-copied it —
-leaves Hermes running with a history that lasts the session, and a line saying so. Nothing is
-moved, renamed or deleted, so the file is still there to look at.
+The file is created private to you — and so are the two SQLite keeps beside it, which is where
+the newest rows live until they are moved across.
+
+Losing it is never a reason to refuse to start. A history that cannot be opened — a disk that
+filled mid-write, a restore that half-copied it, a file whose header was damaged — leaves
+Hermes running with a history that lasts the session, and the panel says so at the top rather
+than opening empty tomorrow with no reason given:
+
+```
+The job history at ~/.config/hermes/hermes.db could not be opened, so this session will not be
+remembered: reading the version of ~/.config/hermes/hermes.db: file is not a database
+```
+
+Nothing is moved, renamed or deleted, so the file is still there to look at.
 
 The same history reads from a terminal, which is where you are when a profile ran overnight in
 a pipeline:
 
 ```console
 $ hermes-cli jobs
+2026-09-11 03:12  failed    backup   shop on db.example.com
+2026-09-10 03:09  done      backup   shop on db.example.com
+2026-09-09 03:09  done      backup   shop on db.example.com
+```
+
+It prints the 50 most recent by default. `-n` asks for a different number, and walks back
+through the history a page at a time to reach it:
+
+```console
+$ hermes-cli jobs -n 3
 2026-09-11 03:12  failed    backup   shop on db.example.com
 2026-09-10 03:09  done      backup   shop on db.example.com
 2026-09-09 03:09  done      backup   shop on db.example.com
