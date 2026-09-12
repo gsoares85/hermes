@@ -1,6 +1,9 @@
 package job
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // Progress is how far along work says it is.
 //
@@ -93,7 +96,32 @@ func viewOf(said Progress, elapsed time.Duration) ProgressView {
 	}
 
 	view.Fraction = float64(said.Done) / float64(said.Total)
-	view.Remaining = time.Duration(float64(elapsed) * (1 - view.Fraction) / view.Fraction)
+	view.Remaining = lasting(float64(elapsed) * (1 - view.Fraction) / view.Fraction)
 
 	return view
+}
+
+// The longest estimate worth showing. Beyond it the honest answer is that
+// nobody knows, and a week is already past the point where a number helps.
+const longestEstimate = 7 * 24 * time.Hour
+
+// lasting is a count of nanoseconds as a length of time, for a count that may
+// not be one.
+//
+// A transfer that counts bytes reports one byte of ten billion a few seconds
+// in, and the arithmetic on that is a hundred and fifty thousand years. That
+// does not fit in a duration, and Go does not define what converting a float
+// outside the range produces — on ordinary machines it is a large negative
+// number, which the window would draw as a time remaining. It is the same
+// defect the fraction is guarded against a few lines above.
+func lasting(nanoseconds float64) time.Duration {
+	if math.IsNaN(nanoseconds) || nanoseconds <= 0 {
+		return 0
+	}
+
+	if nanoseconds >= float64(longestEstimate) {
+		return longestEstimate
+	}
+
+	return time.Duration(nanoseconds)
 }

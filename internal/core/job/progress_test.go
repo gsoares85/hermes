@@ -375,3 +375,26 @@ func TestReportingAndReadingAtTheSameTime(t *testing.T) {
 		t.Fatalf("Wait(...) = _, %v, want no error", err)
 	}
 }
+
+// A transfer that counts bytes reports one byte done out of ten billion after
+// a few seconds. The arithmetic on that is about a hundred and fifty thousand
+// years in nanoseconds, which does not fit in the count of nanoseconds a
+// duration is — and a float that does not fit converts to whatever the machine
+// feels like, which on ordinary ones is a large negative number.
+//
+// The window would draw it. It is the same defect the fraction is guarded
+// against, one line further down.
+func TestAnEstimateTooLargeToHoldIsNotDrawnAsNonsense(t *testing.T) {
+	t.Parallel()
+
+	clock := newTestClock()
+	queue := job.NewQueue(job.WithClock(clock.Now))
+
+	view := reporting(t, queue, clock,
+		job.Progress{Unit: "bytes", Done: 1, Total: 10_000_000_000}, 10*time.Second)
+
+	if view.Progress.Remaining < 0 {
+		t.Errorf("the estimate is %v, want a length of time somebody could read",
+			view.Progress.Remaining)
+	}
+}
