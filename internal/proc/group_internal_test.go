@@ -1,6 +1,7 @@
 package proc
 
 import (
+	"errors"
 	"os"
 	"runtime"
 	"testing"
@@ -60,6 +61,46 @@ func TestKillingAfterWaitingSendsNothing(t *testing.T) {
 	}
 }
 
+// A process that started but could not be held is not a started process. On
+// Windows the job object is what makes the children die with it, and a
+// machine whose policy refuses to open a process fails there — with the
+// process already running.
+//
+// Reporting the failure and keeping it would be the worst of both: the caller
+// believes nothing began, so it never waits, and the Kill it might send lands
+// on a group that was never formed and answers success having killed nothing.
+func TestAProcessThatCannotBeHeldIsNotLeftRunning(t *testing.T) {
+	t.Parallel()
+
+	refused := errors.New("this machine will not let a process be held")
+
+	command := sleeping(t)
+
+	var pid int
+	err := command.start(func() error {
+		pid = command.cmd.Process.Pid
+
+		return refused
+	})
+
+	if !errors.Is(err, refused) {
+		t.Fatalf("start(...) = %v, want the failure that came back from adopting", err)
+	}
+	if command.started {
+		t.Error("the command reports itself started after it could not be held")
+	}
+
+	// Started and taken back: the caller is told nothing began, and nothing is.
+	if err := command.Kill(); !errors.Is(err, ErrNotStarted) {
+		t.Errorf("Kill() = %v, want ErrNotStarted: a start that failed left something behind", err)
+	}
+	if err := command.Wait(); !errors.Is(err, ErrNotStarted) {
+		t.Errorf("Wait() = %v, want ErrNotStarted", err)
+	}
+
+	waitUntilGone(t, pid)
+}
+
 // The environment that turns the case below from a skipped test into the
 // long-lived process these cases need.
 const sleeperVariable = "HERMES_PROC_INTERNAL_SLEEPER"
@@ -85,3 +126,39 @@ func sleeping(t *testing.T) *Command {
 
 	return command
 }
+
+// waitUntilGone fails unless the process stops existing. Signal 0 is the
+// portable "is it there" on Unix; on Windows os.FindProcess answers for a
+// process that has ended, so the check is what exec already knows.
+func waitUntilGone(t *testing.T, pid int) {
+	t.Helper()
+
+	if pid == 0 {
+		t.Fatal("the process was never started, so there is nothing to look for")
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if !alive(pid) {
+			return
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("process %d is still running after a start that failed", pid)
+}
+
+func alive(pid int) bool {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+
+	return process.Signal(syscallZero()) == nil
+}
+
+// syscallZero is the signal that asks whether a process is there without
+// touching it. On Windows it is not a signal at all and Signal answers an
+// error for a process that has ended, which is the same question answered.
+func syscallZero() os.Signal { return zeroSignal }

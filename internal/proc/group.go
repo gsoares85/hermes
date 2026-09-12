@@ -77,6 +77,13 @@ func (c *Command) Start() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	return c.start(c.adopt)
+}
+
+// start is Start with the adoption to perform handed in, so that a test can
+// see what happens when it fails — which is a thing only Windows does, and
+// only on a machine whose policy refuses to open a process.
+func (c *Command) start(adopt func() error) error {
 	c.prepare()
 
 	if err := c.cmd.Start(); err != nil {
@@ -87,9 +94,24 @@ func (c *Command) Start() error {
 		return fmt.Errorf("starting %s: %w", c.cmd.Path, err)
 	}
 
+	if err := adopt(); err != nil {
+		// The process is running and nothing holds its children. Reporting a
+		// failure and leaving it started would be the worst of both: the
+		// caller believes nothing began, so it never waits for it, and a Kill
+		// it does send lands on a group that was never formed and reports
+		// success having killed nothing.
+		//
+		// So the start is undone. The process this function began is the one
+		// it takes back, and nothing it could not hold is left running.
+		_ = c.cmd.Process.Kill()
+		_ = c.cmd.Wait()
+
+		return err
+	}
+
 	c.started = true
 
-	return c.adopt()
+	return nil
 }
 
 // Wait waits for the process to end.
