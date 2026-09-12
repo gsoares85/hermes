@@ -54,6 +54,11 @@ vi.mock("@wailsio/runtime", () => ({
   },
 }));
 
+/** A whole log as the Go side answers it: the lines, and how far they reach. */
+function wholeLog(id: string, ...lines: string[]): { id: string; lines: string[]; seq: number } {
+  return { id, lines, seq: lines.length };
+}
+
 /** Pushes an event the way the Go side does. */
 function push(name: string, data: unknown): void {
   listeners.get(name)?.({ data });
@@ -90,7 +95,7 @@ beforeEach(() => {
   listeners.clear();
 
   backend.list.mockReturnValue(cancellable([]));
-  backend.log.mockReturnValue(cancellable([]));
+  backend.log.mockReturnValue(cancellable(wholeLog("one")));
   backend.cancel.mockReturnValue(cancellable(undefined));
   backend.forget.mockReturnValue(cancellable(undefined));
   backend.older.mockReturnValue(cancellable([]));
@@ -204,7 +209,7 @@ describe("the jobs panel", () => {
 
   it("reads the whole log when one is opened, and appends what arrives after", async () => {
     backend.list.mockReturnValue(cancellable([job("one")]));
-    backend.log.mockReturnValue(cancellable(["pg_dump: dumping public.orders"]));
+    backend.log.mockReturnValue(cancellable(wholeLog("one", "pg_dump: dumping public.orders")));
 
     render(<JobsPanel onClose={vi.fn()} />);
     await screen.findByText("shop one");
@@ -213,7 +218,7 @@ describe("the jobs panel", () => {
 
     expect(await screen.findByText(/dumping public.orders/)).toBeTruthy();
 
-    push("job:log", { id: "one", lines: ["pg_dump: dumping public.customers"] });
+    push("job:log", { id: "one", lines: ["pg_dump: dumping public.customers"], seq: 2 });
 
     expect(await screen.findByText(/dumping public.customers/)).toBeTruthy();
   });
@@ -231,15 +236,15 @@ describe("the jobs panel", () => {
     backend.log.mockImplementation((id: string) => {
       if (id === "one") {
         return cancellable(
-          new Promise<string[]>((resolve): void => {
+          new Promise<{ id: string; lines: string[]; seq: number }>((resolve): void => {
             answerForOne = (): void => {
-              resolve(["the log of the first job"]);
+              resolve(wholeLog("one", "the log of the first job"));
             };
           }),
         );
       }
 
-      return cancellable(["the log of the second job"]);
+      return cancellable(wholeLog("two", "the log of the second job"));
     });
 
     render(<JobsPanel onClose={vi.fn()} />);
@@ -263,10 +268,58 @@ describe("the jobs panel", () => {
     expect(screen.queryByText(/the log of the second job/)).toBeTruthy();
   });
 
+  /**
+   * The whole log and the events that follow it are two readings of one
+   * buffer, each keeping its own place. The watcher sends from wherever its
+   * sampling had got to, which is usually behind what the panel has just
+   * fetched — so an event ordinarily repeats lines that are already on screen,
+   * and only the count says which ones.
+   */
+  it("does not draw a line twice when an event repeats what was already read", async () => {
+    backend.list.mockReturnValue(cancellable([job("one")]));
+    backend.log.mockReturnValue(cancellable(wholeLog("one", "first", "second")));
+
+    render(<JobsPanel onClose={vi.fn()} />);
+    await screen.findByText("shop one");
+
+    fireEvent.click(screen.getByRole("button", { name: "Log of shop one" }));
+    expect(await screen.findByText(/second/)).toBeTruthy();
+
+    // The watcher's first reading: all three lines, of which two are already
+    // on screen.
+    push("job:log", { id: "one", lines: ["first", "second", "third"], seq: 3 });
+
+    expect(await screen.findByText(/third/)).toBeTruthy();
+
+    const log = screen.getByText(/first/).textContent;
+    expect(log.match(/first/g)).toHaveLength(1);
+    expect(log.match(/second/g)).toHaveLength(1);
+    expect(log.match(/third/g)).toHaveLength(1);
+  });
+
+  // An event entirely behind what is on screen adds nothing at all.
+  it("ignores an event that is wholly behind what was already read", async () => {
+    backend.list.mockReturnValue(cancellable([job("one")]));
+    backend.log.mockReturnValue(cancellable(wholeLog("one", "first", "second")));
+
+    render(<JobsPanel onClose={vi.fn()} />);
+    await screen.findByText("shop one");
+
+    fireEvent.click(screen.getByRole("button", { name: "Log of shop one" }));
+    expect(await screen.findByText(/second/)).toBeTruthy();
+
+    push("job:log", { id: "one", lines: ["first"], seq: 1 });
+
+    await waitFor((): void => {
+      const log = screen.getByText(/first/).textContent;
+      expect(log.match(/first/g)).toHaveLength(1);
+    });
+  });
+
   // A log truncated in silence is read as the beginning of the operation.
   it("says when the log dropped its beginning", async () => {
     backend.list.mockReturnValue(cancellable([job("one", { dropped: 42 })]));
-    backend.log.mockReturnValue(cancellable(["the line that survived"]));
+    backend.log.mockReturnValue(cancellable(wholeLog("one", "the line that survived")));
 
     render(<JobsPanel onClose={vi.fn()} />);
     await screen.findByText("shop one");
@@ -286,7 +339,7 @@ describe("the jobs panel", () => {
     const long = Array.from({ length: 1200 }, (_, at): string => `line ${String(at)}`);
 
     backend.list.mockReturnValue(cancellable([job("one")]));
-    backend.log.mockReturnValue(cancellable(long));
+    backend.log.mockReturnValue(cancellable(wholeLog("one", ...long)));
 
     render(<JobsPanel onClose={vi.fn()} />);
     await screen.findByText("shop one");

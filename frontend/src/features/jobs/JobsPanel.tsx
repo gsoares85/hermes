@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   advanced,
+  appended,
   cancelJob,
   forgetJob,
   isOver,
@@ -14,6 +15,7 @@ import {
   ordered,
   remaining,
   watchJobs,
+  type JobLogView,
   type JobView,
 } from "../../api/job";
 import { Icon } from "../../ui/Icon";
@@ -36,7 +38,15 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
   // without resubscribing every time somebody opens a different one. A ref
   // rather than the state itself: resubscribing would drop events in the gap.
   const openedRef = useRef("");
-  const [log, setLog] = useState<readonly string[]>([]);
+  // The open log: the lines on screen, and how far along the job's own count
+  // they reach. The second is what lets an event that repeats what is already
+  // there be put on once.
+  const [read, setRead] = useState<Read>(nothingRead);
+  // Events that arrived while the whole log was being fetched, and the flag
+  // that says the fetch is still out. Refs rather than state: nothing is drawn
+  // from either, and a render per line arriving would be a render per line.
+  const pending = useRef<JobLogView[]>([]);
+  const awaiting = useRef(false);
   const [notice, setNotice] = useState("");
   // Whether there may be more history further back. It starts as a maybe,
   // because the only way to find out is to ask, and it becomes a no when an
@@ -136,9 +146,21 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
         setHeld((current): JobView[] => advanced(current, view));
       },
       log: (view): void => {
-        setLog((current): readonly string[] =>
-          view.id === openedRef.current ? [...current, ...view.lines] : current,
-        );
+        if (view.id !== openedRef.current) {
+          return;
+        }
+
+        // Held until the whole log has arrived, because until then there is
+        // nothing to say where these lines belong: the whole log is read at
+        // its own moment and the events come from wherever the sampling had
+        // got to, which is usually further back.
+        if (awaiting.current) {
+          pending.current.push(view);
+
+          return;
+        }
+
+        setRead((current): Read => appended(current.lines, current.seq, view));
       },
     });
   }, []);
@@ -147,14 +169,16 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
     const next = id === opened ? "" : id;
     setOpened(next);
     openedRef.current = next;
-    setLog([]);
+    pending.current = [];
+    awaiting.current = next !== "";
+    setRead(nothingRead);
 
     if (next === "") {
       return;
     }
 
     jobLog(next)
-      .then((lines): void => {
+      .then((whole): void => {
         // Somebody opened another job while this was being asked for, or
         // closed this one. Two answers are in flight and the older of them
         // must not land in the newer one's place.
@@ -162,14 +186,22 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
           return;
         }
 
-        // What arrived by event while the asking was in flight is kept: the
-        // whole log answers what was there when it was asked, and the lines
-        // that came after it have already been counted as sent.
-        setLog((current): readonly string[] => [...lines, ...current]);
+        // The whole log, and then whatever arrived while it was on its way —
+        // each put after it by its own count, so the lines the two readings
+        // have in common go on once.
+        let read: Read = { lines: whole.lines, seq: whole.seq };
+        for (const arrived of pending.current) {
+          read = appended(read.lines, read.seq, arrived);
+        }
+
+        pending.current = [];
+        awaiting.current = false;
+        setRead(read);
       })
       .catch((): void => {
         // The job was forgotten while the log was being asked for. An empty
         // log is the truth about a job that is gone.
+        awaiting.current = false;
       });
   }
 
@@ -185,7 +217,7 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
         setHeld((current): JobView[] => current.filter((job): boolean => job.id !== id));
         if (id === opened) {
           setOpened("");
-          setLog([]);
+          setRead(nothingRead);
         }
       })
       .catch((err: unknown): void => {
@@ -279,7 +311,7 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
 
               {job.error !== "" && <p className="jobs__error">{job.error}</p>}
 
-              {opened === job.id && <Log job={job} lines={log} />}
+              {opened === job.id && <Log job={job} lines={read.lines} />}
             </li>
           ))}
         </ul>
@@ -299,6 +331,18 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
     </section>
   );
 }
+
+/**
+ * The open log as the panel holds it: the lines, and how far along what the
+ * job has said they reach.
+ */
+interface Read {
+  lines: readonly string[];
+  seq: number;
+}
+
+/** Nothing read yet, which is where every opening starts. */
+const nothingRead: Read = { lines: [], seq: 0 };
 
 /**
  * How much of a log is drawn at once.

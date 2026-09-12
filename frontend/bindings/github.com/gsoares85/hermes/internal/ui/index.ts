@@ -19,6 +19,7 @@ export type {
     DiagnosisView,
     HistoryView,
     JobCursor,
+    JobLogView,
     JobProgressView,
     JobView,
     NodeRef,

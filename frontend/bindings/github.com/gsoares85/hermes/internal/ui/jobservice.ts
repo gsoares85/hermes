@@ -87,7 +87,7 @@ export function List(): $CancellablePromise<$models.JobView[] | null> {
  * opened on last night's failure needs, which is why a job the queue no longer
  * holds is looked for in the history rather than reported as gone.
  */
-export function Log(id: string): $CancellablePromise<string[] | null> {
+export function Log(id: string): $CancellablePromise<$models.JobLogView> {
     return $Call.ByID(2942170097, id);
 }
 

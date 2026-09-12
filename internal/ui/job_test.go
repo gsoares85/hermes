@@ -599,12 +599,17 @@ func TestTheLogOfAJobOnlyTheHistoryRemembers(t *testing.T) {
 
 	service := ui.NewJobService(job.NewQueue(), history)
 
-	lines, err := service.Log(t.Context(), "last-night")
+	got, err := service.Log(t.Context(), "last-night")
 	if err != nil {
 		t.Fatalf("Log(...) = _, %v, want no error", err)
 	}
-	if len(lines) != 1 || lines[0] != remembered.Log[0] {
-		t.Errorf("the log reads %q, want what the job said", lines)
+	if len(got.Lines) != 1 || got.Lines[0] != remembered.Log[0] {
+		t.Errorf("the log reads %q, want what the job said", got.Lines)
+	}
+	// A job the queue has let go of says nothing more, so the sequence ends
+	// where the log does and anything arriving after it would be a mistake.
+	if got.Seq != 1 {
+		t.Errorf("the log of a job only the history has ends at %d, want 1", got.Seq)
 	}
 }
 
@@ -1003,5 +1008,84 @@ func TestTheTimesSortAsTextInTheOrderTheyHappened(t *testing.T) {
 	if earlier.EndedAt >= later.EndedAt {
 		t.Errorf("%q does not sort before %q, so the panel draws them the wrong way round",
 			earlier.EndedAt, later.EndedAt)
+	}
+}
+
+// The whole log and the lines that keep arriving are read from the same buffer
+// at different moments. Both carry how far the job had got by the end of them,
+// so the window can put one after the other without repeating a line or losing
+// one — which is not something it could work out from the lines themselves,
+// since a log repeats itself all the time.
+func TestTheWholeLogAndWhatComesAfterItShareOneCount(t *testing.T) {
+	t.Parallel()
+
+	into := &recorder{}
+	queue := job.NewQueue()
+	service := ui.NewJobService(queue, store.NewJobMemory())
+	watcher := ui.NewJobWatcher(queue, into)
+
+	said := make(chan struct{})
+	more := make(chan struct{})
+	done := make(chan struct{})
+
+	id, err := queue.Submit(spec("a job"), runnerFunc(func(_ context.Context, report job.Reporter) error {
+		if _, err := report.Log().Write([]byte("first\nsecond\n")); err != nil {
+			return err
+		}
+
+		close(said)
+		<-more
+
+		if _, err := report.Log().Write([]byte("third\n")); err != nil {
+			return err
+		}
+
+		close(done)
+
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("Submit(...) = _, %v, want no error", err)
+	}
+
+	<-said
+
+	whole, err := service.Log(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Log(...) = _, %v, want no error", err)
+	}
+	if len(whole.Lines) != 2 || whole.Seq != 2 {
+		t.Fatalf("the log holds %q at %d, want two lines at 2", whole.Lines, whole.Seq)
+	}
+
+	close(more)
+	<-done
+	watcher.Sample()
+
+	events := into.named("job:log")
+	if len(events) == 0 {
+		t.Fatal("the window was told nothing after the log was read whole")
+	}
+
+	last, is := events[len(events)-1].data.(ui.JobLogView)
+	if !is {
+		t.Fatalf("a log event carried %T, want a JobLogView", events[len(events)-1].data)
+	}
+
+	// The event and the whole log are counted on one scale, which is the whole
+	// point: the event covers lines 0 to 3, the whole log covered 0 to 2, and
+	// the window can see that the first two of the three are ones it already
+	// has. It could not work that out from the lines themselves — a log
+	// repeats itself all the time — and the watcher cannot know what the panel
+	// fetched, because it keeps a place of its own and is read by every window
+	// at once.
+	if last.Seq != 3 {
+		t.Errorf("the event ends at %d, want 3: three lines have been said", last.Seq)
+	}
+	if begins := last.Seq - len(last.Lines); begins != 0 {
+		t.Errorf("the event begins at %d, want 0: it is the watcher's first reading", begins)
+	}
+	if whole.Seq != 2 {
+		t.Errorf("the whole log ended at %d, want 2", whole.Seq)
 	}
 }

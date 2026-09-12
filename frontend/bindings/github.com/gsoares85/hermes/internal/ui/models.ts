@@ -128,6 +128,24 @@ export interface JobCursor {
 }
 
 /**
+ * JobLogView is what a job has said: either the whole of it, or what is new
+ * since the window was last told.
+ * 
+ * Seq is how many lines the job has said in total up to the end of these,
+ * counting from the moment it started — including the ones the log's ceiling
+ * has since dropped. It is what lets the window put the whole log and the
+ * lines that keep arriving in one order without repeating any: the two are
+ * read from the same buffer at different moments, and without a number that
+ * spans both, whatever arrives while the whole log is being fetched is either
+ * counted twice or lost.
+ */
+export interface JobLogView {
+    "id": string;
+    "lines": string[] | null;
+    "seq": number;
+}
+
+/**
  * JobProgressView is how far along a job is, as the window reads it.
  * 
  * Durations cross as milliseconds. A Go duration marshals as a count of

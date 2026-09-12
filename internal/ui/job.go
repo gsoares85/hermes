@@ -77,10 +77,20 @@ type JobView struct {
 	EndedAt   string          `json:"endedAt"`
 }
 
-// JobLogView is what a job has said since the window was last told.
+// JobLogView is what a job has said: either the whole of it, or what is new
+// since the window was last told.
+//
+// Seq is how many lines the job has said in total up to the end of these,
+// counting from the moment it started — including the ones the log's ceiling
+// has since dropped. It is what lets the window put the whole log and the
+// lines that keep arriving in one order without repeating any: the two are
+// read from the same buffer at different moments, and without a number that
+// spans both, whatever arrives while the whole log is being fetched is either
+// counted twice or lost.
 type JobLogView struct {
 	ID    string   `json:"id"`
 	Lines []string `json:"lines"`
+	Seq   int      `json:"seq"`
 }
 
 // JobService is what the window uses to see and stop what is running.
@@ -264,21 +274,24 @@ func cursorOf(after JobCursor) (store.Cursor, error) {
 // on a job that has been running for ten minutes needs — and what a panel
 // opened on last night's failure needs, which is why a job the queue no longer
 // holds is looked for in the history rather than reported as gone.
-func (s *JobService) Log(ctx context.Context, id string) ([]string, error) {
-	lines, err := s.queue.Log(id)
+func (s *JobService) Log(ctx context.Context, id string) (JobLogView, error) {
+	lines, seq, err := s.queue.LogSince(id, 0)
 	if err == nil {
-		return lines, nil
+		return JobLogView{ID: id, Lines: lines, Seq: seq}, nil
 	}
 	if !errors.Is(err, job.ErrNotFound) {
-		return nil, fmt.Errorf("reading the log of job %s: %w", id, err)
+		return JobLogView{}, fmt.Errorf("reading the log of job %s: %w", id, err)
 	}
 
 	remembered, err := s.history.Get(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("reading the log of job %s: %w", id, err)
+		return JobLogView{}, fmt.Errorf("reading the log of job %s: %w", id, err)
 	}
 
-	return remembered.Log, nil
+	// A job the queue has let go of says nothing more, so where its log ends
+	// is where it ends. What the ceiling dropped is not counted here and does
+	// not need to be: nothing will arrive to be put after it.
+	return JobLogView{ID: id, Lines: remembered.Log, Seq: len(remembered.Log)}, nil
 }
 
 // Cancel asks a job to stop.
@@ -512,7 +525,7 @@ func (s *JobWatcher) logOf(one job.View) {
 		return
 	}
 
-	s.emit.Emit(logEvent, JobLogView{ID: one.ID, Lines: fresh})
+	s.emit.Emit(logEvent, JobLogView{ID: one.ID, Lines: fresh, Seq: next})
 }
 
 func viewOfJob(one job.View) JobView {

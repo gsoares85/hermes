@@ -10,17 +10,20 @@ import type {
 export type { HistoryView, JobProgressView, JobView };
 
 /**
- * What a job has said since the window was last told.
+ * What a job has said: the whole of it, or what is new since the window was
+ * last told.
  *
- * Written out here rather than imported from the generated models, because the
- * generator only knows the signatures of methods and this type crosses as the
- * payload of an event. It is the one shape on this boundary that nothing
- * checks against Go, so it is kept to the two fields it has: a wider one would
- * be a wider thing to get quietly wrong.
+ * `seq` is how many lines the job has said in total up to the end of these,
+ * counting from when it started and including the ones the log's ceiling has
+ * dropped since. The whole log and the events that follow it are read from the
+ * same buffer at different moments, each keeping its own place, so it is the
+ * only thing that says how the two fit together — the lines cannot, because a
+ * log repeats itself all the time.
  */
 export interface JobLogView {
   id: string;
   lines: string[];
+  seq: number;
 }
 
 /**
@@ -61,9 +64,11 @@ export async function historyStatus(): Promise<HistoryView> {
   return await JobService.HistoryStatus();
 }
 
-/** Everything a job has said. */
-export async function jobLog(id: string): Promise<string[]> {
-  return (await JobService.Log(id)) ?? [];
+/** Everything a job has said, and how far along its log that reaches. */
+export async function jobLog(id: string): Promise<JobLogView> {
+  const read = await JobService.Log(id);
+
+  return { id, lines: read.lines ?? [], seq: read.seq };
 }
 
 /** Asks a job to stop. It returns when the job has been told, not when it has stopped. */
@@ -163,14 +168,44 @@ function jobLogViewIn(data: unknown): JobLogView | null {
     return null;
   }
 
-  const { id, lines } = data as Record<string, unknown>;
-  if (typeof id !== "string" || id === "" || !Array.isArray(lines)) {
+  const { id, lines, seq } = data as Record<string, unknown>;
+  if (typeof id !== "string" || id === "" || !Array.isArray(lines) || typeof seq !== "number") {
     return null;
   }
 
   return lines.every((line): boolean => typeof line === "string")
-    ? { id, lines: lines as string[] }
+    ? { id, lines: lines as string[], seq }
     : null;
+}
+
+/**
+ * A log with what arrived after it put on the end, and nothing put on twice.
+ *
+ * The whole log and the events that follow it are two readings of one buffer,
+ * taken at different moments and each keeping its own place: the whole log is
+ * read when somebody opens it, and the events are sent from wherever the
+ * window's sampling had got to — which is usually further back. So an event
+ * ordinarily repeats lines that are already on screen, and only the count says
+ * which ones.
+ *
+ * An event entirely behind what is held adds nothing. One that straddles the
+ * end adds only its tail. One that begins after a gap — the ceiling took what
+ * was in between — is added whole, because those lines are gone from the
+ * buffer and the count of what was dropped is what says so.
+ */
+export function appended(
+  held: readonly string[],
+  seq: number,
+  arrived: JobLogView,
+): { lines: string[]; seq: number } {
+  if (arrived.seq <= seq) {
+    return { lines: [...held], seq };
+  }
+
+  const begins = arrived.seq - arrived.lines.length;
+  const already = Math.max(0, Math.min(seq - begins, arrived.lines.length));
+
+  return { lines: [...held, ...arrived.lines.slice(already)], seq: arrived.seq };
 }
 
 /** Whether a job has reached an end it cannot leave. */

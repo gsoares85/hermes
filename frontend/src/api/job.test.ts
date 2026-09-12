@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   advanced,
+  appended,
   duration,
   isOver,
   isStoppable,
@@ -9,6 +10,7 @@ import {
   ordered,
   remaining,
   watchJobs,
+  type JobLogView,
   type JobProgressView,
   type JobView,
 } from "./job";
@@ -283,14 +285,71 @@ describe("what the window is handed by an event", () => {
       { id: "one" },
       { id: "one", lines: "a line" },
       { id: "one", lines: [7] },
+      // Without the count there is nothing to say where these lines belong,
+      // and putting them on the end would repeat what is already there.
+      { id: "one", lines: ["said something"] },
+      { id: "one", lines: ["said something"], seq: "2" },
     ]) {
       pushEvent("job:log", nonsense);
     }
 
     expect(seen).toEqual([]);
 
-    pushEvent("job:log", { id: "one", lines: ["said something"] });
+    pushEvent("job:log", { id: "one", lines: ["said something"], seq: 1 });
 
     expect(seen).toEqual([["said something"]]);
+  });
+});
+
+describe("putting what arrived after the whole log", () => {
+  function arrived(seq: number, ...lines: string[]): JobLogView {
+    return { id: "one", lines, seq };
+  }
+
+  /**
+   * The ordinary case, and the reason the count exists. The whole log is read
+   * when somebody opens it; the events come from wherever the window's
+   * sampling had got to, which is usually further back. So an event repeats
+   * lines that are already on screen, and nothing in the lines themselves says
+   * which — a log repeats itself all the time.
+   */
+  it("puts on only the part that is new", () => {
+    const next = appended(["first", "second"], 2, arrived(3, "first", "second", "third"));
+
+    expect(next.lines).toEqual(["first", "second", "third"]);
+    expect(next.seq).toBe(3);
+  });
+
+  it("puts on nothing from an event that is wholly behind", () => {
+    const next = appended(["first", "second"], 2, arrived(1, "first"));
+
+    expect(next.lines).toEqual(["first", "second"]);
+    expect(next.seq).toBe(2);
+  });
+
+  it("puts on the whole of an event that is wholly new", () => {
+    const next = appended(["first"], 1, arrived(3, "second", "third"));
+
+    expect(next.lines).toEqual(["first", "second", "third"]);
+    expect(next.seq).toBe(3);
+  });
+
+  /**
+   * The ceiling took what was in between. The lines are gone from the buffer
+   * and nothing can bring them back, so what arrived goes on whole — the count
+   * of what was dropped is what says the log has a hole in it.
+   */
+  it("puts on an event that begins after a gap", () => {
+    const next = appended(["first"], 1, arrived(9, "eighth", "ninth"));
+
+    expect(next.lines).toEqual(["first", "eighth", "ninth"]);
+    expect(next.seq).toBe(9);
+  });
+
+  it("leaves the log it was given alone", () => {
+    const held = ["first"];
+    appended(held, 1, arrived(2, "second"));
+
+    expect(held).toEqual(["first"]);
   });
 });
