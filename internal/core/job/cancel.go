@@ -65,12 +65,18 @@ func (q *Queue) Cancel(id string) error {
 	// the cleanup that removes what it left behind has run.
 	q.endIfWaiting(held)
 
+	// Said before it is done, and that order is the whole of it. Work told to
+	// stop returns the moment it notices, and what it returns is
+	// context.Canceled; a queue that had not yet written down that it was
+	// cancelling reads that as a job that failed, reports "context canceled"
+	// as the reason, and skips the cleanup that removes what the work left
+	// behind. Somebody is told their backup failed because they pressed Stop.
+	q.moveTo(held, Cancelling)
+
 	// Outside the lock: cancelling a context runs whatever is waiting on it,
 	// and holding the queue's lock while other people's code runs is how a
 	// window stops repainting.
 	held.stop()
-
-	q.moveTo(held, Cancelling)
 
 	return nil
 }

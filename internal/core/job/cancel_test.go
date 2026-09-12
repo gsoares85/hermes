@@ -566,3 +566,47 @@ func (c *chronicle) read() []string {
 
 	return append([]string(nil), c.what...)
 }
+
+// Work is told to stop and returns context.Canceled the moment it notices,
+// which can be at once. If the queue has not written down that it is
+// cancelling by then, it reads that answer as a job that failed: the person is
+// told their backup failed because they pressed Stop, the reason given is
+// "context canceled", and the cleanup that removes the half-written file never
+// runs.
+//
+// The runner here returns the instant it is told, which is the worst case and
+// an ordinary one — a COPY that checks the context between rows does exactly
+// that.
+func TestStoppingIsNeverReportedAsAFailure(t *testing.T) {
+	t.Parallel()
+
+	for range 20 {
+		queue := job.NewQueue()
+		started := make(chan struct{})
+
+		var cleaned atomicFlag
+		view := cancelled(t, queue, cleaningRunner{
+			run: func(ctx context.Context, _ job.Reporter) error {
+				close(started)
+				<-ctx.Done()
+
+				return ctx.Err()
+			},
+			clean: func(context.Context) error {
+				cleaned.set()
+
+				return nil
+			},
+		}, started)
+
+		if view.State != job.Cancelled {
+			t.Fatalf("the job is %v, want %v: stopping is not a failure", view.State, job.Cancelled)
+		}
+		if view.Err != "" {
+			t.Fatalf("the job reports %q, want nothing: it was stopped, not broken", view.Err)
+		}
+		if !cleaned.get() {
+			t.Fatal("the cleanup did not run, so what the work left behind is still there")
+		}
+	}
+}
