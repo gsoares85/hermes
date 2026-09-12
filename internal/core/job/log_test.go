@@ -366,3 +366,108 @@ func TestWritingAndReadingTheLogAtTheSameTime(t *testing.T) {
 	readers.Wait()
 	<-release
 }
+
+// The sequence is what a live view of a log holds on to, so it has to keep
+// moving after the ceiling starts taking the beginning — which is exactly when
+// the count of lines being held stops moving.
+func TestTheLogSequenceKeepsMovingWhenTheLogIsFull(t *testing.T) {
+	t.Parallel()
+
+	const ceiling = 4
+
+	queue := job.NewQueue(job.WithLogLines(ceiling))
+
+	writing := make(chan string)
+	written := make(chan struct{})
+	id, err := queue.Submit(spec("a verbose job"), runnerFunc(func(_ context.Context, report job.Reporter) error {
+		for line := range writing {
+			if _, err := fmt.Fprintln(report.Log(), line); err != nil {
+				return err
+			}
+
+			written <- struct{}{}
+		}
+
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("Submit(...) = _, %v, want no error", err)
+	}
+
+	// Each line is waited for, so that what is read is what was written and
+	// not what had arrived by then.
+	say := func(lines ...string) {
+		for _, line := range lines {
+			writing <- line
+			<-written
+		}
+	}
+
+	say("one", "two", "three", "four")
+
+	fresh, seq, err := queue.LogSince(id, 0)
+	if err != nil {
+		t.Fatalf("LogSince(...) = _, _, %v, want no error", err)
+	}
+	if len(fresh) != ceiling || seq != ceiling {
+		t.Fatalf("a full log read %d lines at sequence %d, want %d at %d", len(fresh), seq, ceiling, ceiling)
+	}
+
+	// Nothing new: the answer is nothing, and the sequence has not moved.
+	if again, at, _ := queue.LogSince(id, seq); len(again) != 0 || at != seq {
+		t.Errorf("reading again answered %q at %d, want nothing at %d", again, at, seq)
+	}
+
+	// Now the log loses its beginning for every line it gains. The length of
+	// the buffer is the same; the sequence is not.
+	say("five", "six")
+
+	fresh, moved, err := queue.LogSince(id, seq)
+	if err != nil {
+		t.Fatalf("LogSince(...) = _, _, %v, want no error", err)
+	}
+	if len(fresh) != 2 || fresh[0] != "five" || fresh[1] != "six" {
+		t.Errorf("the lines written after the log filled up read %q, want five and six", fresh)
+	}
+	if moved != ceiling+2 {
+		t.Errorf("the sequence is %d, want %d: it has to count what was said, not what is held", moved, ceiling+2)
+	}
+
+	close(writing)
+}
+
+// A reader that fell so far behind that what it asked for has already gone is
+// given what survives, rather than nothing or a failure. What it missed is
+// what droppedCount reports, and the panel says that above the log.
+func TestALogReaderThatFellBehindGetsWhatSurvived(t *testing.T) {
+	t.Parallel()
+
+	queue := job.NewQueue(job.WithLogLines(2))
+
+	view := submitted(t, queue, runnerFunc(func(_ context.Context, report job.Reporter) error {
+		for _, line := range []string{"one", "two", "three", "four"} {
+			if _, err := fmt.Fprintln(report.Log(), line); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}))
+
+	fresh, seq, err := queue.LogSince(view.ID, 0)
+	if err != nil {
+		t.Fatalf("LogSince(...) = _, _, %v, want no error", err)
+	}
+	if len(fresh) != 2 || fresh[0] != "three" {
+		t.Errorf("a reader at the beginning of a log that moved on read %q, want the two lines left", fresh)
+	}
+	if seq != 4 {
+		t.Errorf("the sequence is %d, want 4: four lines were said", seq)
+	}
+
+	// And a sequence from another life — a job forgotten and a new one under
+	// the same reader — answers nothing rather than reaching past the end.
+	if beyond, at, _ := queue.LogSince(view.ID, 99); len(beyond) != 0 || at != 4 {
+		t.Errorf("a sequence past the end answered %q at %d, want nothing at 4", beyond, at)
+	}
+}

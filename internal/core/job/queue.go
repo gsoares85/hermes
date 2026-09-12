@@ -448,6 +448,28 @@ func (q *Queue) Log(id string) ([]string, error) {
 	return held.log.read(), nil
 }
 
+// LogSince answers what a job has said after a sequence, and the sequence to
+// ask with next time.
+//
+// The reading a live view of a log needs, as opposed to the whole of it: a
+// panel that has been shown the first hundred lines asks for what came after
+// them, and gets nothing when nothing has. Sequences count what a job has said
+// since it began, so they keep moving after the log reaches its ceiling and
+// starts losing its beginning — which a count of the lines being held does not.
+func (q *Queue) LogSince(id string, seq int) ([]string, int, error) {
+	q.mu.RLock()
+	held, found := q.jobs[id]
+	q.mu.RUnlock()
+
+	if !found {
+		return nil, 0, fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+
+	fresh, next := held.log.since(seq)
+
+	return fresh, next, nil
+}
+
 // Forget drops a job the queue no longer needs to remember.
 //
 // Only one that has ended. Forgetting a running job would take the row off the

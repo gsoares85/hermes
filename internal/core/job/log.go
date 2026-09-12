@@ -40,14 +40,22 @@ type Log interface {
 // log of every backup into the shape of the pipe rather than of what pg_dump
 // said.
 type logbook struct {
-	mu       sync.Mutex
-	lines    []string
-	partial  []byte
-	bytes    int
-	dropped  int
-	maxLines int
-	maxBytes int
-	closed   bool
+	mu      sync.Mutex
+	lines   []string
+	partial []byte
+	bytes   int
+	// discarded is how many lines have left by the front, and it is also the
+	// sequence of the line now at the front: the two are the same number
+	// because nothing is ever removed from anywhere else. It is what lets a
+	// reader ask for what is new without holding a place that shifts under it.
+	discarded int
+	// truncated is how many lines were cut for being longer than the whole
+	// log. Counted apart from discarded because a cut line is still in the
+	// buffer: adding it to the sequence would skip a line that is there.
+	truncated int
+	maxLines  int
+	maxBytes  int
+	closed    bool
 }
 
 func newLogbook(maxLines, maxBytes int) *logbook {
@@ -109,7 +117,7 @@ func (l *logbook) keep(line string) {
 	for len(l.lines) > l.maxLines || (l.bytes > l.maxBytes && len(l.lines) > 1) {
 		l.bytes -= len(l.lines[0])
 		l.lines = l.lines[1:]
-		l.dropped++
+		l.discarded++
 	}
 }
 
@@ -134,7 +142,7 @@ func (l *logbook) trimmed(line string) string {
 		cut--
 	}
 
-	l.dropped++
+	l.truncated++
 
 	return line[:cut]
 }
@@ -171,10 +179,39 @@ func (l *logbook) read() []string {
 	return lines
 }
 
-// droppedCount answers how many lines the ceiling took.
+// droppedCount answers how much the ceiling took: lines that left by the
+// front, and lines that were cut for being longer than the whole log.
 func (l *logbook) droppedCount() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	return l.dropped
+	return l.discarded + l.truncated
+}
+
+// since answers the lines filed after a sequence, and the sequence to ask with
+// next time.
+//
+// A sequence rather than a count of what is held, because what is held stops
+// growing the moment the log is full: from then on a line arrives at the back
+// for every line that leaves the front, and a reader holding a length would
+// see the same number for ever and conclude that nothing had been written. The
+// sequence counts what has been filed since the log began, which only ever
+// goes up.
+//
+// A reader that fell behind the front is given what survives and no warning:
+// what it missed is the same thing droppedCount reports, and the panel already
+// says so above the log.
+func (l *logbook) since(seq int) ([]string, int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	first := l.discarded
+	next := first + len(l.lines)
+
+	seq = min(max(seq, first), next)
+
+	fresh := make([]string, next-seq)
+	copy(fresh, l.lines[seq-first:])
+
+	return fresh, next
 }

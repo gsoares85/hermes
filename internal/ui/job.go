@@ -239,6 +239,10 @@ type JobWatcher struct {
 	// What the window has already been told, so that a sample says only what
 	// changed. Without it the window is woken for every job in the history on
 	// every tick, for ever.
+	//
+	// The log is remembered as a sequence rather than as a count of lines
+	// held: a full log keeps its length while it loses its beginning, so a
+	// count would stop moving exactly when the job is at its most talkative.
 	mu    sync.Mutex
 	said  map[string]JobProgressView
 	lines map[string]int
@@ -346,7 +350,11 @@ func (s *JobWatcher) progressOf(one job.View) {
 // a tick for a verbose restore, which is the budget the ceiling on the log was
 // put there to keep.
 func (s *JobWatcher) logOf(one job.View) {
-	lines, err := s.queue.Log(one.ID)
+	s.mu.Lock()
+	told := s.lines[one.ID]
+	s.mu.Unlock()
+
+	fresh, next, err := s.queue.LogSince(one.ID, told)
 	if err != nil {
 		// The job was forgotten between the listing and now. There is nothing
 		// to say about a job that is gone.
@@ -354,15 +362,7 @@ func (s *JobWatcher) logOf(one job.View) {
 	}
 
 	s.mu.Lock()
-	told := s.lines[one.ID]
-	// A log that has dropped its beginning is shorter than what was sent, and
-	// treating the count as an index into it would send nothing ever again.
-	if told > len(lines) {
-		told = 0
-	}
-
-	fresh := lines[told:]
-	s.lines[one.ID] = len(lines)
+	s.lines[one.ID] = next
 	s.mu.Unlock()
 
 	if len(fresh) == 0 {

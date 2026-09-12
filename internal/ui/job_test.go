@@ -675,3 +675,67 @@ func remember(t *testing.T, history store.JobHistory, record store.JobRecord) {
 		t.Fatalf("filling the history: %v", err)
 	}
 }
+
+// A log that has reached its ceiling is a log that is still being written. It
+// is the case the ceiling exists for — pg_restore --verbose, ten thousand
+// lines — and it is the one where the window used to stop hearing anything:
+// the count of lines held stops growing when old ones leave by the front, so
+// anything that treats that count as a place in the stream never moves again.
+func TestNewLinesKeepArrivingAfterTheLogIsFull(t *testing.T) {
+	t.Parallel()
+
+	const ceiling = 10
+
+	into := &recorder{}
+	queue := job.NewQueue(job.WithLogLines(ceiling))
+	watcher := ui.NewJobWatcher(queue, into)
+
+	filled := make(chan struct{})
+	more := make(chan struct{})
+	done := make(chan struct{})
+
+	if _, err := queue.Submit(spec("a verbose job"), runnerFunc(func(_ context.Context, report job.Reporter) error {
+		for i := range ceiling {
+			if _, err := fmt.Fprintf(report.Log(), "filling %d\n", i); err != nil {
+				return err
+			}
+		}
+
+		close(filled)
+		<-more
+
+		for i := range 7 {
+			if _, err := fmt.Fprintf(report.Log(), "after the ceiling %d\n", i); err != nil {
+				return err
+			}
+		}
+
+		close(done)
+
+		return nil
+	})); err != nil {
+		t.Fatalf("Submit(...) = _, %v, want no error", err)
+	}
+
+	<-filled
+	watcher.Sample()
+	sent := len(into.named("job:log"))
+
+	close(more)
+	<-done
+	watcher.Sample()
+
+	var arrived int
+	for _, event := range into.named("job:log")[sent:] {
+		view, is := event.data.(ui.JobLogView)
+		if !is {
+			t.Fatalf("a log event carried %T, want a JobLogView", event.data)
+		}
+
+		arrived += len(view.Lines)
+	}
+
+	if arrived != 7 {
+		t.Errorf("the window was told %d lines written after the log filled up, want 7", arrived)
+	}
+}
