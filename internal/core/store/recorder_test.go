@@ -188,6 +188,32 @@ func recent(t *testing.T, history store.JobHistory) []store.JobRecord {
 	return got
 }
 
+// waitForRecord waits for the history to hold a job, and gives up rather than
+// hanging when it never does.
+//
+// A wait rather than a read, because the queue does not write the history: an
+// observer does, and observers are told after the job has ended and after
+// whoever was waiting for it has been woken. Reading the moment Wait returns
+// is reading before the thing being tested has happened.
+func waitForRecord(t *testing.T, history store.JobHistory, id string) store.JobRecord {
+	t.Helper()
+
+	giveUp := time.Now().Add(5 * time.Second)
+	for {
+		for _, record := range recent(t, history) {
+			if record.ID == id {
+				return record
+			}
+		}
+
+		if time.Now().After(giveUp) {
+			t.Fatalf("job %s never reached the history", id)
+		}
+
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func onlyRecord(t *testing.T, history store.JobHistory) store.JobRecord {
 	t.Helper()
 
@@ -232,16 +258,13 @@ func TestAJobCancelledBeforeItStartedReachesTheHistory(t *testing.T) {
 		t.Fatalf("waiting for the job to end: %v", err)
 	}
 
-	got := recent(t, history)
-	if len(got) != 1 {
-		t.Fatalf("the history holds %d records, want the job that was called off", len(got))
-	}
-	if got[0].State != job.Cancelled {
-		t.Errorf("the record is %v, want %v", got[0].State, job.Cancelled)
+	got := waitForRecord(t, history, id)
+	if got.State != job.Cancelled {
+		t.Errorf("the record is %v, want %v", got.State, job.Cancelled)
 	}
 	// The case the record was shaped for: no beginning, because there was none.
-	if !got[0].Started.IsZero() {
-		t.Errorf("the record says it started at %v, want no beginning at all", got[0].Started)
+	if !got.Started.IsZero() {
+		t.Errorf("the record says it started at %v, want no beginning at all", got.Started)
 	}
 }
 
@@ -288,7 +311,7 @@ func TestNoSecretReachesTheHistory(t *testing.T) {
 		t.Fatalf("waiting for the job to end: %v", err)
 	}
 
-	got := onlyRecord(t, history)
+	got := waitForRecord(t, history, id)
 	written := got.Title + "\n" + got.Err + "\n" + strings.Join(got.Log, "\n")
 
 	if strings.Contains(written, "hunter2") {
