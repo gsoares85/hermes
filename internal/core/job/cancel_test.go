@@ -158,25 +158,38 @@ func TestAJobSaysItIsStoppingWhileItStops(t *testing.T) {
 // Cancelled before it was picked up. Nothing ran, so there is nothing to wind
 // down — and the work must not run afterwards, which is the part that would
 // start a backup somebody had already called off.
+//
+// Whether the goroutine of a job gets to it before the cancellation does is
+// the scheduler's to decide, and nothing here can hold it back: a job is
+// submitted and running a moment later. So this submits and cancels until it
+// has seen the case it is about, and fails rather than passes if it never
+// does — which is what separates a test that waits for a rare interleaving
+// from one that quietly stops testing anything.
 func TestCancellingWorkThatHasNotStarted(t *testing.T) {
 	t.Parallel()
 
-	queue := job.NewQueue()
+	for range 100 {
+		var ran atomicFlag
+		view := cancelled(t, job.NewQueue(), runnerFunc(func(context.Context, job.Reporter) error {
+			ran.set()
 
-	var ran atomicFlag
-	view := cancelled(t, queue, runnerFunc(func(context.Context, job.Reporter) error {
-		ran.set()
+			return nil
+		}), nil)
 
-		return nil
-	}), nil)
+		if view.State != job.Cancelled {
+			// The work was picked up first and ran to its own end. That is the
+			// other case, tested elsewhere; this one has not happened yet.
+			continue
+		}
 
-	if view.State != job.Cancelled {
-		t.Errorf("the job is %v, want %v", view.State, job.Cancelled)
+		if ran.get() {
+			t.Fatal("the work ran after the job was cancelled, want it never to start")
+		}
+
+		return
 	}
 
-	if ran.get() {
-		t.Error("the work ran after the job was cancelled, want it never to start")
-	}
+	t.Fatal("a job was never cancelled before its work started, so nothing here was tested")
 }
 
 // The end of a job that never started is an end like any other, and everybody
