@@ -269,8 +269,15 @@ jobs:
       # And the check above is only worth anything while the driver is really
       # in there: a CLI that had stopped linking SQLite would pass it by not
       # containing the thing it is about.
+      #
+      # Read with cgo off, like the build it is about. Build constraints choose
+      # different files depending on it — the standard library alone swaps
+      # several — so a graph read with cgo on is a graph of a binary nobody
+      # ships, and the check would be answering about the wrong one.
       - name: Prove the headless binary carries the database it was built for
         shell: bash
+        env:
+          CGO_ENABLED: 0
         run: |
           go list -deps ./cmd/hermes-cli | grep -q '^modernc.org/sqlite$' || {
             echo "cmd/hermes-cli no longer links the SQLite driver, so the cgo-free build proves nothing"
