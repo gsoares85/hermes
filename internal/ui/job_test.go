@@ -826,3 +826,81 @@ func (c *countingQueue) count() int {
 
 	return c.asked
 }
+
+// The history is walkable: what the panel shows on opening is the newest page,
+// and this is how somebody reaches what came before it. Without it the keyset
+// paging underneath is built, tested and unreachable — fifty rows and no way
+// to the fifty-first.
+func TestTheHistoryCanBeWalkedBackwards(t *testing.T) {
+	t.Parallel()
+
+	history := store.NewJobMemory()
+	for i := range store.DefaultPageSize + 3 {
+		record := lastNight(fmt.Sprintf("job-%03d", i), job.Done)
+		record.Ended = record.Ended.Add(time.Duration(i) * time.Minute)
+		remember(t, history, record)
+	}
+
+	service := ui.NewJobService(job.NewQueue(), history)
+
+	first := listedJobs(t, service)
+	if len(first) != store.DefaultPageSize {
+		t.Fatalf("the panel opened on %d rows, want a page of %d", len(first), store.DefaultPageSize)
+	}
+
+	last := first[len(first)-1]
+
+	older, err := service.Older(t.Context(), ui.JobCursor{EndedAt: last.EndedAt, ID: last.ID})
+	if err != nil {
+		t.Fatalf("Older(...) = _, %v, want no error", err)
+	}
+	if len(older) != 3 {
+		t.Fatalf("the page after the first holds %d rows, want the 3 that were left", len(older))
+	}
+
+	// No row twice, and none missed between the two pages.
+	seen := make(map[string]bool, len(first)+len(older))
+	for _, view := range append(append([]ui.JobView{}, first...), older...) {
+		if seen[view.ID] {
+			t.Errorf("job %s is on both pages", view.ID)
+		}
+		seen[view.ID] = true
+	}
+	if len(seen) != store.DefaultPageSize+3 {
+		t.Errorf("the two pages hold %d jobs between them, want %d", len(seen), store.DefaultPageSize+3)
+	}
+}
+
+// The end of the history is an empty answer, not a failure. A panel that has
+// reached the beginning of what happened has reached it.
+func TestWalkingPastTheBeginningOfTheHistory(t *testing.T) {
+	t.Parallel()
+
+	history := store.NewJobMemory()
+	remember(t, history, lastNight("the only one", job.Done))
+
+	service := ui.NewJobService(job.NewQueue(), history)
+
+	only := listedJobs(t, service)[0]
+
+	older, err := service.Older(t.Context(), ui.JobCursor{EndedAt: only.EndedAt, ID: only.ID})
+	if err != nil {
+		t.Fatalf("Older(...) = _, %v, want no error", err)
+	}
+	if len(older) != 0 {
+		t.Errorf("there are %d jobs before the only one there is", len(older))
+	}
+}
+
+// A cursor the window could not have been given is refused rather than read as
+// the beginning, which would answer the newest page to somebody asking for the
+// oldest and never end.
+func TestWalkingFromSomewhereThatIsNotAPlace(t *testing.T) {
+	t.Parallel()
+
+	service := ui.NewJobService(job.NewQueue(), store.NewJobMemory())
+
+	if _, err := service.Older(t.Context(), ui.JobCursor{EndedAt: "yesterday", ID: "one"}); err == nil {
+		t.Error("Older(...) = _, nil for a cursor that names no time, want the failure")
+	}
+}

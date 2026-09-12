@@ -19,6 +19,7 @@ const backend = vi.hoisted(() => ({
   log: vi.fn(),
   cancel: vi.fn(),
   forget: vi.fn(),
+  older: vi.fn(),
 }));
 
 const listeners = vi.hoisted(() => new Map<string, (event: { data: unknown }) => void>());
@@ -35,6 +36,7 @@ vi.mock("../../../bindings/github.com/gsoares85/hermes/internal/ui", () => ({
     Log: (...args: unknown[]): unknown => backend.log(...args),
     Cancel: (...args: unknown[]): unknown => backend.cancel(...args),
     Forget: (...args: unknown[]): unknown => backend.forget(...args),
+    Older: (...args: unknown[]): unknown => backend.older(...args),
   },
 }));
 
@@ -89,6 +91,7 @@ beforeEach(() => {
   backend.log.mockReturnValue(cancellable([]));
   backend.cancel.mockReturnValue(cancellable(undefined));
   backend.forget.mockReturnValue(cancellable(undefined));
+  backend.older.mockReturnValue(cancellable([]));
 });
 
 describe("the jobs panel", () => {
@@ -290,6 +293,49 @@ describe("the jobs panel", () => {
     expect(await screen.findByText(/line 1199/)).toBeTruthy();
     expect(screen.queryByText(/line 0\n/)).toBeNull();
     expect(screen.getByText(/700 earlier lines are not shown/)).toBeTruthy();
+  });
+
+  /**
+   * What the panel opens on is what is running plus the newest page of what
+   * has run. The way to what came before that is a page at a time, asked for
+   * by the oldest row on screen — so a job ending while somebody reads does
+   * not shift what comes next.
+   */
+  it("walks back through the history a page at a time", async () => {
+    backend.list.mockReturnValue(
+      cancellable([job("newer", { state: "done", endedAt: "2026-09-11T10:00:00Z" })]),
+    );
+    backend.older.mockReturnValue(
+      cancellable([job("older", { state: "done", endedAt: "2026-09-10T10:00:00Z" })]),
+    );
+
+    render(<JobsPanel onClose={vi.fn()} />);
+    await screen.findByText("shop newer");
+
+    expect(screen.queryByText("shop older")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show earlier jobs" }));
+
+    expect(await screen.findByText("shop older")).toBeTruthy();
+    expect(backend.older).toHaveBeenCalledWith({ endedAt: "2026-09-11T10:00:00Z", id: "newer" });
+  });
+
+  // The beginning of the history is not a failure, and there is no point
+  // offering a way further back from it.
+  it("stops offering earlier jobs when there are none", async () => {
+    backend.list.mockReturnValue(
+      cancellable([job("only", { state: "done", endedAt: "2026-09-11T10:00:00Z" })]),
+    );
+    backend.older.mockReturnValue(cancellable([]));
+
+    render(<JobsPanel onClose={vi.fn()} />);
+    await screen.findByText("shop only");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show earlier jobs" }));
+
+    await waitFor((): void => {
+      expect(screen.queryByRole("button", { name: "Show earlier jobs" })).toBeNull();
+    });
   });
 
   // A job that cannot say how far along it is draws a bar that moves rather

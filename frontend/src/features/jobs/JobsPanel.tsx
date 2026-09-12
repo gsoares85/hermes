@@ -9,6 +9,7 @@ import {
   jobLog,
   jobs as listJobs,
   merged,
+  olderJobs,
   ordered,
   remaining,
   watchJobs,
@@ -36,6 +37,10 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
   const openedRef = useRef("");
   const [log, setLog] = useState<readonly string[]>([]);
   const [notice, setNotice] = useState("");
+  // Whether there may be more history further back. It starts as a maybe,
+  // because the only way to find out is to ask, and it becomes a no when an
+  // asking comes back empty.
+  const [earlier, setEarlier] = useState(true);
 
   // The reconciliation. Declared above the effects that call it, for the
   // reason the window's own reload is: a function declaration hoists, so
@@ -44,7 +49,12 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
   const reconcile = useCallback((): void => {
     listJobs()
       .then((truth): void => {
+        // What was read is what is running plus the newest page of what has
+        // run, so anything fetched from further back is dropped: the truth
+        // replaces the panel rather than being merged into it, and the walk
+        // back begins again from the row this ends on.
         setHeld(truth);
+        setEarlier(true);
       })
       .catch((err: unknown): void => {
         // Running outside the desktop shell, or the Go side is gone. An empty
@@ -53,6 +63,35 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
         setNotice(String(err));
       });
   }, []);
+
+  // The walk back through what has already run. The page is asked for by the
+  // oldest row on screen rather than by a count of rows to skip, so a job
+  // ending while somebody reads does not shift what comes next.
+  function showEarlier(): void {
+    const oldest = ordered(held)
+      .filter((job): boolean => isOver(job.state))
+      .at(-1);
+    if (oldest === undefined) {
+      setEarlier(false);
+
+      return;
+    }
+
+    olderJobs(oldest)
+      .then((older): void => {
+        if (older.length === 0) {
+          // The beginning of the history. There is nothing older to ask for.
+          setEarlier(false);
+
+          return;
+        }
+
+        setHeld((current): JobView[] => [...current, ...older]);
+      })
+      .catch((err: unknown): void => {
+        setNotice(String(err));
+      });
+  }
 
   useEffect((): void => {
     reconcile();
@@ -216,6 +255,18 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
             </li>
           ))}
         </ul>
+      )}
+
+      {/*
+        The way back through what has already run. It is here rather than a
+        scroll that fetches as it reaches the bottom, because a person reading
+        a log at the bottom of the panel is not asking for the next page — and
+        a page fetched behind them is a row that moves while they read.
+      */}
+      {earlier && shown.some((job): boolean => isOver(job.state)) && (
+        <button type="button" className="jobs__earlier" onClick={showEarlier}>
+          Show earlier jobs
+        </button>
       )}
     </section>
   );

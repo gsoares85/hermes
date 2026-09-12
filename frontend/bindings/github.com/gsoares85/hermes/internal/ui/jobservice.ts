@@ -77,3 +77,20 @@ export function List(): $CancellablePromise<$models.JobView[] | null> {
 export function Log(id: string): $CancellablePromise<string[] | null> {
     return $Call.ByID(2942170097, id);
 }
+
+/**
+ * Older answers the jobs that ended before the row the window already has.
+ * 
+ * It is what makes the history walkable: List answers what is running plus the
+ * most recent page, which is the panel on opening, and this is what a person
+ * asks for when the answer they want is further back than that. An empty
+ * answer is the end of the history rather than a failure — there is nothing
+ * older.
+ * 
+ * A page at a time, by the row it left off at rather than by how many rows to
+ * skip: the history grows while somebody reads it, and counting from the start
+ * would show one row twice and miss the one after it.
+ */
+export function Older(after: $models.JobCursor): $CancellablePromise<$models.JobView[] | null> {
+    return $Call.ByID(1506543873, after);
+}

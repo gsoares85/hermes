@@ -163,6 +163,61 @@ func (s *JobService) List(ctx context.Context) ([]JobView, error) {
 	return views, nil
 }
 
+// JobCursor is where a page of the history stopped, as the window holds it.
+//
+// The time crosses as the string it was drawn from rather than as a number,
+// so that the window hands back exactly what it was given and nothing has to
+// be reassembled from two halves that could disagree.
+type JobCursor struct {
+	EndedAt string `json:"endedAt"`
+	ID      string `json:"id"`
+}
+
+// Older answers the jobs that ended before the row the window already has.
+//
+// It is what makes the history walkable: List answers what is running plus the
+// most recent page, which is the panel on opening, and this is what a person
+// asks for when the answer they want is further back than that. An empty
+// answer is the end of the history rather than a failure — there is nothing
+// older.
+//
+// A page at a time, by the row it left off at rather than by how many rows to
+// skip: the history grows while somebody reads it, and counting from the start
+// would show one row twice and miss the one after it.
+func (s *JobService) Older(ctx context.Context, after JobCursor) ([]JobView, error) {
+	cursor, err := cursorOf(after)
+	if err != nil {
+		return nil, err
+	}
+
+	remembered, err := s.history.Recent(ctx, store.Page{After: cursor})
+	if err != nil {
+		return nil, fmt.Errorf("reading what ran before: %w", err)
+	}
+
+	views := make([]JobView, 0, len(remembered))
+	for _, record := range remembered {
+		views = append(views, viewOfRecord(record))
+	}
+
+	return views, nil
+}
+
+// cursorOf reads back what the window was given. The zero cursor is the
+// newest, which is what a window asking without one means.
+func cursorOf(after JobCursor) (store.Cursor, error) {
+	if after.EndedAt == "" {
+		return store.Cursor{}, nil
+	}
+
+	ended, err := time.Parse(time.RFC3339Nano, after.EndedAt)
+	if err != nil {
+		return store.Cursor{}, fmt.Errorf("reading the place to carry on from: %w", err)
+	}
+
+	return store.Cursor{Ended: ended, ID: after.ID}, nil
+}
+
 // Log answers everything a job has said.
 //
 // The whole log, unlike the events, because this is what a panel being opened

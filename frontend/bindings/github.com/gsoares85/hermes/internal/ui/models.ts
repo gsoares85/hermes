@@ -104,6 +104,18 @@ export interface DiagnosisView {
 }
 
 /**
+ * JobCursor is where a page of the history stopped, as the window holds it.
+ * 
+ * The time crosses as the string it was drawn from rather than as a number,
+ * so that the window hands back exactly what it was given and nothing has to
+ * be reassembled from two halves that could disagree.
+ */
+export interface JobCursor {
+    "endedAt": string;
+    "id": string;
+}
+
+/**
  * JobProgressView is how far along a job is, as the window reads it.
  * 
  * Durations cross as milliseconds. A Go duration marshals as a count of

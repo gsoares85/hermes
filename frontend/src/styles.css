@@ -1528,6 +1528,24 @@ body {
   padding: 0;
 }
 
+/* The way back through what has already run. Plain, and at the foot of the
+   list where somebody arrives at the end of what is on screen. */
+.jobs__earlier {
+  align-self: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+}
+
+.jobs__earlier:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
 .jobs__job {
   border-bottom: 1px solid var(--border);
   display: flex;

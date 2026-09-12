@@ -36,6 +36,17 @@ export async function jobs(): Promise<JobView[]> {
   return (await JobService.List()) ?? [];
 }
 
+/**
+ * The jobs that ended before this one, a page at a time.
+ *
+ * `jobs()` answers what is running plus the most recent page of what has run,
+ * which is the panel on opening. This is how somebody reaches further back
+ * than that. An empty answer is the beginning of the history, not a failure.
+ */
+export async function olderJobs(after: JobView): Promise<JobView[]> {
+  return (await JobService.Older({ endedAt: after.endedAt, id: after.id })) ?? [];
+}
+
 /** Everything a job has said. */
 export async function jobLog(id: string): Promise<string[]> {
   return (await JobService.Log(id)) ?? [];
