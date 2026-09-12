@@ -243,13 +243,27 @@ describe("what the window is handed by an event", () => {
       log: (): void => undefined,
     });
 
-    for (const nonsense of [null, undefined, "a job", 7, {}, { id: "" }, { id: 7 }]) {
+    for (const nonsense of [
+      null,
+      undefined,
+      "a job",
+      7,
+      {},
+      { id: "" },
+      { id: 7 },
+      // A job without progress is the one that does not merely draw wrong: the
+      // bar reads into it for every job that has not ended, so the panel
+      // throws while rendering and takes itself down.
+      { id: "one", state: "running" },
+      { id: "one", state: "running", progress: null },
+      { id: "one", state: "running", progress: "half" },
+    ]) {
       pushEvent("job:state", nonsense);
     }
 
     expect(seen).toEqual([]);
 
-    pushEvent("job:state", { id: "one", state: "running" });
+    pushEvent("job:state", { id: "one", state: "running", progress: progress() });
 
     expect(seen).toEqual(["one"]);
   });

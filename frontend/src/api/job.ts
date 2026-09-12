@@ -134,19 +134,27 @@ export function watchJobs(on: {
 /**
  * The job in an event payload, or null when it does not carry one.
  *
- * Only the identifier is required: a progress event carries where a job got to
- * and nothing else about it, and a state event carries the whole row. What the
- * caller does with either is merge it into what it already has, so the check
- * is that this is a job at all and not that it is a complete one.
+ * An identifier and progress, and nothing beyond them: a progress event
+ * carries where a job got to and nothing else about it, while a state event
+ * carries the whole row, and what the caller does with either is merge it into
+ * what it already has.
+ *
+ * Progress is required because the panel reads into it for every job that has
+ * not ended — the bar asks whether it is indeterminate — so an event that
+ * arrived without it would not draw a row with a missing bar, it would throw
+ * while rendering and take the panel with it.
  */
 function jobViewIn(data: unknown): JobView | null {
   if (typeof data !== "object" || data === null) {
     return null;
   }
 
-  const { id } = data as Record<string, unknown>;
+  const { id, progress } = data as Record<string, unknown>;
+  if (typeof id !== "string" || id === "") {
+    return null;
+  }
 
-  return typeof id === "string" && id !== "" ? (data as JobView) : null;
+  return typeof progress === "object" && progress !== null ? (data as JobView) : null;
 }
 
 /** The lines in a log event, or null when it does not carry any. */
