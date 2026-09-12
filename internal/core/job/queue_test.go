@@ -443,8 +443,17 @@ func TestTheSecretIsGoneFromTheTitleAndTheStep(t *testing.T) {
 		Kind:  "backup",
 		Title: "postgres://reporting:hunter2@db.example.com/analytics",
 	}, runnerFunc(func(_ context.Context, report job.Reporter) error {
+		// Twice, with the same step and then a different one: the first is
+		// what a job repeats per row, and the second is what proves the
+		// repetition is recognised rather than assumed.
+		for range 2 {
+			report.Report(job.Progress{
+				Step: "copying from postgres://reporting:hunter2@db.example.com/analytics",
+			})
+		}
+
 		report.Report(job.Progress{
-			Step: "copying from postgres://reporting:hunter2@db.example.com/analytics",
+			Step: "copying from postgres://reporting:swordfish@db.example.com/billing",
 		})
 
 		return nil
@@ -464,8 +473,11 @@ func TestTheSecretIsGoneFromTheTitleAndTheStep(t *testing.T) {
 	if strings.Contains(view.Title, "hunter2") {
 		t.Errorf("the title reads %q, want the password taken out of it", view.Title)
 	}
-	if strings.Contains(view.Progress.Step, "hunter2") {
+	if strings.Contains(view.Progress.Step, "swordfish") {
 		t.Errorf("the step reads %q, want the password taken out of it", view.Progress.Step)
+	}
+	if !strings.Contains(view.Progress.Step, "xxxxx") {
+		t.Errorf("the step reads %q, want the password replaced in place", view.Progress.Step)
 	}
 }
 

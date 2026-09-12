@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gsoares85/hermes/internal/core/secret"
@@ -178,7 +179,24 @@ type record struct {
 	// derived from it is derived at the moment it is read and not at the
 	// moment it was said — which is what lets Elapsed grow while a job runs
 	// without the work having to report anything for it to.
-	said Progress
+	//
+	// Behind a pointer of its own rather than the queue's lock, because
+	// reporting is meant to be cheap enough to do per row: a COPY of a million
+	// rows that took the lock the whole queue is read through would put every
+	// job and every sample of the panel behind one COPY.
+	said atomic.Pointer[Progress]
+	// over says the job has reached an end, for the benefit of work that keeps
+	// talking afterwards. Beside the state rather than read from it for the
+	// same reason as above: asking costs a lock, and this is asked per row.
+	over atomic.Bool
+	// step is the last step reported and what it came to after redaction.
+	//
+	// Taking a secret out of a string means looking through it for several
+	// shapes of one, which costs about three microseconds — nothing at all
+	// once, and three seconds over a COPY of a million rows. A step names the
+	// table being copied, so it is the same string for all million of them:
+	// looked at once, and after that recognised.
+	step atomic.Pointer[redactedStep]
 	log  *logbook
 	// ended is where this job comes in the order the jobs finished, and is
 	// zero until it has. It decides which one the queue lets go of first.
@@ -187,6 +205,12 @@ type record struct {
 	// a context the queue holds, so that cancelling one job is exactly that.
 	stop context.CancelFunc
 	done chan struct{}
+}
+
+// redactedStep is a step as the work said it and as it is kept.
+type redactedStep struct {
+	said string
+	kept string
 }
 
 // NewQueue creates an empty queue.
@@ -342,18 +366,30 @@ func (r reporter) Log() Log {
 // nobody joined — must not rewrite the progress of a job somebody has already
 // been told is over, so a job that has ended stops listening.
 func (r reporter) Report(said Progress) {
-	r.queue.mu.Lock()
-	defer r.queue.mu.Unlock()
-
-	if r.held.view.State.Over() {
+	if r.held.over.Load() {
 		return
 	}
 
 	// The step is what the work says it is doing, in its own words, and those
 	// words are often a table or a server it was given. Same door as the title
-	// and the log.
-	said.Step = secret.Redact(said.Step)
-	r.held.said = said
+	// and the log — but recognised rather than looked through again, because
+	// the step of a million rows is one string said a million times.
+	said.Step = r.kept(said.Step)
+
+	r.held.said.Store(&said)
+}
+
+// kept answers the step as the job keeps it: without the secret, and without
+// looking for one in a string this job has already been told.
+func (r reporter) kept(step string) string {
+	if last := r.held.step.Load(); last != nil && last.said == step {
+		return last.kept
+	}
+
+	kept := secret.Redact(step)
+	r.held.step.Store(&redactedStep{said: step, kept: kept})
+
+	return kept
 }
 
 // finish puts a job into the end its outcome calls for and releases whoever is
@@ -403,6 +439,7 @@ func (q *Queue) ended(held *record, end State, failure error) *View {
 
 	held.view.State = moved
 	held.view.Ended = q.now()
+	held.over.Store(true)
 
 	q.ends++
 	held.ended = q.ends
@@ -538,7 +575,12 @@ func (q *Queue) viewOf(held *record) View {
 		elapsed = until.Sub(held.view.Started)
 	}
 
-	view.Progress = viewOf(held.said, elapsed)
+	var said Progress
+	if latest := held.said.Load(); latest != nil {
+		said = *latest
+	}
+
+	view.Progress = viewOf(said, elapsed)
 	view.Dropped = held.log.droppedCount()
 
 	return view
