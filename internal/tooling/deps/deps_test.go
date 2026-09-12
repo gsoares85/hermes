@@ -56,6 +56,14 @@ var projectRules = []deps.Rule{
 		// internal/credential is the same shape: handing a password to a child
 		// process means files and process environments, which is infrastructure
 		// and stays outside. See ADR-0010.
+		//
+		// internal/sqlitestore is the same shape once more, for the local
+		// state: internal/core/store owns the concept of what is remembered
+		// between runs, and that package is the only one that knows it is a
+		// database. The rule above forbidding database/sql in the core is not
+		// enough on its own — reaching the store through its own package would
+		// put the driver one hop from the domain without importing it. See
+		// ADR-0014.
 		Reason:   "the core layer must not reach an implementation of the vault",
 		Packages: module + "/internal/core",
 		Forbidden: []string{
@@ -63,6 +71,7 @@ var projectRules = []deps.Rule{
 			module + "/internal/credential",
 			module + "/internal/filestore",
 			module + "/internal/proc",
+			module + "/internal/sqlitestore",
 		},
 	},
 	{
@@ -123,6 +132,7 @@ var projectRules = []deps.Rule{
 			module + "/internal/credential",
 			module + "/internal/filestore",
 			module + "/internal/proc",
+			module + "/internal/sqlitestore",
 		},
 	},
 }
@@ -247,6 +257,18 @@ func TestTheProjectRulesForbidReachingForAVault(t *testing.T) {
 		},
 		"the file store in the UI": {
 			module + "/internal/ui", module + "/internal/filestore",
+		},
+
+		// The local state, which does not exist yet: internal/core/store is
+		// the contract and internal/sqlitestore will be the only package that
+		// knows it is a database. A rule written for a package nothing imports
+		// yet passes exactly as well when it has been misspelled or never
+		// added, which is what these two cases are for.
+		"the SQLite store in the core": {
+			module + "/internal/core/store", module + "/internal/sqlitestore",
+		},
+		"the SQLite store in the UI": {
+			module + "/internal/ui", module + "/internal/sqlitestore",
 		},
 
 		// The catalog is the package that most wants to reach for a driver:
