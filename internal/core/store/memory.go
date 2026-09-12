@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 // The double answers the contract, checked where it is written rather than
@@ -46,6 +47,14 @@ func (m *JobMemory) Save(ctx context.Context, record JobRecord) error {
 	// as it is, the history would be rewritten by whoever reused the buffer —
 	// and the buffer this comes from is reused by design.
 	record.Log = slices.Clone(record.Log)
+
+	// To the millisecond and in UTC, which is what the contract promises and
+	// what a store keeping a count of milliseconds since the epoch can offer.
+	// A map could keep the nanosecond and the zone it was handed, and that is
+	// exactly why it must not: a double that answers something no file ever
+	// will proves every use case above it against a store nobody has.
+	record.Started = kept(record.Started)
+	record.Ended = kept(record.Ended)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -107,6 +116,17 @@ func (m *JobMemory) Recent(ctx context.Context, page Page) ([]JobRecord, error) 
 	}
 
 	return found, nil
+}
+
+// kept is an instant as a history holds it, and the zero time left alone: a
+// job that never started has no beginning, and truncating nothing would turn
+// that into the epoch.
+func kept(at time.Time) time.Time {
+	if at.IsZero() {
+		return at
+	}
+
+	return at.Truncate(time.Millisecond).UTC()
 }
 
 // Forget removes a job from the history.

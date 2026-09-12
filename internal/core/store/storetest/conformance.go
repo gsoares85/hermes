@@ -60,6 +60,8 @@ func Run(t *testing.T, storage Storage) {
 		{"a record with no identifier is refused", recordWithoutIdentifierIsRefused},
 		{"a job that ended at no particular time is refused", recordWithoutAnEndIsRefused},
 		{"a job that never started keeps its missing beginning", jobThatNeverStartedKeepsNoBeginning},
+		{"an instant comes back to the millisecond", instantComesBackToTheMillisecond},
+		{"two jobs inside one millisecond are both paged", jobsInsideOneMillisecondArePaged},
 		{"a cancelled context writes nothing", cancelledContextWritesNothing},
 		{"the log is kept, not borrowed", logIsKeptNotBorrowed},
 	}
@@ -351,6 +353,70 @@ func jobThatNeverStartedKeepsNoBeginning(t *testing.T, open Open) {
 
 	if got := find(t, history, never.ID); !got.Started.IsZero() {
 		t.Errorf("the job came back as having started at %v, want no beginning at all", got.Started)
+	}
+}
+
+// The precision the contract promises, asked for exactly. A store that keeps
+// more than a millisecond is not more generous, it is different: the double
+// every use case is proven against would answer something the file on a user's
+// machine never can, and the difference would surface there rather than here.
+//
+// The location is not part of the promise — an instant is an instant — so what
+// is compared is the instant, and what is required is that nothing below a
+// millisecond survives to be compared.
+func instantComesBackToTheMillisecond(t *testing.T, open Open) {
+	history := opened(t, open)
+
+	// A time with something in every field below the second, so that a store
+	// keeping nanoseconds and one truncating them cannot agree by accident.
+	odd := time.Date(2026, time.September, 12, 14, 30, 15, 123_456_789, time.UTC)
+	truncated := odd.Truncate(time.Millisecond)
+
+	written := ended(identifier(t))
+	written.Started = odd
+	written.Ended = odd
+	save(t, history, written)
+
+	got := find(t, history, written.ID)
+	if !got.Ended.Equal(truncated) {
+		t.Errorf("an instant of %v came back as %v, want %v", odd, got.Ended, truncated)
+	}
+	if !got.Started.Equal(truncated) {
+		t.Errorf("a beginning of %v came back as %v, want %v", odd, got.Started, truncated)
+	}
+}
+
+// The same precision, where it decides what somebody sees rather than what a
+// field reads: two jobs that ended inside one millisecond are one millisecond
+// apart for a store that truncates and two nanoseconds apart for one that does
+// not. A cursor built on the first and read by the second loses a row.
+func jobsInsideOneMillisecondArePaged(t *testing.T, open Open) {
+	history := opened(t, open)
+
+	instant := at(10, 0, 0)
+
+	ids := make(map[string]bool, 2)
+	for i := range 2 {
+		record := ended(identifier(t))
+		record.Ended = instant.Add(time.Duration(i) * time.Nanosecond)
+		ids[record.ID] = true
+		save(t, history, record)
+	}
+
+	first := recent(t, history, store.Page{Limit: 1})
+	if len(first) != 1 {
+		t.Fatalf("the first page answered %d records, want 1", len(first))
+	}
+
+	second := recent(t, history, store.Page{Limit: 1, After: first[0].Cursor()})
+	if len(second) != 1 {
+		t.Fatalf("the second page answered %d records, want 1: a job of the same millisecond was lost", len(second))
+	}
+	if second[0].ID == first[0].ID {
+		t.Errorf("both pages answered %q", first[0].ID)
+	}
+	if !ids[second[0].ID] {
+		t.Errorf("the second page answered %q, which is neither of the two jobs saved", second[0].ID)
 	}
 }
 
