@@ -89,6 +89,25 @@ func (c *Command) adopt() error {
 	return nil
 }
 
+// letGo closes the handle of the job object.
+//
+// It is held for as long as the process lives and not a moment longer: while
+// it is open the job holds the tree, and KILL_ON_JOB_CLOSE means closing it
+// would end anything still running in it. After the process has been collected
+// there is nothing left in the job, and a handle kept past that is a handle of
+// the kernel's that this process never gives back — one per backup, for the
+// life of the application.
+//
+// The caller holds the lock.
+func (c *Command) letGo() {
+	if c.group == 0 {
+		return
+	}
+
+	_ = windows.CloseHandle(windows.Handle(c.group))
+	c.group = 0
+}
+
 // killGroup terminates the job, and with it everything the process started.
 func (c *Command) killGroup() error {
 	if c.group == 0 {

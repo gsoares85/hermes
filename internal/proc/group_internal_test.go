@@ -162,3 +162,54 @@ func alive(pid int) bool {
 // touching it. On Windows it is not a signal at all and Signal answers an
 // error for a process that has ended, which is the same question answered.
 func syscallZero() os.Signal { return zeroSignal }
+
+// Whatever the operating system needed held while the process was alive is let
+// go when it has been collected. On Windows that is the handle of the job
+// object: held open it is what makes the tree die together, and kept past the
+// end it is a handle of the kernel's that this process never gives back — one
+// per backup, for the life of the application.
+func TestWhatWasHeldIsLetGoWhenTheProcessEnds(t *testing.T) {
+	t.Parallel()
+
+	command := sleeping(t)
+	if err := command.Start(); err != nil {
+		t.Fatalf("Start() = %v, want no error", err)
+	}
+
+	if runtime.GOOS == "windows" && command.group == 0 {
+		t.Fatal("nothing is held while the process is alive, so the tree is not held together")
+	}
+
+	if err := command.Kill(); err != nil {
+		t.Fatalf("Kill() = %v, want no error", err)
+	}
+
+	_ = command.Wait()
+
+	if runtime.GOOS == "windows" && command.group != 0 {
+		t.Error("the job object is still held after the process was collected")
+	}
+}
+
+// Two callers arrive at the same process: the goroutine that waits for it, and
+// the cancellation that wants to know it is over. Neither is a mistake, and
+// os/exec complains at the second — so the wait happens once and both are told
+// what it found.
+func TestWaitingTwiceAnswersWhatTheFirstWaitFound(t *testing.T) {
+	t.Parallel()
+
+	command := New(os.Args[0], "-test.run=TestNothingMatchesThisName")
+	if err := command.Start(); err != nil {
+		t.Fatalf("Start() = %v, want no error", err)
+	}
+
+	first := command.Wait()
+	second := command.Wait()
+
+	if first != nil {
+		t.Fatalf("Wait() = %v, want no error for a process that ended cleanly", first)
+	}
+	if second != nil {
+		t.Errorf("waiting again answered %v, want what the first wait answered", second)
+	}
+}

@@ -32,6 +32,12 @@ func (c *Command) adopt() error {
 	return nil
 }
 
+// letGo has nothing to release here: a process group is not a thing the kernel
+// hands out a handle to, and it stops existing when the processes in it do.
+//
+// The caller holds the lock.
+func (c *Command) letGo() {}
+
 // killGroup signals the whole group.
 //
 // The negative identifier is what makes it the group rather than the leader

@@ -36,7 +36,11 @@ var ErrNotStarted = errors.New("the process was never started")
 type Command struct {
 	cmd *exec.Cmd
 
-	mu      sync.Mutex
+	mu     sync.Mutex
+	waited sync.Once
+	// waitErr is what the one wait answered, for every caller that arrives
+	// after it.
+	waitErr error
 	started bool
 	// finished says the child has been waited for and collected. Its
 	// identifier means nothing from that moment: the kernel is free to give it
@@ -119,20 +123,19 @@ func (c *Command) start(adopt func() error) error {
 // The error is what os/exec reports for a process that ended badly, killed
 // included: the three systems do not agree on the words, and translating them
 // here would be inventing a vocabulary the caller would then have to learn.
+//
+// Waiting twice answers what the first wait answered rather than the complaint
+// os/exec makes about it. A job that cancels while its own goroutine is
+// already waiting is two callers arriving at the same process, and neither of
+// them is a mistake.
 func (c *Command) Wait() error {
 	if !c.running() {
 		return ErrNotStarted
 	}
 
-	err := c.cmd.Wait()
+	c.waited.Do(func() { c.waitErr = c.cmd.Wait(); c.release() })
 
-	// Collected: from here the identifier belongs to the kernel again, and
-	// Kill must not send anything anywhere. Marked after the wait, because
-	// that is when it becomes true, and under the lock Kill holds while it
-	// signals, so the two cannot overlap.
-	c.mu.Lock()
-	c.finished = true
-	c.mu.Unlock()
+	err := c.waitErr
 
 	if err != nil {
 		return fmt.Errorf("waiting for %s: %w", c.cmd.Path, err)
@@ -165,6 +168,20 @@ func (c *Command) Kill() error {
 	}
 
 	return c.killGroup()
+}
+
+// release marks the process collected and lets go of whatever the operating
+// system needed held while it was alive.
+//
+// Marked under the lock Kill holds while it signals, so that the two cannot
+// overlap: from here the identifier belongs to the kernel again, and a signal
+// to it would reach whoever the kernel gave it to next.
+func (c *Command) release() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.finished = true
+	c.letGo()
 }
 
 func (c *Command) running() bool {
