@@ -42,8 +42,16 @@ func TestMain(m *testing.M) {
 	}
 }
 
-// parent starts a grandchild and then waits for ever, like pg_restore -j with
-// its workers.
+// parent starts a grandchild and then waits for it, like pg_restore -j with its
+// workers.
+//
+// Waiting for the child rather than blocking on nothing. An empty select is a
+// goroutine that can never run again, and with no other goroutine in the
+// process the runtime calls that a deadlock and ends the program at once — so
+// the parent died the moment it started, and every case here was killing a
+// group whose leader was already gone. The grandchild is orphaned by that and
+// stays in the group, so the cases passed, proving something weaker than what
+// they say.
 func parent() {
 	command := exec.Command(os.Args[0])
 	command.Env = append(os.Environ(), roleVariable+"="+roleChild)
@@ -52,7 +60,7 @@ func parent() {
 		os.Exit(1)
 	}
 
-	select {}
+	_ = command.Wait()
 }
 
 // child touches its marker every so often, for as long as it is alive. A file
