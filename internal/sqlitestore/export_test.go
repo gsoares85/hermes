@@ -28,3 +28,14 @@ func (s *Store) WriteState(ctx context.Context, id, state string) error {
 
 	return nil
 }
+
+// QueryIntForTest answers a single number the database is asked for, so that a
+// case can ask what a connection was born with rather than what this package
+// believes it set.
+func (s *Store) QueryIntForTest(ctx context.Context, query string, into *int) error {
+	if err := s.db.QueryRowContext(ctx, query).Scan(into); err != nil {
+		return fmt.Errorf("asking %s: %w", s.path, err)
+	}
+
+	return nil
+}

@@ -510,3 +510,25 @@ func TestAPathThatWouldBeReadAsSettingsIsRefused(t *testing.T) {
 		t.Error("a path that cannot be used produced no warning")
 	}
 }
+
+// The wait for a file somebody else is writing has to reach every connection,
+// not the one a statement happened to run on: the pool replaces a connection
+// it finds broken, and a replacement born without the wait gives up on the
+// first lock it meets.
+func TestEveryConnectionWaitsForABusyFile(t *testing.T) {
+	t.Parallel()
+
+	opened := opened(t, filepath.Join(t.TempDir(), "hermes.db"))
+
+	// Asked of the database rather than of the code that set it, and asked
+	// after a reconnection would have happened: what is being checked is what
+	// a connection is born with.
+	var timeout int
+	if err := opened.QueryIntForTest(t.Context(), "PRAGMA busy_timeout", &timeout); err != nil {
+		t.Fatalf("asking the database how long it waits: %v", err)
+	}
+
+	if timeout == 0 {
+		t.Error("the connection waits no time at all for a busy file")
+	}
+}

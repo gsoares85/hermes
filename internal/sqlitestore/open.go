@@ -66,6 +66,21 @@ var ErrDamagedVersion = errors.New("the local database has a damaged schema vers
 // where the path is still a path.
 var ErrPathIsNotADSN = errors.New("the path of the local database cannot contain a question mark")
 
+// dsn is the file as the driver is asked for it.
+//
+// The wait for a file another process is writing goes here rather than into a
+// statement, because a statement reaches the one connection it runs on. The
+// pool is capped at one connection, which is not the same as one connection
+// for ever: database/sql replaces a connection it finds broken, and the
+// replacement would arrive with no wait at all and give up on the first lock
+// it met. In the name, every connection the driver makes is born with it.
+//
+// The path carries no query of its own — Open refuses one — so what follows
+// the question mark here is unambiguous.
+func dsn(path string) string {
+	return fmt.Sprintf("%s?_pragma=busy_timeout(%d)", path, busyTimeout.Milliseconds())
+}
+
 // Store is the local database: one file, and everything kept in it.
 type Store struct {
 	db   *sql.DB
@@ -82,7 +97,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", dsn(path))
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", path, err)
 	}
@@ -122,17 +137,13 @@ func (s *Store) prepare(ctx context.Context) error {
 		return err
 	}
 
-	pragmas := []string{
-		// Readers do not block the writer and the writer does not block them,
-		// which is what lets the panel read the history while a job that has
-		// just ended is being written.
-		"PRAGMA journal_mode = WAL",
-		fmt.Sprintf("PRAGMA busy_timeout = %d", busyTimeout.Milliseconds()),
-	}
-	for _, pragma := range pragmas {
-		if _, err := s.db.ExecContext(ctx, pragma); err != nil {
-			return fmt.Errorf("preparing %s (%s): %w", s.path, pragma, err)
-		}
+	// Written into the file rather than set on a connection: the journal mode
+	// is a property of the database and survives in it, so saying it once is
+	// saying it for good. The wait for a busy file is the opposite — it
+	// belongs to a connection — and that one is in the name the driver was
+	// opened with, so every connection it makes is born with it.
+	if _, err := s.db.ExecContext(ctx, "PRAGMA journal_mode = WAL"); err != nil {
+		return fmt.Errorf("preparing %s: %w", s.path, err)
 	}
 
 	// Again, because the write-ahead log and its index are created by that
