@@ -280,6 +280,23 @@ func TestTheFileAndItsDirectoryAreTheirOwners(t *testing.T) {
 	if got := directory.Mode().Perm(); got != privatedir.Mode {
 		t.Errorf("the directory is %v, want %v", got, privatedir.Mode)
 	}
+
+	// And the two files SQLite keeps beside it. The write-ahead log is where
+	// the newest rows live until a checkpoint moves them across, so a history
+	// nobody else can read whose recent half anybody can read is not one.
+	for _, beside := range []string{"-wal", "-shm"} {
+		aside, err := os.Stat(path + beside)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("looking at %s: %v", path+beside, err)
+		}
+
+		if got := aside.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s is %v, want 0600", path+beside, got)
+		}
+	}
 }
 
 // The default path is under the configuration directory of the system, beside

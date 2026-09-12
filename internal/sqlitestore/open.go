@@ -97,6 +97,17 @@ func Open(path string) (*Store, error) {
 // statement, which is why this runs before Open answers rather than at the
 // first save.
 func (s *Store) prepare(ctx context.Context) error {
+	// Before anything is written into it. The file is created by the first
+	// statement, and a file created with the umask of the session is a file
+	// that is readable by others for as long as it takes to get here.
+	if _, err := s.db.ExecContext(ctx, "PRAGMA user_version"); err != nil {
+		return fmt.Errorf("opening %s: %w", s.path, err)
+	}
+
+	if err := s.narrow(); err != nil {
+		return err
+	}
+
 	pragmas := []string{
 		// Readers do not block the writer and the writer does not block them,
 		// which is what lets the panel read the history while a job that has
@@ -110,11 +121,31 @@ func (s *Store) prepare(ctx context.Context) error {
 		}
 	}
 
-	if err := os.Chmod(s.path, fileMode); err != nil {
-		return fmt.Errorf("setting the permissions of %s: %w", s.path, err)
+	// Again, because the write-ahead log and its index are created by that
+	// first pragma and they are where the newest rows live until a checkpoint
+	// moves them across. A database nobody else can read whose recent history
+	// anybody can read is not a database nobody else can read.
+	if err := s.narrow(); err != nil {
+		return err
 	}
 
 	return s.migrate(ctx)
+}
+
+// narrow makes the file and the two SQLite keeps beside it private to their
+// owner.
+//
+// The two are the write-ahead log and its shared index. They come and go —
+// SQLite removes them when the last connection closes cleanly — so one that is
+// not there is not a failure, it is a database at rest.
+func (s *Store) narrow() error {
+	for _, path := range []string{s.path, s.path + "-wal", s.path + "-shm"} {
+		if err := os.Chmod(path, fileMode); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("setting the permissions of %s: %w", path, err)
+		}
+	}
+
+	return nil
 }
 
 // Close releases the file.
