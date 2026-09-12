@@ -86,6 +86,16 @@ func jobs(ctx context.Context, args []string) int {
 		return statusUsage
 	}
 
+	// Nothing to print is not the same as nothing to say. Asked for no jobs,
+	// the reading below finds none and the message underneath reports that the
+	// history is empty — a false statement about the machine, with a status
+	// that says the command worked.
+	if *count < 1 {
+		fmt.Fprintln(os.Stderr, "hermes-cli: -n is how many jobs to print, so it must be at least 1")
+
+		return statusUsage
+	}
+
 	path, err := sqlitestore.DefaultPath()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "hermes-cli: %v\n", err)
