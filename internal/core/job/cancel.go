@@ -22,6 +22,14 @@ const defaultCleanupTimeout = 2 * time.Second
 // running on the server. A Runner that implements nothing here is work with
 // nothing to undo, which is most of it.
 //
+// It runs when the work stopped because it was cancelled, and not when the
+// work reached its own end first — a backup that finished in the moment
+// between Stop being pressed and the work noticing is a backup that exists,
+// and there is nothing partial to take back. So this is the place to undo what
+// was half done, and not the place to release what the work holds: whatever
+// has to go whether or not the job was cancelled goes in the work's own
+// deferred cleanup, which runs on every path out of it.
+//
 // The context carries the deadline. A cleanup that ignores it is a cleanup the
 // queue will stop waiting for, and the job is then reported as failed rather
 // than as cleanly cancelled — because the partial file may still be there.
