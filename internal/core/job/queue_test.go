@@ -468,3 +468,78 @@ func TestTheSecretIsGoneFromTheTitleAndTheStep(t *testing.T) {
 		t.Errorf("the step reads %q, want the password taken out of it", view.Progress.Step)
 	}
 }
+
+// A queue that remembers every job it ever ran is a queue that holds a log for
+// every job it ever ran — a megabyte each, by the ceiling the log is kept
+// under. A long session of verbose restores would spend the whole memory
+// budget of the application on work that finished hours ago.
+//
+// What is dropped is only ever a job that has ended, and by then it is in the
+// history: the panel still shows it, and its log is read from there.
+func TestTheQueueStopsHoldingOldFinishedJobs(t *testing.T) {
+	t.Parallel()
+
+	const kept = 3
+
+	queue := job.NewQueue(job.WithFinishedKept(kept))
+
+	ids := make([]string, 0, kept+2)
+	for range cap(ids) {
+		view := submitted(t, queue, runnerFunc(func(context.Context, job.Reporter) error {
+			return nil
+		}))
+		ids = append(ids, view.ID)
+	}
+
+	held := queue.List()
+	if len(held) != kept {
+		t.Fatalf("the queue holds %d finished jobs, want %d", len(held), kept)
+	}
+
+	// The oldest went, the newest stayed: what somebody is looking at is what
+	// just happened.
+	for _, gone := range ids[:len(ids)-kept] {
+		if _, err := queue.Get(gone); !errors.Is(err, job.ErrNotFound) {
+			t.Errorf("job %s is still held, want the oldest to have gone", gone)
+		}
+	}
+	for _, still := range ids[len(ids)-kept:] {
+		if _, err := queue.Get(still); err != nil {
+			t.Errorf("job %s is gone, want the newest to be held: %v", still, err)
+		}
+	}
+}
+
+// Nothing that is still going is ever dropped, whatever the ceiling says.
+// Forgetting a running job would take the row off the screen and leave the
+// work going with nothing able to stop it.
+func TestTheQueueNeverDropsAJobThatIsStillGoing(t *testing.T) {
+	t.Parallel()
+
+	queue := job.NewQueue(job.WithFinishedKept(1))
+
+	running := make(chan struct{})
+	id, err := queue.Submit(spec("the long one"), runnerFunc(func(ctx context.Context, _ job.Reporter) error {
+		close(running)
+		<-ctx.Done()
+
+		return ctx.Err()
+	}))
+	if err != nil {
+		t.Fatalf("Submit(...) = _, %v, want no error", err)
+	}
+
+	<-running
+
+	for range 5 {
+		submitted(t, queue, runnerFunc(func(context.Context, job.Reporter) error { return nil }))
+	}
+
+	if _, err := queue.Get(id); err != nil {
+		t.Errorf("the running job was dropped: %v", err)
+	}
+
+	if err := queue.Cancel(id); err != nil {
+		t.Errorf("Cancel(...) = %v, want no error", err)
+	}
+}

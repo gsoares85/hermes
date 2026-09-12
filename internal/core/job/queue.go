@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -73,6 +74,21 @@ func WithLogBytes(bytes int) Option {
 // WithCleanupTimeout sets how long a cancelled job's cleanup is given.
 func WithCleanupTimeout(within time.Duration) Option {
 	return func(q *Queue) { q.cleanupTimeout = within }
+}
+
+// How many jobs that have ended the queue goes on holding.
+//
+// It holds them for the window, which draws what happened in this session
+// without going to disk for it. Past this many, the oldest are let go: they
+// are in the history by then, the panel reads them from there, and what they
+// cost here is a log apiece — a megabyte each, by the ceiling a log is kept
+// under. A session of verbose restores would otherwise spend the whole memory
+// budget of the application on work that finished hours ago.
+const defaultFinishedKept = 100
+
+// WithFinishedKept sets how many jobs that have ended the queue holds on to.
+func WithFinishedKept(jobs int) Option {
+	return func(q *Queue) { q.finishedKept = jobs }
 }
 
 // Observer is told whenever a job moves from one state to another.
@@ -144,7 +160,13 @@ type Queue struct {
 	logLines       int
 	logBytes       int
 	cleanupTimeout time.Duration
-	observers      []Observer
+	finishedKept   int
+	// ends counts the jobs that have reached an end, so that the queue can say
+	// which of two ended first. The clock cannot: two jobs finishing inside
+	// one tick of it carry the same instant, and on some systems a tick is
+	// long enough for a great many jobs.
+	ends      int
+	observers []Observer
 }
 
 // record is a job as the queue holds it. Everything mutable about a job lives
@@ -158,6 +180,9 @@ type record struct {
 	// without the work having to report anything for it to.
 	said Progress
 	log  *logbook
+	// ended is where this job comes in the order the jobs finished, and is
+	// zero until it has. It decides which one the queue lets go of first.
+	ended int
 	// stop tells the work to wind down. Kept per job rather than derived from
 	// a context the queue holds, so that cancelling one job is exactly that.
 	stop context.CancelFunc
@@ -172,6 +197,7 @@ func NewQueue(options ...Option) *Queue {
 		logLines:       defaultLogLines,
 		logBytes:       defaultLogBytes,
 		cleanupTimeout: defaultCleanupTimeout,
+		finishedKept:   defaultFinishedKept,
 	}
 	for _, option := range options {
 		option(queue)
@@ -378,6 +404,9 @@ func (q *Queue) ended(held *record, end State, failure error) *View {
 	held.view.State = moved
 	held.view.Ended = q.now()
 
+	q.ends++
+	held.ended = q.ends
+
 	// Redacted here, where the log is redacted too, and for the same reason:
 	// what a driver says when it cannot connect is the connection string it
 	// was handed. This is the second piece of free text a job produces, it
@@ -390,9 +419,48 @@ func (q *Queue) ended(held *record, end State, failure error) *View {
 
 	close(held.done)
 
+	q.letGoOfTheOldest(held)
+
 	announced := q.viewOf(held)
 
 	return &announced
+}
+
+// letGoOfTheOldest drops finished jobs past the ceiling, oldest first.
+//
+// Only ones that have ended, and never the one that just did: a job still
+// going that vanished from the queue would be work nothing on screen could
+// stop, and a job dropped in the same breath as it ended would be one that
+// whoever was waiting for it could no longer ask about. What is dropped has
+// been written to the history by then, so the panel still shows it and reads
+// its log from there.
+//
+// The caller holds the lock.
+func (q *Queue) letGoOfTheOldest(justEnded *record) {
+	finished := make([]*record, 0, len(q.jobs))
+	for _, held := range q.jobs {
+		if held.view.State.Over() {
+			finished = append(finished, held)
+		}
+	}
+
+	if len(finished) <= q.finishedKept {
+		return
+	}
+
+	// In the order they ended, which is the order in which a person stops
+	// looking at them. By the sequence rather than by the clock: jobs that
+	// finish inside one tick share an instant, and then the oldest would be
+	// whichever the map happened to hand over first.
+	slices.SortFunc(finished, func(a, b *record) int { return a.ended - b.ended })
+
+	for _, old := range finished[:len(finished)-q.finishedKept] {
+		if old == justEnded {
+			continue
+		}
+
+		delete(q.jobs, old.view.ID)
+	}
 }
 
 // moveTo applies a transition, ignoring one the job cannot make.
