@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   advanced,
@@ -8,9 +8,29 @@ import {
   merged,
   ordered,
   remaining,
+  watchJobs,
   type JobProgressView,
   type JobView,
 } from "./job";
+
+/** What the Go side pushes to, as the runtime hands it over. */
+const listeners = new Map<string, (event: { data: unknown }) => void>();
+
+vi.mock("@wailsio/runtime", () => ({
+  Events: {
+    On: (name: string, callback: (event: { data: unknown }) => void): (() => void) => {
+      listeners.set(name, callback);
+
+      return (): void => {
+        listeners.delete(name);
+      };
+    },
+  },
+}));
+
+function pushEvent(name: string, data: unknown): void {
+  listeners.get(name)?.({ data });
+}
 
 function progress(fields: Partial<JobProgressView> = {}): JobProgressView {
   return {
@@ -202,5 +222,61 @@ describe("what arrives from the Go side", () => {
     const next = advanced(held, { ...view("one", { state: "running" }), progress: progress() });
 
     expect(next[0]?.state).toBe("done");
+  });
+});
+
+describe("what the window is handed by an event", () => {
+  /**
+   * Nothing on this boundary is checked against Go at build time: the
+   * generator knows the signatures of methods and says nothing about the
+   * payload of an event. A field renamed on one side would be asserted into
+   * shape on the other and drawn as blanks.
+   */
+  it("drops an event that does not carry the job it claims to", () => {
+    const seen: string[] = [];
+
+    watchJobs({
+      state: (view): void => {
+        seen.push(view.id);
+      },
+      progress: (): void => undefined,
+      log: (): void => undefined,
+    });
+
+    for (const nonsense of [null, undefined, "a job", 7, {}, { id: "" }, { id: 7 }]) {
+      pushEvent("job:state", nonsense);
+    }
+
+    expect(seen).toEqual([]);
+
+    pushEvent("job:state", { id: "one", state: "running" });
+
+    expect(seen).toEqual(["one"]);
+  });
+
+  it("drops a log event whose lines are not lines", () => {
+    const seen: string[][] = [];
+
+    watchJobs({
+      state: (): void => undefined,
+      progress: (): void => undefined,
+      log: (view): void => {
+        seen.push(view.lines);
+      },
+    });
+
+    for (const nonsense of [
+      { id: "one" },
+      { id: "one", lines: "a line" },
+      { id: "one", lines: [7] },
+    ]) {
+      pushEvent("job:log", nonsense);
+    }
+
+    expect(seen).toEqual([]);
+
+    pushEvent("job:log", { id: "one", lines: ["said something"] });
+
+    expect(seen).toEqual([["said something"]]);
   });
 });

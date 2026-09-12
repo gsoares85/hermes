@@ -64,6 +64,14 @@ export async function forgetJob(id: string): Promise<void> {
  * panel asks it whenever it mounts and whenever the window comes back — the
  * reconciliation half of the decision, without which one missed event is a bar
  * stuck at forty per cent for a job that finished ten minutes ago.
+ *
+ * What arrives is whatever the framework was handed, so all three payloads are
+ * checked before they are passed on rather than asserted into shape. Nothing
+ * on this boundary is checked against Go at build time: the generator knows
+ * the signatures of methods and says nothing about the payload of an event, so
+ * a field renamed on one side is a panel that draws blanks on the other. An
+ * event that does not look like what it claims to be is dropped, which is what
+ * `jobs()` exists to correct.
  */
 export function watchJobs(on: {
   state: (view: JobView) => void;
@@ -72,13 +80,22 @@ export function watchJobs(on: {
 }): () => void {
   const stop = [
     Events.On(stateEvent, (event): void => {
-      on.state(event.data as JobView);
+      const view = jobViewIn(event.data);
+      if (view !== null) {
+        on.state(view);
+      }
     }),
     Events.On(progressEvent, (event): void => {
-      on.progress(event.data as JobView);
+      const view = jobViewIn(event.data);
+      if (view !== null) {
+        on.progress(view);
+      }
     }),
     Events.On(logEvent, (event): void => {
-      on.log(event.data as JobLogView);
+      const view = jobLogViewIn(event.data);
+      if (view !== null) {
+        on.log(view);
+      }
     }),
   ];
 
@@ -87,6 +104,40 @@ export function watchJobs(on: {
       off();
     }
   };
+}
+
+/**
+ * The job in an event payload, or null when it does not carry one.
+ *
+ * Only the identifier is required: a progress event carries where a job got to
+ * and nothing else about it, and a state event carries the whole row. What the
+ * caller does with either is merge it into what it already has, so the check
+ * is that this is a job at all and not that it is a complete one.
+ */
+function jobViewIn(data: unknown): JobView | null {
+  if (typeof data !== "object" || data === null) {
+    return null;
+  }
+
+  const { id } = data as Record<string, unknown>;
+
+  return typeof id === "string" && id !== "" ? (data as JobView) : null;
+}
+
+/** The lines in a log event, or null when it does not carry any. */
+function jobLogViewIn(data: unknown): JobLogView | null {
+  if (typeof data !== "object" || data === null) {
+    return null;
+  }
+
+  const { id, lines } = data as Record<string, unknown>;
+  if (typeof id !== "string" || id === "" || !Array.isArray(lines)) {
+    return null;
+  }
+
+  return lines.every((line): boolean => typeof line === "string")
+    ? { id, lines: lines as string[] }
+    : null;
 }
 
 /** Whether a job has reached an end it cannot leave. */
