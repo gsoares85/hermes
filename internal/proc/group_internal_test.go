@@ -139,7 +139,7 @@ func waitUntilGone(t *testing.T, pid int) {
 
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if !alive(pid) {
+		if !running(pid) {
 			return
 		}
 
@@ -148,20 +148,6 @@ func waitUntilGone(t *testing.T, pid int) {
 
 	t.Fatalf("process %d is still running after a start that failed", pid)
 }
-
-func alive(pid int) bool {
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-
-	return process.Signal(syscallZero()) == nil
-}
-
-// syscallZero is the signal that asks whether a process is there without
-// touching it. On Windows it is not a signal at all and Signal answers an
-// error for a process that has ended, which is the same question answered.
-func syscallZero() os.Signal { return zeroSignal }
 
 // Whatever the operating system needed held while the process was alive is let
 // go when it has been collected. On Windows that is the handle of the job
