@@ -219,6 +219,17 @@ func (s *JobService) Forget(ctx context.Context, id string) error {
 	return nil
 }
 
+// Running is what the watcher needs from a queue: where the jobs are, and what
+// they have said since it last looked.
+//
+// Narrow and declared here, where it is consumed, for the same reason the
+// emitter above is an interface: this is the half of the pair that reads on a
+// timer, and a test about what it does not ask for needs something to ask.
+type Running interface {
+	List() []job.View
+	LogSince(id string, seq int) ([]string, int, error)
+}
+
 // JobWatcherOption configures a watcher.
 type JobWatcherOption func(*JobWatcher)
 
@@ -232,7 +243,7 @@ func WithSampleEvery(every time.Duration) JobWatcherOption {
 // Deliberately not a bound service. Nothing here is a question the frontend
 // asks, and everything here would become a binding if it were.
 type JobWatcher struct {
-	queue *job.Queue
+	queue Running
 	emit  Emitter
 	every time.Duration
 
@@ -246,19 +257,25 @@ type JobWatcher struct {
 	mu    sync.Mutex
 	said  map[string]JobProgressView
 	lines map[string]int
+	// settled is the jobs there is nothing left to ask about: they have ended
+	// and everything they said has been sent. Without it the panel's history
+	// is re-read ten times a second for ever — a job that finished this
+	// morning is asked what it has said since, all afternoon.
+	settled map[string]bool
 }
 
 // NewJobWatcher creates the watcher.
 //
 // It starts nothing. Watch is what begins sampling, and the caller decides
 // when that stops.
-func NewJobWatcher(queue *job.Queue, emit Emitter, options ...JobWatcherOption) *JobWatcher {
+func NewJobWatcher(queue Running, emit Emitter, options ...JobWatcherOption) *JobWatcher {
 	watcher := &JobWatcher{
-		queue: queue,
-		emit:  emit,
-		every: defaultSampleEvery,
-		said:  make(map[string]JobProgressView),
-		lines: make(map[string]int),
+		queue:   queue,
+		emit:    emit,
+		every:   defaultSampleEvery,
+		said:    make(map[string]JobProgressView),
+		lines:   make(map[string]int),
+		settled: make(map[string]bool),
 	}
 
 	for _, option := range options {
@@ -317,6 +334,7 @@ func (s *JobWatcher) prune(held []job.View) {
 		if !alive[id] {
 			delete(s.said, id)
 			delete(s.lines, id)
+			delete(s.settled, id)
 		}
 	}
 }
@@ -351,8 +369,12 @@ func (s *JobWatcher) progressOf(one job.View) {
 // put there to keep.
 func (s *JobWatcher) logOf(one job.View) {
 	s.mu.Lock()
-	told := s.lines[one.ID]
+	settled, told := s.settled[one.ID], s.lines[one.ID]
 	s.mu.Unlock()
+
+	if settled {
+		return
+	}
 
 	fresh, next, err := s.queue.LogSince(one.ID, told)
 	if err != nil {
@@ -363,6 +385,11 @@ func (s *JobWatcher) logOf(one job.View) {
 
 	s.mu.Lock()
 	s.lines[one.ID] = next
+	// A job that has ended and had nothing new to say has said everything it
+	// ever will. Nothing can be added to its log, so it is not asked again.
+	if one.State.Over() && len(fresh) == 0 {
+		s.settled[one.ID] = true
+	}
 	s.mu.Unlock()
 
 	if len(fresh) == 0 {

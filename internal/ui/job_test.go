@@ -771,3 +771,58 @@ func TestEveryTimeCrossesInTheSameZone(t *testing.T) {
 		}
 	}
 }
+
+// A job that ended and said everything it was going to say is done being
+// asked. The panel keeps the history of the session on screen, and sampling
+// reads every row of it ten times a second: a morning's jobs would be asked
+// what they had said since, all afternoon, for ever.
+func TestAFinishedJobIsNotAskedAgain(t *testing.T) {
+	t.Parallel()
+
+	queue := job.NewQueue()
+	asked := &countingQueue{Running: queue}
+	watcher := ui.NewJobWatcher(asked, &recorder{})
+
+	finished(t, queue, runnerFunc(func(_ context.Context, report job.Reporter) error {
+		_, err := report.Log().Write([]byte("all it had to say\n"))
+
+		return err
+	}))
+
+	// The samples that deliver the last of the log, then settle it.
+	watcher.Sample()
+	watcher.Sample()
+
+	settled := asked.count()
+
+	for range 5 {
+		watcher.Sample()
+	}
+
+	if got := asked.count(); got != settled {
+		t.Errorf("a finished job was asked for its log %d more times, want none", got-settled)
+	}
+}
+
+// countingQueue is a queue that remembers how often it was asked for a log.
+type countingQueue struct {
+	ui.Running
+
+	mu    sync.Mutex
+	asked int
+}
+
+func (c *countingQueue) LogSince(id string, seq int) ([]string, int, error) {
+	c.mu.Lock()
+	c.asked++
+	c.mu.Unlock()
+
+	return c.Running.LogSince(id, seq)
+}
+
+func (c *countingQueue) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.asked
+}
