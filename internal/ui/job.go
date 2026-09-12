@@ -419,10 +419,18 @@ func progressOfJob(said job.ProgressView) JobProgressView {
 
 // timeOf answers a time the window can read, and an empty string for a time
 // there is not.
+//
+// Always in UTC, because the window sorts its rows by comparing these strings
+// and the two halves of the list come from different places: a running job
+// carries the clock of this machine, a finished one comes back from a file
+// that keeps UTC. Left in local time, the same instant reads as two different
+// strings, and "16:00+02:00" sorts after "15:00Z" although it is the earlier
+// of the two. Rendering it in the reader's own zone is the window's business
+// and it has the instant to do it with.
 func timeOf(at time.Time) string {
 	if at.IsZero() {
 		return ""
 	}
 
-	return at.Format(time.RFC3339Nano)
+	return at.UTC().Format(time.RFC3339Nano)
 }

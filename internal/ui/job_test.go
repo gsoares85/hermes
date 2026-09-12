@@ -739,3 +739,35 @@ func TestNewLinesKeepArrivingAfterTheLogIsFull(t *testing.T) {
 		t.Errorf("the window was told %d lines written after the log filled up, want 7", arrived)
 	}
 }
+
+// The panel sorts its rows by comparing these strings, and the two halves of
+// the list come from different places: a running job from the clock of this
+// machine, a finished one from a file that keeps UTC. Formatted in local time,
+// the same instant reads as two different strings and the comparison puts them
+// in the wrong order — on every machine that is not on UTC, which is most of
+// them.
+func TestEveryTimeCrossesInTheSameZone(t *testing.T) {
+	t.Parallel()
+
+	queue := job.NewQueue()
+	history := store.NewJobMemory()
+	service := ui.NewJobService(queue, history)
+
+	finished(t, queue, runnerFunc(func(context.Context, job.Reporter) error { return nil }))
+	remember(t, history, lastNight("last-night", job.Done))
+
+	for _, view := range listedJobs(t, service) {
+		for _, at := range []struct{ what, value string }{
+			{"started", view.StartedAt},
+			{"ended", view.EndedAt},
+		} {
+			if at.value == "" {
+				continue
+			}
+			if !strings.HasSuffix(at.value, "Z") {
+				t.Errorf("%s of %q reads %q, want an instant in UTC: the panel compares these as text",
+					at.what, view.Title, at.value)
+			}
+		}
+	}
+}
