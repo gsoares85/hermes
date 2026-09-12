@@ -47,6 +47,15 @@ const busyTimeout = 5 * time.Second
 // machine is a thing people have.
 var ErrFromTheFuture = errors.New("the local database was written by a newer version of Hermes")
 
+// ErrDamagedVersion is a file whose schema version is not a version at all.
+//
+// The version lives in four bytes of the SQLite header and it is a signed
+// integer, so a flipped bit makes it negative — a file that has been damaged
+// rather than one written by another build. It is refused for the same reason
+// as a file that is not a database: what a step of the ladder would do to it
+// cannot be reasoned about.
+var ErrDamagedVersion = errors.New("the local database has a damaged schema version")
+
 // Store is the local database: one file, and everything kept in it.
 type Store struct {
 	db   *sql.DB

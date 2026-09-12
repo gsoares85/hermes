@@ -122,6 +122,43 @@ func TestADatabaseFromTheFutureIsRefused(t *testing.T) {
 	}
 }
 
+// The version lives in four bytes of the file's header and it is a signed
+// integer, so a flipped bit makes it negative. Negative is not a version this
+// build is behind — it is a file that has been damaged — and it has to be
+// refused like any other damage rather than reaching for a step of the ladder
+// that is not there.
+func TestADatabaseWithANegativeVersionIsRefused(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "hermes.db")
+
+	first := opened(t, path)
+	if err := first.SetVersion(t.Context(), -1); err != nil {
+		t.Fatalf("damaging the version: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("closing the database: %v", err)
+	}
+
+	if _, err := sqlitestore.Open(path); !errors.Is(err, sqlitestore.ErrDamagedVersion) {
+		t.Errorf("opening a file with a negative version returned %v, want ErrDamagedVersion", err)
+	}
+
+	// And the promise the fallback makes holds for this damage too: the
+	// application opens, with a history that lasts the session and a warning.
+	// It used to be the one kind of broken file that took the process down,
+	// which is the opposite of what OpenJobHistory exists for.
+	history := sqlitestore.OpenJobHistory(path)
+	t.Cleanup(func() { _ = history.Close() })
+
+	if history.Warning == "" {
+		t.Error("a file with a damaged version produced no warning")
+	}
+	if err := history.Jobs.Save(t.Context(), endedJob("after-the-damage")); err != nil {
+		t.Errorf("the history that replaced the damaged file refuses to be written: %v", err)
+	}
+}
+
 // A file that is not a database is refused with something a person can act on,
 // rather than a panic or a history that silently answers nothing.
 func TestAFileThatIsNotADatabaseIsRefused(t *testing.T) {

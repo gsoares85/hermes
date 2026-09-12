@@ -43,6 +43,16 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 
+	// Below zero before above the ladder, because the two are different
+	// things: one is a file from a build that does not exist yet, the other is
+	// a file that has been damaged. Without the first check the slice below is
+	// asked for migrations[-1:], which is not an error but a panic — and a
+	// panic here is the application failing to start over its own bookkeeping,
+	// which is the one outcome OpenJobHistory exists to prevent.
+	if version < 0 {
+		return fmt.Errorf("%w: %s reports version %d", ErrDamagedVersion, s.path, version)
+	}
+
 	if version > len(migrations) {
 		return fmt.Errorf("%w: %s is at version %d and this build knows %d",
 			ErrFromTheFuture, s.path, version, len(migrations))
