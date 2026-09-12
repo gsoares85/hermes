@@ -166,11 +166,14 @@ export function merged(held: readonly JobView[], one: JobView): JobView[] {
  * A progress event carries what moved and not the whole job, so it must not be
  * merged as if it were one: doing that blanks the title and the times, and the
  * row goes empty for a job that is simply advancing.
+ *
+ * The state is not among what it carries, and is not taken from here even if
+ * it were. A sample is read a moment before it arrives, so one taken just
+ * before a job ended lands after the state change that announced the end —
+ * and taking it would put a Stop button back on a job that has finished.
  */
 export function advanced(held: readonly JobView[], one: JobView): JobView[] {
   return held.map((job): JobView =>
-    job.id === one.id
-      ? { ...job, state: one.state, progress: one.progress, dropped: one.dropped }
-      : job,
+    job.id === one.id ? { ...job, progress: one.progress, dropped: one.dropped } : job,
   );
 }

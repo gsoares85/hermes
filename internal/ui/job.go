@@ -354,9 +354,14 @@ func (s *JobWatcher) progressOf(one job.View) {
 		return
 	}
 
+	// Without the state. A sample reads where a job was a moment before it is
+	// emitted, so one taken just before a job ends arrives after the state
+	// change that announced the end — and a progress event carrying "running"
+	// would put a Stop button back on a job that has finished. Transitions are
+	// announced as they happen and that is the only thing that says what a job
+	// is; this says where it got to.
 	s.emit.Emit(progressEvent, JobView{
 		ID:       one.ID,
-		State:    one.State.String(),
 		Progress: moved,
 		Dropped:  one.Dropped,
 	})

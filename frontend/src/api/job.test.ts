@@ -142,4 +142,18 @@ describe("what arrives from the Go side", () => {
 
     expect(advanced(held, view("other"))).toEqual(held);
   });
+
+  /**
+   * A sample is read a moment before it arrives, so one taken just before a
+   * job ended lands after the state change that announced the end. Taking the
+   * state from it would put a Stop button back on a job that has finished,
+   * until the next sample took it away again.
+   */
+  it("leaves the state to the event that announces it", () => {
+    const held = [view("one", { state: "done" })];
+
+    const next = advanced(held, { ...view("one", { state: "running" }), progress: progress() });
+
+    expect(next[0]?.state).toBe("done");
+  });
 });
