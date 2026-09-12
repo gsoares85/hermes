@@ -212,18 +212,44 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
 
               {job.error !== "" && <p className="jobs__error">{job.error}</p>}
 
-              {opened === job.id && (
-                <pre className="jobs__log">
-                  {job.dropped > 0 && `… ${String(job.dropped)} earlier lines were dropped\n`}
-                  {log.join("\n")}
-                </pre>
-              )}
+              {opened === job.id && <Log job={job} lines={log} />}
             </li>
           ))}
         </ul>
       )}
     </section>
   );
+}
+
+/**
+ * How much of a log is drawn at once.
+ *
+ * The end of it, because that is where a failure is and where a running job
+ * is. A full log is five thousand lines, and drawing the whole of one means
+ * rejoining and reconciling all of them on every event that arrives — ten
+ * times a second for a verbose restore — to show a thousand lines nobody is
+ * reading. What a person wants from a log that long is to follow it.
+ */
+const shownLines = 500;
+
+/**
+ * What a job said, as much of it as is worth drawing.
+ *
+ * It says when it is showing only the end, for the same reason the queue says
+ * how many lines it dropped: a log that silently begins in the middle reads as
+ * an operation that began there.
+ */
+function Log({ job, lines }: { job: JobView; lines: readonly string[] }): React.JSX.Element {
+  const shown = lines.slice(-shownLines);
+  const hidden = lines.length - shown.length;
+
+  const said = [
+    ...(job.dropped > 0 ? [`… ${String(job.dropped)} earlier lines were dropped`] : []),
+    ...(hidden > 0 ? [`… ${String(hidden)} earlier lines are not shown`] : []),
+    ...shown,
+  ];
+
+  return <pre className="jobs__log">{said.join("\n")}</pre>;
 }
 
 /**

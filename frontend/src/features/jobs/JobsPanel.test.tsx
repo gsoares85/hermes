@@ -270,6 +270,28 @@ describe("the jobs panel", () => {
     expect(await screen.findByText(/42 earlier lines were dropped/)).toBeTruthy();
   });
 
+  /**
+   * A full log is five thousand lines, rejoined and reconciled on every event.
+   * What a person wants from one that long is to follow it, so the end of it
+   * is drawn — and it says that it is only the end, because a log that
+   * silently begins in the middle reads as an operation that began there.
+   */
+  it("draws the end of a log too long to draw whole", async () => {
+    const long = Array.from({ length: 1200 }, (_, at): string => `line ${String(at)}`);
+
+    backend.list.mockReturnValue(cancellable([job("one")]));
+    backend.log.mockReturnValue(cancellable(long));
+
+    render(<JobsPanel onClose={vi.fn()} />);
+    await screen.findByText("shop one");
+
+    fireEvent.click(screen.getByRole("button", { name: "Log of shop one" }));
+
+    expect(await screen.findByText(/line 1199/)).toBeTruthy();
+    expect(screen.queryByText(/line 0\n/)).toBeNull();
+    expect(screen.getByText(/700 earlier lines are not shown/)).toBeTruthy();
+  });
+
   // A job that cannot say how far along it is draws a bar that moves rather
   // than one that fills. Nought per cent would claim it has failed to advance.
   it("draws a bar with no value when there is nothing to know", async () => {
