@@ -179,6 +179,35 @@ func TestCancellingWorkThatHasNotStarted(t *testing.T) {
 	}
 }
 
+// The end of a job that never started is an end like any other, and everybody
+// waiting to hear about ends has to hear about this one. Without it the
+// history never learns the job existed: the row is written by an observer, and
+// an observer nobody called writes nothing. The operation somebody started and
+// called off would leave no trace at all.
+func TestCancellingWorkThatHasNotStartedIsAnnounced(t *testing.T) {
+	t.Parallel()
+
+	told := make(chan job.State, 8)
+	queue := job.NewQueue(job.WithObserver(func(view job.View) { told <- view.State }))
+
+	view := cancelled(t, queue, runnerFunc(func(context.Context, job.Reporter) error {
+		return nil
+	}), nil)
+
+	if view.State != job.Cancelled {
+		t.Fatalf("the job is %v, want %v", view.State, job.Cancelled)
+	}
+
+	select {
+	case announced := <-told:
+		if announced != job.Cancelled {
+			t.Errorf("the observer was told %v, want %v", announced, job.Cancelled)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("no observer was told the job was cancelled, so nothing recorded that it happened")
+	}
+}
+
 func TestTheCleanupRunsWhenAJobIsCancelled(t *testing.T) {
 	t.Parallel()
 

@@ -198,3 +198,54 @@ func onlyRecord(t *testing.T, history store.JobHistory) store.JobRecord {
 
 	return got[0]
 }
+
+// The end to end of the one job nobody watched happen: submitted, called off
+// before it ever ran, and still in the history afterwards. It is written by an
+// observer, so a queue that ends a job without telling anybody is a queue whose
+// history quietly loses it — and this is the row that explains why the backup
+// somebody asked for never happened.
+func TestAJobCancelledBeforeItStartedReachesTheHistory(t *testing.T) {
+	t.Parallel()
+
+	history := store.NewJobMemory()
+
+	var queue *job.Queue
+	recorder := store.NewRecorder(history, func(id string) ([]string, error) {
+		return queue.Log(id)
+	}, refuseFailure(t))
+
+	queue = job.NewQueue(job.WithObserver(recorder.Observe))
+
+	id, err := queue.Submit(job.Spec{Kind: "backup", Title: "a database"},
+		runnerFunc(func(context.Context, job.Reporter) error { return nil }))
+	if err != nil {
+		t.Fatalf("submitting: %v", err)
+	}
+	if err := queue.Cancel(id); err != nil {
+		t.Fatalf("cancelling: %v", err)
+	}
+
+	ctx, give := context.WithTimeout(t.Context(), 5*time.Second)
+	defer give()
+
+	if _, err := queue.Wait(ctx, id); err != nil {
+		t.Fatalf("waiting for the job to end: %v", err)
+	}
+
+	got := recent(t, history)
+	if len(got) != 1 {
+		t.Fatalf("the history holds %d records, want the job that was called off", len(got))
+	}
+	if got[0].State != job.Cancelled {
+		t.Errorf("the record is %v, want %v", got[0].State, job.Cancelled)
+	}
+	// The case the record was shaped for: no beginning, because there was none.
+	if !got[0].Started.IsZero() {
+		t.Errorf("the record says it started at %v, want no beginning at all", got[0].Started)
+	}
+}
+
+// runnerFunc adapts a function to the Runner the queue takes.
+type runnerFunc func(ctx context.Context, report job.Reporter) error
+
+func (f runnerFunc) Run(ctx context.Context, report job.Reporter) error { return f(ctx, report) }
