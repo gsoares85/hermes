@@ -478,3 +478,35 @@ func TestAClosedHistoryReportsRatherThanPanics(t *testing.T) {
 		t.Error("forgetting in a closed history succeeded")
 	}
 }
+
+// The driver reads what it is given as a data source name, and everything
+// after the first question mark in it configures the connection instead of
+// naming a file — it splits on one before the file is ever opened. A path that
+// happens to contain one would open a different file from the one it names,
+// with settings nobody chose.
+//
+// Nothing produces such a path today: DefaultPath builds it from the
+// configuration directory of the system. But Open is exported, and the next
+// thing to reach it is a path somebody typed.
+func TestAPathThatWouldBeReadAsSettingsIsRefused(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "hermes.db?_pragma=busy_timeout(1)")
+
+	if opened, err := sqlitestore.Open(path); !errors.Is(err, sqlitestore.ErrPathIsNotADSN) {
+		if err == nil {
+			_ = opened.Close()
+		}
+
+		t.Errorf("opening %q returned %v, want ErrPathIsNotADSN", path, err)
+	}
+
+	// And it is the fallback's business like any other path that cannot hold a
+	// database: a warning, and a history for the session.
+	history := sqlitestore.OpenJobHistory(path)
+	t.Cleanup(func() { _ = history.Close() })
+
+	if history.Warning == "" {
+		t.Error("a path that cannot be used produced no warning")
+	}
+}

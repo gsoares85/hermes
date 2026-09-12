@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	// The driver, registered under the name Open asks for below. Blank because
@@ -56,6 +57,15 @@ var ErrFromTheFuture = errors.New("the local database was written by a newer ver
 // cannot be reasoned about.
 var ErrDamagedVersion = errors.New("the local database has a damaged schema version")
 
+// ErrPathIsNotADSN is a path the driver would read as settings.
+//
+// Everything after the first question mark in what the driver is handed
+// configures the connection rather than naming a file, and it splits on one
+// before the file is opened. A path carrying one would open a different file
+// from the one it names, with pragmas nobody chose — so it is refused here,
+// where the path is still a path.
+var ErrPathIsNotADSN = errors.New("the path of the local database cannot contain a question mark")
+
 // Store is the local database: one file, and everything kept in it.
 type Store struct {
 	db   *sql.DB
@@ -64,6 +74,10 @@ type Store struct {
 
 // Open opens the database at path, creating and migrating it as needed.
 func Open(path string) (*Store, error) {
+	if strings.ContainsRune(path, '?') {
+		return nil, fmt.Errorf("%w: %s", ErrPathIsNotADSN, path)
+	}
+
 	if err := privatedir.Make(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
