@@ -20,6 +20,7 @@ const backend = vi.hoisted(() => ({
   cancel: vi.fn(),
   forget: vi.fn(),
   older: vi.fn(),
+  historyStatus: vi.fn(),
 }));
 
 const listeners = vi.hoisted(() => new Map<string, (event: { data: unknown }) => void>());
@@ -37,6 +38,7 @@ vi.mock("../../../bindings/github.com/gsoares85/hermes/internal/ui", () => ({
     Cancel: (...args: unknown[]): unknown => backend.cancel(...args),
     Forget: (...args: unknown[]): unknown => backend.forget(...args),
     Older: (...args: unknown[]): unknown => backend.older(...args),
+    HistoryStatus: (): unknown => backend.historyStatus(),
   },
 }));
 
@@ -92,6 +94,7 @@ beforeEach(() => {
   backend.cancel.mockReturnValue(cancellable(undefined));
   backend.forget.mockReturnValue(cancellable(undefined));
   backend.older.mockReturnValue(cancellable([]));
+  backend.historyStatus.mockReturnValue(cancellable({ warning: "" }));
 });
 
 describe("the jobs panel", () => {
@@ -336,6 +339,35 @@ describe("the jobs panel", () => {
     await waitFor((): void => {
       expect(screen.queryByRole("button", { name: "Show earlier jobs" })).toBeNull();
     });
+  });
+
+  /**
+   * A history that could not be opened leaves this session with one that dies
+   * with it. Said out loud, because the alternative is finding out on the
+   * morning somebody looks for the backup that ran overnight — and by then
+   * there is nothing to look at and no reason given.
+   */
+  it("says when what runs will not be remembered", async () => {
+    backend.historyStatus.mockReturnValue(
+      cancellable({
+        warning: "the job history at /home/me/.config/hermes/hermes.db could not be opened",
+      }),
+    );
+
+    render(<JobsPanel onClose={vi.fn()} />);
+
+    expect(await screen.findByText(/could not be opened/)).toBeTruthy();
+  });
+
+  // A banner that is always there is a banner nobody reads on the day it
+  // matters.
+  it("says nothing about a history that is being kept", async () => {
+    backend.list.mockReturnValue(cancellable([job("one")]));
+
+    render(<JobsPanel onClose={vi.fn()} />);
+    await screen.findByText("shop one");
+
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   // A job that cannot say how far along it is draws a bar that moves rather

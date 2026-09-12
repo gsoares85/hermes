@@ -17,6 +17,7 @@ export type {
     ConnectionForm,
     ConnectionView,
     DiagnosisView,
+    HistoryView,
     JobCursor,
     JobProgressView,
     JobView,

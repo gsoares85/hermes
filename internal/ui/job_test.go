@@ -904,3 +904,31 @@ func TestWalkingFromSomewhereThatIsNotAPlace(t *testing.T) {
 		t.Error("Older(...) = _, nil for a cursor that names no time, want the failure")
 	}
 }
+
+// A history that could not be opened leaves the session with one that dies
+// with it, and the person has to be told: nobody finds out otherwise until the
+// morning they look for the backup that ran overnight and the panel is empty.
+func TestTheWindowIsToldWhenNothingIsBeingRemembered(t *testing.T) {
+	t.Parallel()
+
+	warning := "the job history at /home/someone/.config/hermes/hermes.db could not be opened"
+
+	service := ui.NewJobService(job.NewQueue(), store.NewJobMemory(),
+		ui.WithHistoryWarning(warning))
+
+	if got := service.HistoryStatus(); got.Warning != warning {
+		t.Errorf("the window is told %q, want %q", got.Warning, warning)
+	}
+}
+
+// And says nothing when there is nothing to say. A banner that is always there
+// is a banner nobody reads on the day it matters.
+func TestNothingIsSaidWhenTheHistoryIsBeingKept(t *testing.T) {
+	t.Parallel()
+
+	service := ui.NewJobService(job.NewQueue(), store.NewJobMemory())
+
+	if got := service.HistoryStatus(); got.Warning != "" {
+		t.Errorf("the window is told %q, want nothing", got.Warning)
+	}
+}

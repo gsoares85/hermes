@@ -104,6 +104,18 @@ export interface DiagnosisView {
 }
 
 /**
+ * HistoryView says whether what runs is being remembered, and warns when it is
+ * not.
+ * 
+ * The warning is prose because it is shown to a person and has to name the file
+ * it is about. It is empty exactly when the history is being written, which is
+ * what the window decides whether to draw a banner from.
+ */
+export interface HistoryView {
+    "warning": string;
+}
+
+/**
  * JobCursor is where a page of the history stopped, as the window holds it.
  * 
  * The time crosses as the string it was drawn from rather than as a number,

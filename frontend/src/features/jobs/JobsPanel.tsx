@@ -7,6 +7,7 @@ import {
   isOver,
   isStoppable,
   jobLog,
+  historyStatus,
   jobs as listJobs,
   merged,
   olderJobs,
@@ -41,6 +42,9 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
   // because the only way to find out is to ask, and it becomes a no when an
   // asking comes back empty.
   const [earlier, setEarlier] = useState(true);
+  // What to say about the history itself, which is empty on a machine where it
+  // is being kept — most of them, most of the time.
+  const [history, setHistory] = useState("");
 
   // The reconciliation. Declared above the effects that call it, for the
   // reason the window's own reload is: a function declaration hoists, so
@@ -96,6 +100,19 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
   useEffect((): void => {
     reconcile();
   }, [reconcile]);
+
+  // Asked once, because it is settled before the window opens: where the
+  // history is kept is decided when the application starts.
+  useEffect((): void => {
+    historyStatus()
+      .then((status): void => {
+        setHistory(status.warning);
+      })
+      .catch((): void => {
+        // Running outside the desktop shell. The panel has nothing to say
+        // about a history it cannot ask about.
+      });
+  }, []);
 
   // The window coming back is the moment a missed event matters most: it is
   // exactly when the panel was not being drawn and the events went nowhere.
@@ -194,6 +211,17 @@ export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Eleme
           <Icon name="close" />
         </button>
       </header>
+
+      {/*
+        What is wrong with the history itself, which outlasts anything else the
+        panel has to say: a session that is not being remembered is not being
+        remembered all day. Above the notices for the same reason.
+      */}
+      {history !== "" && (
+        <p className="jobs__warning" role="status">
+          {history}
+        </p>
+      )}
 
       {notice !== "" && <p className="jobs__notice">{notice}</p>}
 

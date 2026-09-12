@@ -44,6 +44,19 @@ export function Forget(id: string): $CancellablePromise<void> {
 }
 
 /**
+ * HistoryStatus says whether what happens in this session will still be there
+ * tomorrow.
+ * 
+ * The window asks so that it can say when the answer is no. A history that
+ * silently stopped being kept is the failure this is here to make visible:
+ * nobody finds out until the morning they look for the backup that ran
+ * overnight and the panel is empty.
+ */
+export function HistoryStatus(): $CancellablePromise<$models.HistoryView> {
+    return $Call.ByID(3254953417);
+}
+
+/**
  * List answers every job the window knows about: what is running in this
  * session, and what ran in the ones before it.
  * 

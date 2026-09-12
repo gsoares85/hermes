@@ -97,6 +97,7 @@ type JobLogView struct {
 type JobService struct {
 	queue   *job.Queue
 	history store.JobHistory
+	warning string
 }
 
 // NewJobService creates the service bound to the frontend.
@@ -104,8 +105,26 @@ type JobService struct {
 // The history is handed in rather than reached for, like the vault and the
 // engine: which file it is, or whether it is a file at all, is decided by the
 // command that wires the application together.
-func NewJobService(queue *job.Queue, history store.JobHistory) *JobService {
-	return &JobService{queue: queue, history: history}
+func NewJobService(queue *job.Queue, history store.JobHistory, options ...JobServiceOption) *JobService {
+	service := &JobService{queue: queue, history: history}
+	for _, option := range options {
+		option(service)
+	}
+
+	return service
+}
+
+// JobServiceOption configures the service.
+type JobServiceOption func(*JobService)
+
+// WithHistoryWarning gives the service something to tell the person about the
+// history it was handed.
+//
+// A string rather than a function, unlike the vault's: where the history is
+// kept is settled before the window opens, so there is nothing still on its
+// way. Empty means the history is a file and it is being written.
+func WithHistoryWarning(warning string) JobServiceOption {
+	return func(s *JobService) { s.warning = warning }
 }
 
 // Observing adapts an emitter to the queue's observer, so that a state change
@@ -161,6 +180,27 @@ func (s *JobService) List(ctx context.Context) ([]JobView, error) {
 	}
 
 	return views, nil
+}
+
+// HistoryView says whether what runs is being remembered, and warns when it is
+// not.
+//
+// The warning is prose because it is shown to a person and has to name the file
+// it is about. It is empty exactly when the history is being written, which is
+// what the window decides whether to draw a banner from.
+type HistoryView struct {
+	Warning string `json:"warning"`
+}
+
+// HistoryStatus says whether what happens in this session will still be there
+// tomorrow.
+//
+// The window asks so that it can say when the answer is no. A history that
+// silently stopped being kept is the failure this is here to make visible:
+// nobody finds out until the morning they look for the backup that ran
+// overnight and the panel is empty.
+func (s *JobService) HistoryStatus() HistoryView {
+	return HistoryView{Warning: s.warning}
 }
 
 // JobCursor is where a page of the history stopped, as the window holds it.

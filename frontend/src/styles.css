@@ -1510,6 +1510,18 @@ body {
   color: var(--text);
 }
 
+/* What is wrong with the history itself. Warmer than a notice, because it is
+   not about something somebody just did: it is a standing fact about the
+   session, and it stays until the application is started again. */
+.jobs__warning {
+  background: var(--warning-surface, rgba(255, 176, 32, 0.12));
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.8rem;
+  margin: 0;
+  padding: 0.85rem 0.75rem;
+}
+
 .jobs__empty,
 .jobs__notice {
   color: var(--text-muted);

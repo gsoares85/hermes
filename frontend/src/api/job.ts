@@ -2,11 +2,12 @@ import { Events } from "@wailsio/runtime";
 
 import { JobService } from "../../bindings/github.com/gsoares85/hermes/internal/ui";
 import type {
+  HistoryView,
   JobProgressView,
   JobView,
 } from "../../bindings/github.com/gsoares85/hermes/internal/ui/models";
 
-export type { JobProgressView, JobView };
+export type { HistoryView, JobProgressView, JobView };
 
 /**
  * What a job has said since the window was last told.
@@ -45,6 +46,19 @@ export async function jobs(): Promise<JobView[]> {
  */
 export async function olderJobs(after: JobView): Promise<JobView[]> {
   return (await JobService.Older({ endedAt: after.endedAt, id: after.id })) ?? [];
+}
+
+/**
+ * Whether what runs in this session will still be there tomorrow.
+ *
+ * The warning is empty when the history is being written to its file. When it
+ * is not — a file that could not be opened, a disk that filled — it says so in
+ * words, and the panel puts them in front of the person: a history that
+ * quietly stopped being kept is found out on the morning somebody looks for
+ * the backup that ran overnight.
+ */
+export async function historyStatus(): Promise<HistoryView> {
+  return await JobService.HistoryStatus();
 }
 
 /** Everything a job has said. */

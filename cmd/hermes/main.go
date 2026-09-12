@@ -120,6 +120,10 @@ func run() error {
 	history := sqlitestore.OpenJobHistory(historyPath)
 	defer func() { _ = history.Close() }()
 
+	// Said in the log for whoever is reading one, and handed to the window so
+	// that it can say it to the person in front of it. A history that stopped
+	// being kept in silence is the one outcome the fallback must not produce:
+	// nobody finds out until the morning they look for what ran overnight.
 	if history.Warning != "" {
 		slog.Warn(history.Warning)
 	}
@@ -143,7 +147,7 @@ func run() error {
 		job.WithObserver(ui.Observing(emitter)),
 		job.WithObserver(recorder.Observe),
 	)
-	jobService := ui.NewJobService(jobs, history.Jobs)
+	jobService := ui.NewJobService(jobs, history.Jobs, ui.WithHistoryWarning(history.Warning))
 	jobWatcher := ui.NewJobWatcher(jobs, emitter)
 
 	app := application.New(application.Options{
