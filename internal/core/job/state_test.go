@@ -206,3 +206,35 @@ func TestEveryStateSaysWhatItIs(t *testing.T) {
 		t.Errorf("an unnamed State says %q, want %q", got, "unknown")
 	}
 }
+
+// Every state survives the trip to the history and back. The names are what a
+// row on disk holds, so a state added to one map and forgotten in the other is
+// a job that stops being readable the moment it is written.
+func TestEveryStateSurvivesItsName(t *testing.T) {
+	t.Parallel()
+
+	for _, state := range everyState {
+		got, err := job.ParseState(state.String())
+		if err != nil {
+			t.Errorf("reading %q back: %v", state.String(), err)
+
+			continue
+		}
+		if got != state {
+			t.Errorf("%q reads back as %v, want %v", state.String(), got, state)
+		}
+	}
+}
+
+// A name that belongs to nothing is refused rather than read as the first
+// state: a row shown as pending because nobody could read it is a job the
+// panel says is about to start.
+func TestANameThatIsNoStateIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"", "finito", "Done", "unknown"} {
+		if _, err := job.ParseState(name); !errors.Is(err, job.ErrNotAState) {
+			t.Errorf("reading %q returned %v, want ErrNotAState", name, err)
+		}
+	}
+}

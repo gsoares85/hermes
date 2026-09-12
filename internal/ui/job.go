@@ -2,11 +2,13 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/gsoares85/hermes/internal/core/job"
+	"github.com/gsoares85/hermes/internal/core/store"
 )
 
 // How often the window is told where the running jobs are.
@@ -93,12 +95,17 @@ type JobLogView struct {
 // a number, and the log it hands over has already had its secrets taken out on
 // the way into the queue.
 type JobService struct {
-	queue *job.Queue
+	queue   *job.Queue
+	history store.JobHistory
 }
 
 // NewJobService creates the service bound to the frontend.
-func NewJobService(queue *job.Queue) *JobService {
-	return &JobService{queue: queue}
+//
+// The history is handed in rather than reached for, like the vault and the
+// engine: which file it is, or whether it is a file at all, is decided by the
+// command that wires the application together.
+func NewJobService(queue *job.Queue, history store.JobHistory) *JobService {
+	return &JobService{queue: queue, history: history}
 }
 
 // Observing adapts an emitter to the queue's observer, so that a state change
@@ -113,35 +120,70 @@ func Observing(emit Emitter) job.Observer {
 	}
 }
 
-// List answers every job the window knows about.
+// List answers every job the window knows about: what is running in this
+// session, and what ran in the ones before it.
 //
 // It is the reconciliation half of ADR-0015: events are the fast path and this
 // is the truth. A window that missed an event is corrected by asking, and the
 // path that corrects it is the same one that filled the panel in the first
 // place — so it is exercised every time the panel opens, rather than only when
 // something has already gone wrong.
-func (s *JobService) List() []JobView {
+//
+// The queue is asked first and its answer wins. A job that has just ended is
+// in both places, and the copy in memory is the one the events have been
+// describing; taking the other would redraw the row from the file it was
+// written to a moment ago.
+//
+// One page of history, not the whole of it. A person who has been backing up
+// nightly for a year has a history no window shows at once, and reading it to
+// fill a panel is the budget this application is held to.
+func (s *JobService) List(ctx context.Context) ([]JobView, error) {
 	held := s.queue.List()
 
 	views := make([]JobView, 0, len(held))
+	running := make(map[string]bool, len(held))
 	for _, one := range held {
+		running[one.ID] = true
 		views = append(views, viewOfJob(one))
 	}
 
-	return views
+	remembered, err := s.history.Recent(ctx, store.Page{})
+	if err != nil {
+		return nil, fmt.Errorf("reading what has already run: %w", err)
+	}
+
+	for _, record := range remembered {
+		if running[record.ID] {
+			continue
+		}
+
+		views = append(views, viewOfRecord(record))
+	}
+
+	return views, nil
 }
 
 // Log answers everything a job has said.
 //
 // The whole log, unlike the events, because this is what a panel being opened
-// on a job that has been running for ten minutes needs.
-func (s *JobService) Log(id string) ([]string, error) {
+// on a job that has been running for ten minutes needs — and what a panel
+// opened on last night's failure needs, which is why a job the queue no longer
+// holds is looked for in the history rather than reported as gone.
+func (s *JobService) Log(ctx context.Context, id string) ([]string, error) {
 	lines, err := s.queue.Log(id)
+	if err == nil {
+		return lines, nil
+	}
+	if !errors.Is(err, job.ErrNotFound) {
+		return nil, fmt.Errorf("reading the log of job %s: %w", id, err)
+	}
+
+	remembered, err := s.history.Get(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("reading the log of job %s: %w", id, err)
 	}
 
-	return lines, nil
+	return remembered.Log, nil
 }
 
 // Cancel asks a job to stop.
@@ -153,10 +195,25 @@ func (s *JobService) Cancel(id string) error {
 	return nil
 }
 
-// Forget drops a job that has ended from the list.
-func (s *JobService) Forget(id string) error {
-	if err := s.queue.Forget(id); err != nil {
-		return fmt.Errorf("forgetting job %s: %w", id, err)
+// Forget drops a job that has ended from the list, and from the history.
+//
+// Both, because the row a person dismissed must not come back when the panel
+// is next opened — and either alone, because a job that ended in this session
+// is in both places while a job from last week is only in one. It is a failure
+// only when neither knew it, which is a row that was never there.
+func (s *JobService) Forget(ctx context.Context, id string) error {
+	fromQueue := s.queue.Forget(id)
+	if fromQueue != nil && !errors.Is(fromQueue, job.ErrNotFound) {
+		return fmt.Errorf("forgetting job %s: %w", id, fromQueue)
+	}
+
+	fromHistory := s.history.Forget(ctx, id)
+	if fromHistory != nil && !errors.Is(fromHistory, store.ErrNotFound) {
+		return fmt.Errorf("forgetting job %s: %w", id, fromHistory)
+	}
+
+	if fromQueue != nil && fromHistory != nil {
+		return fmt.Errorf("forgetting job %s: %w", id, fromQueue)
 	}
 
 	return nil
@@ -326,6 +383,24 @@ func viewOfJob(one job.View) JobView {
 		Dropped:   one.Dropped,
 		StartedAt: timeOf(one.Started),
 		EndedAt:   timeOf(one.Ended),
+	}
+}
+
+// viewOfRecord is a job the history remembers, as the window draws it.
+//
+// No progress: a job that ended is at its end, and a bar is a question about
+// something still moving. What is kept is what somebody looks for afterwards —
+// what it was, how it ended, when, and how much of its log was lost.
+func viewOfRecord(record store.JobRecord) JobView {
+	return JobView{
+		ID:        record.ID,
+		Kind:      record.Kind,
+		Title:     record.Title,
+		State:     record.State.String(),
+		Err:       record.Err,
+		Dropped:   record.Dropped,
+		StartedAt: timeOf(record.Started),
+		EndedAt:   timeOf(record.Ended),
 	}
 }
 

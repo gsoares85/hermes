@@ -28,6 +28,15 @@ const (
 	Cancelled
 )
 
+// ErrNotAState is a name that stands for no state.
+//
+// It exists because the names leave the process: they are what the history on
+// disk keeps and what the window reads. Something has to say what a name that
+// came back and belongs to nothing means, and the answer is a refusal rather
+// than a plausible state — a row read as "pending" because its state could not
+// be understood is a job the panel shows as about to start.
+var ErrNotAState = errors.New("not the name of a state a job can be in")
+
 // ErrNotATransition is a move a job cannot make.
 //
 // One sentinel rather than one per illegal pair: the caller has nothing
@@ -91,6 +100,22 @@ func (s State) String() string {
 	}
 
 	return names[s]
+}
+
+// ParseState answers the state a name stands for.
+//
+// The other half of String, and here beside it so that the two cannot drift:
+// whatever crosses to the history has to be able to come back, and a name
+// added to one map and forgotten in the other is a row that stops being
+// readable the moment it is written.
+func ParseState(name string) (State, error) {
+	for state, spelling := range names {
+		if spelling == name {
+			return state, nil
+		}
+	}
+
+	return Pending, fmt.Errorf("%w: %q", ErrNotAState, name)
 }
 
 var names = map[State]string{

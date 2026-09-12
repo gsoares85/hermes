@@ -1,0 +1,185 @@
+package sqlitestore
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	// The driver, registered under the name Open asks for below. Blank because
+	// nothing here calls it directly: this is the one import in the repository
+	// that makes SQLite a fact, and the gate keeps it that way.
+	_ "modernc.org/sqlite"
+
+	"github.com/gsoares85/hermes/internal/core/store"
+	"github.com/gsoares85/hermes/internal/privatedir"
+)
+
+// The name of the file, under the configuration directory of the system. One
+// file for everything the application remembers: the job history today, the
+// backup catalogue and the preferences next, each behind a contract of its own
+// and all sharing one migration ladder.
+const fileName = "hermes.db"
+
+// The permissions of the file. A history is a list of the databases somebody
+// operates on, the moments they did it and what the server said when it went
+// wrong; the directory is already theirs alone, and this says the same about
+// the file for the case where it is not.
+const fileMode = 0o600
+
+// How long a statement waits for another process to let go of the file.
+//
+// Two windows of Hermes on one machine share this file, and SQLite gives a
+// writer the whole database. Five seconds is long enough for the other one to
+// finish writing a row and short enough that nobody thinks the application has
+// stopped — and nothing here writes more than a row at a time.
+const busyTimeout = 5 * time.Second
+
+// ErrFromTheFuture is a file written by a version of Hermes newer than this
+// one.
+//
+// Refused rather than used, and this is the one thing a broken file and a
+// future one are not treated alike for: a schema this build does not know
+// could be read wrongly rather than not at all, and a newer Hermes on the same
+// machine is a thing people have.
+var ErrFromTheFuture = errors.New("the local database was written by a newer version of Hermes")
+
+// Store is the local database: one file, and everything kept in it.
+type Store struct {
+	db   *sql.DB
+	path string
+}
+
+// Open opens the database at path, creating and migrating it as needed.
+func Open(path string) (*Store, error) {
+	if err := privatedir.Make(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s: %w", path, err)
+	}
+
+	// One connection, so that writers never queue behind each other inside
+	// this process and a pragma set once stays set. The load this carries is a
+	// row per operation and a page per panel; a pool would be answering a
+	// question nobody has asked.
+	db.SetMaxOpenConns(1)
+
+	opened := &Store{db: db, path: path}
+	if err := opened.prepare(context.Background()); err != nil {
+		_ = db.Close()
+
+		return nil, err
+	}
+
+	return opened, nil
+}
+
+// prepare puts the connection in the state the rest of the package assumes,
+// and brings the schema up to date.
+//
+// Opening a database/sql handle opens no file: everything that can be wrong
+// with the path, the permissions or the bytes is found here, at the first
+// statement, which is why this runs before Open answers rather than at the
+// first save.
+func (s *Store) prepare(ctx context.Context) error {
+	pragmas := []string{
+		// Readers do not block the writer and the writer does not block them,
+		// which is what lets the panel read the history while a job that has
+		// just ended is being written.
+		"PRAGMA journal_mode = WAL",
+		fmt.Sprintf("PRAGMA busy_timeout = %d", busyTimeout.Milliseconds()),
+	}
+	for _, pragma := range pragmas {
+		if _, err := s.db.ExecContext(ctx, pragma); err != nil {
+			return fmt.Errorf("preparing %s (%s): %w", s.path, pragma, err)
+		}
+	}
+
+	if err := os.Chmod(s.path, fileMode); err != nil {
+		return fmt.Errorf("setting the permissions of %s: %w", s.path, err)
+	}
+
+	return s.migrate(ctx)
+}
+
+// Close releases the file.
+func (s *Store) Close() error {
+	if err := s.db.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", s.path, err)
+	}
+
+	return nil
+}
+
+// Jobs answers the history of jobs kept in this database.
+func (s *Store) Jobs() *JobHistory {
+	return &JobHistory{db: s.db, path: s.path}
+}
+
+// DefaultPath is where the database lives when nobody has said otherwise: the
+// configuration directory of the operating system, under a directory of ours —
+// the same one the connections file is in.
+func DefaultPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("finding the configuration directory of this system: %w", err)
+	}
+
+	return filepath.Join(dir, "hermes", fileName), nil
+}
+
+// Opened is a history to use, whatever state the file turned out to be in.
+//
+// It exists because losing the history is not a reason to refuse to start. A
+// file somebody's backup software restored half way, a disk that filled while
+// a row was being written, a path that is suddenly a directory: none of that
+// stops a person taking a backup, and an application that would not open
+// because of it would be choosing its own bookkeeping over their work. The
+// same argument the vault makes for falling back to a store that lives in the
+// process, and the same answer — say so, out loud, and carry on.
+type Opened struct {
+	// Jobs is the history, whether it is the file or the one in this process.
+	Jobs store.JobHistory
+	// Warning is what to put in front of the person, and is empty when there
+	// is nothing to say. A history that silently stopped being kept is worse
+	// than one that is gone, because nobody finds out until they look for
+	// something that should be there.
+	Warning string
+
+	closer *Store
+}
+
+// OpenJobHistory answers a job history to use, and never fails.
+//
+// A file that cannot be opened leaves the person with a history that lives in
+// this process and dies with it, which is empty now and will not be there
+// tomorrow. Nothing is moved, renamed or deleted: the file stays exactly as it
+// is, so that whoever looks into the warning still has it to look at, and so
+// that a path that failed for a reason that passes — a disk momentarily full,
+// a directory not yet mounted — works again by itself on the next start.
+func OpenJobHistory(path string) Opened {
+	opened, err := Open(path)
+	if err != nil {
+		return Opened{
+			Jobs:    store.NewJobMemory(),
+			Warning: fmt.Sprintf("the job history at %s could not be opened, so this session will not be remembered: %v", path, err),
+		}
+	}
+
+	return Opened{Jobs: opened.Jobs(), closer: opened}
+}
+
+// Close releases the file, and does nothing when there was none.
+func (o Opened) Close() error {
+	if o.closer == nil {
+		return nil
+	}
+
+	return o.closer.Close()
+}

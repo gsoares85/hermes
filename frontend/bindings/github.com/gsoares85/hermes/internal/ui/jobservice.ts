@@ -32,20 +32,35 @@ export function Cancel(id: string): $CancellablePromise<void> {
 }
 
 /**
- * Forget drops a job that has ended from the list.
+ * Forget drops a job that has ended from the list, and from the history.
+ * 
+ * Both, because the row a person dismissed must not come back when the panel
+ * is next opened — and either alone, because a job that ended in this session
+ * is in both places while a job from last week is only in one. It is a failure
+ * only when neither knew it, which is a row that was never there.
  */
 export function Forget(id: string): $CancellablePromise<void> {
     return $Call.ByID(113955724, id);
 }
 
 /**
- * List answers every job the window knows about.
+ * List answers every job the window knows about: what is running in this
+ * session, and what ran in the ones before it.
  * 
  * It is the reconciliation half of ADR-0015: events are the fast path and this
  * is the truth. A window that missed an event is corrected by asking, and the
  * path that corrects it is the same one that filled the panel in the first
  * place — so it is exercised every time the panel opens, rather than only when
  * something has already gone wrong.
+ * 
+ * The queue is asked first and its answer wins. A job that has just ended is
+ * in both places, and the copy in memory is the one the events have been
+ * describing; taking the other would redraw the row from the file it was
+ * written to a moment ago.
+ * 
+ * One page of history, not the whole of it. A person who has been backing up
+ * nightly for a year has a history no window shows at once, and reading it to
+ * fill a panel is the budget this application is held to.
  */
 export function List(): $CancellablePromise<$models.JobView[] | null> {
     return $Call.ByID(3462799265);
@@ -55,7 +70,9 @@ export function List(): $CancellablePromise<$models.JobView[] | null> {
  * Log answers everything a job has said.
  * 
  * The whole log, unlike the events, because this is what a panel being opened
- * on a job that has been running for ten minutes needs.
+ * on a job that has been running for ten minutes needs — and what a panel
+ * opened on last night's failure needs, which is why a job the queue no longer
+ * holds is looked for in the history rather than reported as gone.
  */
 export function Log(id: string): $CancellablePromise<string[] | null> {
     return $Call.ByID(2942170097, id);

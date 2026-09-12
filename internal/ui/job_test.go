@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gsoares85/hermes/internal/core/job"
+	"github.com/gsoares85/hermes/internal/core/store"
 	"github.com/gsoares85/hermes/internal/ui"
 )
 
@@ -77,11 +78,24 @@ func finished(t *testing.T, queue *job.Queue, run job.Runner) string {
 	return id
 }
 
+// listedJobs is the panel asking what there is, in a test that is not about
+// the asking failing.
+func listedJobs(t *testing.T, service *ui.JobService) []ui.JobView {
+	t.Helper()
+
+	jobs, err := service.List(t.Context())
+	if err != nil {
+		t.Fatalf("List(...) = _, %v, want no error", err)
+	}
+
+	return jobs
+}
+
 func TestTheServiceListsWhatIsRunning(t *testing.T) {
 	t.Parallel()
 
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue)
+	service := ui.NewJobService(queue, store.NewJobMemory())
 
 	if _, err := queue.Submit(
 		job.Spec{Kind: "backup", Title: "shop on db.example.com"},
@@ -97,7 +111,7 @@ func TestTheServiceListsWhatIsRunning(t *testing.T) {
 	var listed ui.JobView
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		jobs := service.List()
+		jobs := listedJobs(t, service)
 		if len(jobs) == 1 && jobs[0].State == "running" {
 			listed = jobs[0]
 
@@ -123,11 +137,11 @@ func TestTheStateCrossesAsAName(t *testing.T) {
 	t.Parallel()
 
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue)
+	service := ui.NewJobService(queue, store.NewJobMemory())
 
 	finished(t, queue, runnerFunc(func(context.Context, job.Reporter) error { return nil }))
 
-	jobs := service.List()
+	jobs := listedJobs(t, service)
 	if len(jobs) != 1 || jobs[0].State != "done" {
 		t.Fatalf("the jobs are %+v, want one that is done", jobs)
 	}
@@ -140,7 +154,7 @@ func TestAJobThatHasNotEndedSaysSo(t *testing.T) {
 	t.Parallel()
 
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue)
+	service := ui.NewJobService(queue, store.NewJobMemory())
 
 	started := make(chan struct{})
 	if _, err := queue.Submit(spec("a job"), runnerFunc(func(ctx context.Context, _ job.Reporter) error {
@@ -154,7 +168,7 @@ func TestAJobThatHasNotEndedSaysSo(t *testing.T) {
 
 	<-started
 
-	jobs := service.List()
+	jobs := listedJobs(t, service)
 	if len(jobs) != 1 {
 		t.Fatalf("the jobs are %+v, want one", jobs)
 	}
@@ -176,7 +190,7 @@ func TestDurationsCrossAsMilliseconds(t *testing.T) {
 	t.Parallel()
 
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue)
+	service := ui.NewJobService(queue, store.NewJobMemory())
 
 	finished(t, queue, runnerFunc(func(_ context.Context, report job.Reporter) error {
 		report.Report(job.Progress{Done: 1, Total: 4, Unit: "rows", Step: "copying"})
@@ -184,7 +198,7 @@ func TestDurationsCrossAsMilliseconds(t *testing.T) {
 		return nil
 	}))
 
-	jobs := service.List()
+	jobs := listedJobs(t, service)
 	if len(jobs) != 1 {
 		t.Fatalf("the jobs are %+v, want one", jobs)
 	}
@@ -202,7 +216,7 @@ func TestCancellingThroughTheService(t *testing.T) {
 	t.Parallel()
 
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue)
+	service := ui.NewJobService(queue, store.NewJobMemory())
 
 	started := make(chan struct{})
 	id, err := queue.Submit(spec("a job"), runnerFunc(func(ctx context.Context, _ job.Reporter) error {
@@ -238,15 +252,15 @@ func TestForgettingAJobThatHasEnded(t *testing.T) {
 	t.Parallel()
 
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue)
+	service := ui.NewJobService(queue, store.NewJobMemory())
 
 	id := finished(t, queue, runnerFunc(func(context.Context, job.Reporter) error { return nil }))
 
-	if err := service.Forget(id); err != nil {
+	if err := service.Forget(t.Context(), id); err != nil {
 		t.Fatalf("Forget(...) = %v, want no error", err)
 	}
 
-	if jobs := service.List(); len(jobs) != 0 {
+	if jobs := listedJobs(t, service); len(jobs) != 0 {
 		t.Errorf("the jobs are %+v, want none", jobs)
 	}
 }
@@ -258,7 +272,7 @@ func TestForgettingAJobThatIsStillRunning(t *testing.T) {
 	t.Parallel()
 
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue)
+	service := ui.NewJobService(queue, store.NewJobMemory())
 
 	started := make(chan struct{})
 	id, err := queue.Submit(spec("a job"), runnerFunc(func(ctx context.Context, _ job.Reporter) error {
@@ -273,11 +287,11 @@ func TestForgettingAJobThatIsStillRunning(t *testing.T) {
 
 	<-started
 
-	if err := service.Forget(id); err == nil {
+	if err := service.Forget(t.Context(), id); err == nil {
 		t.Error("Forget(...) = nil for a running job, want an error")
 	}
 
-	if jobs := service.List(); len(jobs) != 1 {
+	if jobs := listedJobs(t, service); len(jobs) != 1 {
 		t.Errorf("the jobs are %+v, want the running one still there", jobs)
 	}
 }
@@ -501,13 +515,163 @@ func TestAskingAboutAJobTheQueueDoesNotHave(t *testing.T) {
 	t.Parallel()
 
 	queue := job.NewQueue()
-	service := ui.NewJobService(queue)
+	service := ui.NewJobService(queue, store.NewJobMemory())
 
 	if err := service.Cancel("no-such-job"); !errors.Is(err, job.ErrNotFound) {
 		t.Errorf("Cancel(...) = %v, want %v", err, job.ErrNotFound)
 	}
 
-	if err := service.Forget("no-such-job"); !errors.Is(err, job.ErrNotFound) {
+	if err := service.Forget(t.Context(), "no-such-job"); !errors.Is(err, job.ErrNotFound) {
 		t.Errorf("Forget(...) = %v, want %v", err, job.ErrNotFound)
+	}
+}
+
+// The panel of a session that has just started: nothing is running, and what
+// ran before is there to be read. Without this the history is a file nobody
+// ever sees.
+func TestTheServiceListsWhatRanBefore(t *testing.T) {
+	t.Parallel()
+
+	history := store.NewJobMemory()
+	remember(t, history, lastNight("last-night", job.Failed))
+
+	service := ui.NewJobService(job.NewQueue(), history)
+
+	jobs := listedJobs(t, service)
+	if len(jobs) != 1 {
+		t.Fatalf("the panel shows %+v, want the job that ran last night", jobs)
+	}
+	if jobs[0].ID != "last-night" || jobs[0].State != "failed" {
+		t.Errorf("the row is %+v, want the failed job from last night", jobs[0])
+	}
+	if jobs[0].Err == "" {
+		t.Error("the row carries no error: a failure whose reason is gone cannot be acted on")
+	}
+	if jobs[0].EndedAt == "" {
+		t.Error("the row has no end: a job in the history has one by definition")
+	}
+}
+
+// A job that has just ended is in the queue and in the history at once, and
+// the panel must show one row. The copy in memory is the one the events have
+// been describing, so it is the one that wins.
+func TestAJobInBothPlacesIsOneRow(t *testing.T) {
+	t.Parallel()
+
+	queue := job.NewQueue()
+	history := store.NewJobMemory()
+	service := ui.NewJobService(queue, history)
+
+	id := finished(t, queue, runnerFunc(func(context.Context, job.Reporter) error { return nil }))
+	remember(t, history, lastNight(id, job.Failed))
+
+	jobs := listedJobs(t, service)
+	if len(jobs) != 1 {
+		t.Fatalf("the panel shows %d rows for one job: %+v", len(jobs), jobs)
+	}
+	if jobs[0].State != "done" {
+		t.Errorf("the row is %q, want the state the queue holds", jobs[0].State)
+	}
+}
+
+// A history that cannot be read is said out loud rather than shown as an empty
+// panel. An empty panel is a sentence too — "nothing has ever run" — and it is
+// the wrong one.
+func TestAHistoryThatCannotBeReadIsReported(t *testing.T) {
+	t.Parallel()
+
+	service := ui.NewJobService(job.NewQueue(), unreadableHistory{})
+
+	if _, err := service.List(t.Context()); err == nil {
+		t.Error("List(...) = _, nil for a history that cannot be read, want the failure")
+	}
+}
+
+// The log of last night's failure is the reason somebody opens the panel at
+// all. The queue has forgotten the job; the history has not.
+func TestTheLogOfAJobOnlyTheHistoryRemembers(t *testing.T) {
+	t.Parallel()
+
+	history := store.NewJobMemory()
+	remembered := lastNight("last-night", job.Failed)
+	remembered.Log = []string{"pg_dump: error: connection to server failed"}
+	remember(t, history, remembered)
+
+	service := ui.NewJobService(job.NewQueue(), history)
+
+	lines, err := service.Log(t.Context(), "last-night")
+	if err != nil {
+		t.Fatalf("Log(...) = _, %v, want no error", err)
+	}
+	if len(lines) != 1 || lines[0] != remembered.Log[0] {
+		t.Errorf("the log reads %q, want what the job said", lines)
+	}
+}
+
+// Dismissing a row takes it out of both places. Out of one only, and the row
+// somebody dismissed is back the next time the panel is opened.
+func TestForgettingTakesAJobOutOfTheHistoryToo(t *testing.T) {
+	t.Parallel()
+
+	queue := job.NewQueue()
+	history := store.NewJobMemory()
+	service := ui.NewJobService(queue, history)
+
+	id := finished(t, queue, runnerFunc(func(context.Context, job.Reporter) error { return nil }))
+	remember(t, history, lastNight(id, job.Done))
+
+	if err := service.Forget(t.Context(), id); err != nil {
+		t.Fatalf("Forget(...) = %v, want no error", err)
+	}
+
+	if jobs := listedJobs(t, service); len(jobs) != 0 {
+		t.Errorf("the panel shows %+v after the row was dismissed", jobs)
+	}
+}
+
+// A job this session never ran can still be dismissed: it is in the history
+// and nowhere else, which is what every row of an old session is.
+func TestForgettingAJobOnlyTheHistoryHas(t *testing.T) {
+	t.Parallel()
+
+	history := store.NewJobMemory()
+	remember(t, history, lastNight("last-night", job.Done))
+
+	service := ui.NewJobService(job.NewQueue(), history)
+
+	if err := service.Forget(t.Context(), "last-night"); err != nil {
+		t.Fatalf("Forget(...) = %v, want no error", err)
+	}
+	if jobs := listedJobs(t, service); len(jobs) != 0 {
+		t.Errorf("the panel shows %+v after the row was dismissed", jobs)
+	}
+}
+
+// unreadableHistory is a file that has gone wrong under a running application.
+type unreadableHistory struct {
+	store.JobHistory
+}
+
+func (unreadableHistory) Recent(context.Context, store.Page) ([]store.JobRecord, error) {
+	return nil, errors.New("the file is not a database any more")
+}
+
+func lastNight(id string, state job.State) store.JobRecord {
+	return store.JobRecord{
+		ID:      id,
+		Kind:    "backup",
+		Title:   "shop on db.example.com",
+		State:   state,
+		Err:     "pg_dump exited with status 1",
+		Started: time.Date(2026, time.September, 11, 3, 0, 0, 0, time.UTC),
+		Ended:   time.Date(2026, time.September, 11, 3, 12, 0, 0, time.UTC),
+	}
+}
+
+func remember(t *testing.T, history store.JobHistory, record store.JobRecord) {
+	t.Helper()
+
+	if err := history.Save(t.Context(), record); err != nil {
+		t.Fatalf("filling the history: %v", err)
 	}
 }

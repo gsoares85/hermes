@@ -187,6 +187,12 @@ type JobHistory interface {
 	// what stops one job from becoming two rows wearing the same identifier.
 	Save(ctx context.Context, record JobRecord) error
 
+	// Get answers one job, or ErrNotFound. It exists because a panel opened
+	// on a job that ended last week has an identifier and nothing else:
+	// walking the pages to find one row would read the whole history to
+	// answer a question about one line of it.
+	Get(ctx context.Context, id string) (JobRecord, error)
+
 	// Recent answers one page of the history, newest first. A page shorter
 	// than the size it asked for is the last one.
 	Recent(ctx context.Context, page Page) ([]JobRecord, error)

@@ -85,8 +85,13 @@ func WithCleanupTimeout(within time.Duration) Option {
 type Observer func(View)
 
 // WithObserver gives the queue somebody to tell when a job changes state.
+//
+// Several of them are allowed, and each call adds one rather than replacing
+// what was there: a job that ends is both a row the window redraws and a row
+// the history keeps, and the two have nothing to do with each other. They are
+// told in the order they were added.
 func WithObserver(observe Observer) Option {
-	return func(q *Queue) { q.observe = observe }
+	return func(q *Queue) { q.observers = append(q.observers, observe) }
 }
 
 // Spec is what a job is, as opposed to what it does.
@@ -137,7 +142,7 @@ type Queue struct {
 	logLines       int
 	logBytes       int
 	cleanupTimeout time.Duration
-	observe        Observer
+	observers      []Observer
 }
 
 // record is a job as the queue holds it. Everything mutable about a job lives
@@ -380,11 +385,13 @@ func (q *Queue) moveTo(held *record, to State) bool {
 // not write, and running it while holding the queue is how one slow window
 // stops every job in it.
 func (q *Queue) tell(announce *View) {
-	if announce == nil || q.observe == nil {
+	if announce == nil {
 		return
 	}
 
-	q.observe(*announce)
+	for _, observe := range q.observers {
+		observe(*announce)
+	}
 }
 
 // Get answers what the queue knows about one job.

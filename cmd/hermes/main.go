@@ -17,9 +17,11 @@ import (
 	"github.com/gsoares85/hermes/frontend"
 	"github.com/gsoares85/hermes/internal/core/job"
 	"github.com/gsoares85/hermes/internal/core/secret"
+	"github.com/gsoares85/hermes/internal/core/store"
 	"github.com/gsoares85/hermes/internal/credential"
 	"github.com/gsoares85/hermes/internal/driver/postgres"
 	"github.com/gsoares85/hermes/internal/filestore"
+	"github.com/gsoares85/hermes/internal/sqlitestore"
 	"github.com/gsoares85/hermes/internal/ui"
 	"github.com/gsoares85/hermes/internal/vault"
 	"github.com/gsoares85/hermes/internal/version"
@@ -105,13 +107,43 @@ func run() error {
 		VaultStatus: vaultStatus(opened),
 	})
 
+	// Where the history is kept is decided here, like everything else with a
+	// file behind it. Opening never fails: a file that has gone wrong leaves
+	// the person with a history that dies with this session and a sentence
+	// saying so, which beats an application that will not start because of its
+	// own bookkeeping.
+	historyPath, err := sqlitestore.DefaultPath()
+	if err != nil {
+		return err
+	}
+
+	history := sqlitestore.OpenJobHistory(historyPath)
+	defer func() { _ = history.Close() }()
+
+	if history.Warning != "" {
+		slog.Warn(history.Warning)
+	}
+
 	// The emitter is built before the queue because the queue is told where to
 	// announce a state change, and the window is where. It reaches for the
 	// application at the moment it emits rather than now: nothing has been
 	// announced before there is an application to announce it to.
 	emitter := windowEvents{}
-	jobs := job.NewQueue(job.WithObserver(ui.Observing(emitter)))
-	jobService := ui.NewJobService(jobs)
+
+	// The recorder reads the log of a job that has just ended, so it needs the
+	// queue; the queue needs its observers before it exists. The knot is tied
+	// with a closure, and it is safe by construction: nothing is observed
+	// before a job runs, and no job can run before the queue is built.
+	var jobs *job.Queue
+	recorder := store.NewRecorder(history.Jobs, func(id string) ([]string, error) {
+		return jobs.Log(id)
+	}, func(err error) { slog.Warn("the job history was not written", "error", err) })
+
+	jobs = job.NewQueue(
+		job.WithObserver(ui.Observing(emitter)),
+		job.WithObserver(recorder.Observe),
+	)
+	jobService := ui.NewJobService(jobs, history.Jobs)
 	jobWatcher := ui.NewJobWatcher(jobs, emitter)
 
 	app := application.New(application.Options{

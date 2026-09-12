@@ -345,3 +345,52 @@ func TestTheQueueIsReachedFromEverywhereAtOnce(t *testing.T) {
 		t.Errorf("List() has %d jobs, want 20", got)
 	}
 }
+
+// A job that ends is two different pieces of news: a row the window redraws
+// and a row the history keeps. They have nothing to do with each other, so
+// each is registered on its own and both are told.
+func TestEveryObserverIsTold(t *testing.T) {
+	t.Parallel()
+
+	// Channels rather than slices, because an observer is called from the
+	// goroutine of the job that moved and the last call happens after Wait has
+	// already returned: a test that read a slice here would be reading it
+	// while the queue writes to it.
+	first := make(chan job.State, len(everyState))
+	second := make(chan job.State, len(everyState))
+
+	queue := job.NewQueue(
+		job.WithObserver(func(view job.View) { first <- view.State }),
+		job.WithObserver(func(view job.View) { second <- view.State }),
+	)
+
+	if _, err := queue.Submit(spec("a job"), runnerFunc(func(context.Context, job.Reporter) error {
+		return nil
+	})); err != nil {
+		t.Fatalf("Submit(...) = _, %v, want no error", err)
+	}
+
+	for name, told := range map[string]chan job.State{"the first": first, "the second": second} {
+		if !heard(t, told, job.Done) {
+			t.Errorf("%s observer was never told the job was done", name)
+		}
+	}
+}
+
+// heard waits for one observer to be told a job reached the state, and gives
+// up rather than hanging when it never is.
+func heard(t *testing.T, told chan job.State, want job.State) bool {
+	t.Helper()
+
+	giveUp := time.After(5 * time.Second)
+	for {
+		select {
+		case state := <-told:
+			if state == want {
+				return true
+			}
+		case <-giveUp:
+			return false
+		}
+	}
+}

@@ -47,6 +47,8 @@ func Run(t *testing.T, storage Storage) {
 		run  func(t *testing.T, open Open)
 	}{
 		{"a saved job comes back whole", savedJobComesBackWhole},
+		{"a saved job is found by its identifier", savedJobIsFoundByItsIdentifier},
+		{"an unknown identifier is not found", unknownIdentifierIsNotFound},
 		{"saving twice keeps the last record", savingTwiceKeepsTheLastRecord},
 		{"what was saved outlives the store that wrote it", savedHistoryOutlivesTheStore},
 		{"the newest job comes first", newestJobComesFirst},
@@ -57,6 +59,7 @@ func Run(t *testing.T, storage Storage) {
 		{"a job that has not ended is refused", unendedJobIsRefused},
 		{"a record with no identifier is refused", recordWithoutIdentifierIsRefused},
 		{"a job that ended at no particular time is refused", recordWithoutAnEndIsRefused},
+		{"a job that never started keeps its missing beginning", jobThatNeverStartedKeepsNoBeginning},
 		{"a cancelled context writes nothing", cancelledContextWritesNothing},
 		{"the log is kept, not borrowed", logIsKeptNotBorrowed},
 	}
@@ -113,6 +116,36 @@ func savedJobComesBackWhole(t *testing.T, open Open) {
 		if got.Log[i] != line {
 			t.Errorf("line %d reads %q, want %q", i, got.Log[i], line)
 		}
+	}
+}
+
+// The panel opened on a job that ended last week has an identifier and nothing
+// else, and the log it needs is in that one row. Reading the whole history to
+// find it would be paging through a year to answer about a line.
+func savedJobIsFoundByItsIdentifier(t *testing.T, open Open) {
+	history := opened(t, open)
+
+	written := ended(identifier(t))
+	written.Log = []string{"what it said"}
+	save(t, history, written)
+
+	got, err := history.Get(t.Context(), written.ID)
+	if err != nil {
+		t.Fatalf("asking for job %s: %v", written.ID, err)
+	}
+	if got.ID != written.ID {
+		t.Errorf("asking for %s answered %s", written.ID, got.ID)
+	}
+	if len(got.Log) != 1 || got.Log[0] != "what it said" {
+		t.Errorf("the job came back with the log %q, want what it said", got.Log)
+	}
+}
+
+func unknownIdentifierIsNotFound(t *testing.T, open Open) {
+	history := opened(t, open)
+
+	if _, err := history.Get(t.Context(), identifier(t)); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("asking for an unknown job returned %v, want ErrNotFound", err)
 	}
 }
 
@@ -304,6 +337,23 @@ func recordWithoutAnEndIsRefused(t *testing.T, open Open) {
 	}
 }
 
+// A job cancelled before it ever ran has no beginning, and that is an outcome
+// rather than a missing value: the row is what explains why the backup
+// somebody asked for never happened. A store that filled the gap in with the
+// end, or with the epoch, would be answering a question nobody asked.
+func jobThatNeverStartedKeepsNoBeginning(t *testing.T, open Open) {
+	history := opened(t, open)
+
+	never := ended(identifier(t))
+	never.State = job.Cancelled
+	never.Started = time.Time{}
+	save(t, history, never)
+
+	if got := find(t, history, never.ID); !got.Started.IsZero() {
+		t.Errorf("the job came back as having started at %v, want no beginning at all", got.Started)
+	}
+}
+
 // Every call takes a context because a history on disk is a file that can be
 // slow to answer. An implementation whose storage is a map has to refuse a
 // cancelled context too, or the double would be easier to satisfy than the
@@ -321,6 +371,9 @@ func cancelledContextWritesNothing(t *testing.T, open Open) {
 	}
 	if _, err := history.Recent(ctx, store.Page{}); !errors.Is(err, context.Canceled) {
 		t.Errorf("reading on a cancelled context returned %v, want context.Canceled", err)
+	}
+	if _, err := history.Get(ctx, record.ID); !errors.Is(err, context.Canceled) {
+		t.Errorf("asking for a job on a cancelled context returned %v, want context.Canceled", err)
 	}
 	if err := history.Forget(ctx, record.ID); !errors.Is(err, context.Canceled) {
 		t.Errorf("forgetting on a cancelled context returned %v, want context.Canceled", err)

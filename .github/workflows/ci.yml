@@ -254,6 +254,33 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # The headless binary is the reason the local database uses a driver
+      # written in Go rather than one bound to C (ADR-0014): it exists to run
+      # profiles in a pipeline, and a binary needing a C toolchain where it is
+      # built and a C library where it runs does not go into an image that has
+      # neither. Now that it keeps a history, that has to be checked rather
+      # than remembered — a single import is all it would take to lose it, and
+      # nothing else in this pipeline would notice.
+      - name: Build the headless binary without cgo
+        env:
+          CGO_ENABLED: 0
+        run: go build -o hermes-cli-static ./cmd/hermes-cli
+
+      # And the check above is only worth anything while the driver is really
+      # in there: a CLI that had stopped linking SQLite would pass it by not
+      # containing the thing it is about.
+      - name: Prove the headless binary carries the database it was built for
+        shell: bash
+        run: |
+          go list -deps ./cmd/hermes-cli | grep -q '^modernc.org/sqlite$' || {
+            echo "cmd/hermes-cli no longer links the SQLite driver, so the cgo-free build proves nothing"
+            exit 1
+          }
+          if go list -deps ./cmd/hermes-cli | grep -E 'wails|keybase|godbus|wincred'; then
+            echo "cmd/hermes-cli reached a package that needs cgo"
+            exit 1
+          fi
+
   # The one job that talks to a real keychain. Everything else in the pipeline
   # runs against the in-memory vault, which is exactly the double the
   # implementations here have to be proven not to be more forgiving than.

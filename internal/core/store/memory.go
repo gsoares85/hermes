@@ -55,6 +55,25 @@ func (m *JobMemory) Save(ctx context.Context, record JobRecord) error {
 	return nil
 }
 
+// Get answers one job, or ErrNotFound.
+func (m *JobMemory) Get(ctx context.Context, id string) (JobRecord, error) {
+	if err := Usable(ctx); err != nil {
+		return JobRecord{}, err
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	record, kept := m.records[id]
+	if !kept {
+		return JobRecord{}, fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+
+	record.Log = slices.Clone(record.Log)
+
+	return record, nil
+}
+
 // Recent answers one page of the history, newest first.
 func (m *JobMemory) Recent(ctx context.Context, page Page) ([]JobRecord, error) {
 	if err := Usable(ctx); err != nil {
