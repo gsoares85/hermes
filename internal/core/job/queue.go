@@ -339,13 +339,40 @@ func (q *Queue) finish(held *record, end State, failure error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	announce = q.ended(held, end, failure)
+}
+
+// endIfWaiting ends a job the queue has not picked up yet, and leaves one it
+// has alone.
+//
+// One taking of the lock rather than two, which is the whole point: a job read
+// as waiting and ended a moment later is a job whose work started in between.
+// The state machine would refuse that move, but only after the work had been
+// let through — and the question here is whether it ever starts.
+func (q *Queue) endIfWaiting(held *record) {
+	var announce *View
+	defer func() { q.tell(announce) }()
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if held.view.State != Pending {
+		return
+	}
+
+	announce = q.ended(held, Cancelled, nil)
+}
+
+// ended puts a job into the end its outcome calls for, answering what to
+// announce or nil when the move was refused. The caller holds the lock.
+func (q *Queue) ended(held *record, end State, failure error) *View {
 	// The state machine is asked rather than assigned to. It is what refuses
 	// an end for a job that already reached one — cancelled while it was still
 	// waiting to start, whose work then ran and returned anyway. The end that
 	// got there first is the one that counts, and done is already closed.
 	moved, err := Transitioned(held.view.State, end)
 	if err != nil {
-		return
+		return nil
 	}
 
 	held.view.State = moved
@@ -363,8 +390,9 @@ func (q *Queue) finish(held *record, end State, failure error) {
 
 	close(held.done)
 
-	ended := q.viewOf(held)
-	announce = &ended
+	announced := q.viewOf(held)
+
+	return &announced
 }
 
 // moveTo applies a transition, ignoring one the job cannot make.

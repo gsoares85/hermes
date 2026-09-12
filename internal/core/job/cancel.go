@@ -56,12 +56,14 @@ func (q *Queue) Cancel(id string) error {
 	// Through finish rather than by hand, because ending a job is more than
 	// writing the state: it closes the job out and tells everybody waiting to
 	// hear about ends — and the history is written by one of those. A job that
-	// ended without anybody being told is a job nothing recorded. finish asks
-	// the state machine, so the job that started underneath this check ends up
-	// where the work puts it, not here.
-	if q.stateOf(held) == Pending {
-		q.finish(held, Cancelled, nil)
-	}
+	// ended without anybody being told is a job nothing recorded.
+	//
+	// Only from Pending, and the reading and the ending happen together: a job
+	// read as waiting and ended a moment later is a job whose work started in
+	// between. Cancelling to Cancelled is a legal move, so asking for it
+	// unconditionally would end a job whose work is still winding down, before
+	// the cleanup that removes what it left behind has run.
+	q.endIfWaiting(held)
 
 	// Outside the lock: cancelling a context runs whatever is waiting on it,
 	// and holding the queue's lock while other people's code runs is how a

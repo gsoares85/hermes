@@ -184,27 +184,37 @@ func TestCancellingWorkThatHasNotStarted(t *testing.T) {
 // history never learns the job existed: the row is written by an observer, and
 // an observer nobody called writes nothing. The operation somebody started and
 // called off would leave no trace at all.
-func TestCancellingWorkThatHasNotStartedIsAnnounced(t *testing.T) {
+//
+// What is asserted is the end rather than the word "cancelled", because
+// whether the work is picked up before the cancellation arrives is the
+// scheduler's business: the job ends in one of two states and both of them
+// have to be announced. The bug this covers announced neither.
+func TestTheEndOfAJobCancelledBeforeItStartedIsAnnounced(t *testing.T) {
 	t.Parallel()
 
-	told := make(chan job.State, 8)
-	queue := job.NewQueue(job.WithObserver(func(view job.View) { told <- view.State }))
+	told := make(chan job.State, len(everyState))
+	queue := job.NewQueue(job.WithObserver(func(view job.View) {
+		if view.State.Over() {
+			told <- view.State
+		}
+	}))
 
 	view := cancelled(t, queue, runnerFunc(func(context.Context, job.Reporter) error {
 		return nil
 	}), nil)
 
-	if view.State != job.Cancelled {
-		t.Fatalf("the job is %v, want %v", view.State, job.Cancelled)
+	if !view.State.Over() {
+		t.Fatalf("the job is %v, want an end", view.State)
 	}
 
 	select {
 	case announced := <-told:
-		if announced != job.Cancelled {
-			t.Errorf("the observer was told %v, want %v", announced, job.Cancelled)
+		if announced != view.State {
+			t.Errorf("the observer was told the job ended as %v, want %v", announced, view.State)
 		}
-	case <-time.After(5 * time.Second):
-		t.Error("no observer was told the job was cancelled, so nothing recorded that it happened")
+	case <-time.After(waited):
+		t.Errorf("the job ended as %v and no observer was told, so nothing recorded that it happened",
+			view.State)
 	}
 }
 
