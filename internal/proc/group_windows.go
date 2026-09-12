@@ -18,7 +18,16 @@ import (
 // that a Ctrl+C in whatever console Hermes was started from does not reach a
 // backup running behind the window.
 func (c *Command) prepare() {
-	c.cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP}
+	// Added to what is there rather than written over it, and the flags are
+	// added to their own. The command is handed out before it starts so that a
+	// password can be put in its environment and its output plugged into a
+	// log, and the day one of those callers sets something here, replacing the
+	// struct would drop it without a word.
+	if c.cmd.SysProcAttr == nil {
+		c.cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+
+	c.cmd.SysProcAttr.CreationFlags |= windows.CREATE_NEW_PROCESS_GROUP
 }
 
 // adopt puts the process into a Job Object, which is what makes its children

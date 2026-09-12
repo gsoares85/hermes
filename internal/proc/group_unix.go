@@ -15,7 +15,16 @@ import (
 // what makes one signal reach the workers of a pg_restore -j as well as the
 // process Hermes started.
 func (c *Command) prepare() {
-	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Added to what is there rather than written over it. The command is
+	// handed out before it starts so that a password can be put in its
+	// environment and its output plugged into a log, and the day one of those
+	// callers sets something here — a credential to run as, a session of its
+	// own — replacing the struct would drop it without a word.
+	if c.cmd.SysProcAttr == nil {
+		c.cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+
+	c.cmd.SysProcAttr.Setpgid = true
 }
 
 // adopt writes down which group the kernel made, which is no work at all here:

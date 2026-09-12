@@ -213,3 +213,23 @@ func TestWaitingTwiceAnswersWhatTheFirstWaitFound(t *testing.T) {
 		t.Errorf("waiting again answered %v, want what the first wait answered", second)
 	}
 }
+
+// The command is handed out before it starts, so that a password can go in its
+// environment and its output into a log. What a caller sets on it has to
+// survive the starting, including the corner of it this package also writes
+// to.
+func TestWhatTheCallerAsksForOnTheProcessSurvives(t *testing.T) {
+	t.Parallel()
+
+	command := sleeping(t)
+	command.Cmd().SysProcAttr = attrWithSomethingElse()
+
+	if err := command.Start(); err != nil {
+		t.Fatalf("Start() = %v, want no error", err)
+	}
+	t.Cleanup(func() { _ = command.Kill() })
+
+	if !somethingElseSurvived(command.Cmd().SysProcAttr) {
+		t.Error("what the caller set on the process was written over by starting it")
+	}
+}
