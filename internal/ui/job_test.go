@@ -932,3 +932,36 @@ func TestNothingIsSaidWhenTheHistoryIsBeingKept(t *testing.T) {
 		t.Errorf("the window is told %q, want nothing", got.Warning)
 	}
 }
+
+// A job that never reports progress leaves no trace in the map of what has
+// been said — the zero value is what is already there, so nothing is written.
+// Everything else the watcher remembers about it was keyed on that map being
+// visited, so a job that says nothing and ends fast used to leave its
+// bookkeeping behind for ever.
+func TestNothingIsRememberedAboutAJobThatIsGone(t *testing.T) {
+	t.Parallel()
+
+	queue := job.NewQueue()
+	watcher := ui.NewJobWatcher(queue, &recorder{})
+
+	id := finished(t, queue, runnerFunc(func(_ context.Context, report job.Reporter) error {
+		// Something in the log, nothing about progress: the shape of a job
+		// that runs in less than a millisecond and never says how it is doing.
+		_, err := report.Log().Write([]byte("a line\n"))
+
+		return err
+	}))
+
+	watcher.Sample()
+	watcher.Sample()
+
+	if err := queue.Forget(id); err != nil {
+		t.Fatalf("forgetting the job: %v", err)
+	}
+
+	watcher.Sample()
+
+	if held := watcher.RememberedForTest(); held != 0 {
+		t.Errorf("the watcher still remembers %d things about jobs the queue no longer has", held)
+	}
+}

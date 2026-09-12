@@ -425,10 +425,26 @@ func (s *JobWatcher) prune(held []job.View) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Each of the three walked on its own rather than all three keyed on the
+	// first. What is in them is written by different code on different
+	// conditions, and the only reason one key implies the others today is an
+	// invariant that lives in another package: progress is never the zero
+	// value, because a job that cannot say how far along it is says so. That
+	// is true, and it is not this function's business to depend on it.
 	for id := range s.said {
 		if !alive[id] {
 			delete(s.said, id)
+		}
+	}
+
+	for id := range s.lines {
+		if !alive[id] {
 			delete(s.lines, id)
+		}
+	}
+
+	for id := range s.settled {
+		if !alive[id] {
 			delete(s.settled, id)
 		}
 	}
