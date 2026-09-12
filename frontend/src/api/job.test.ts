@@ -89,11 +89,58 @@ describe("the order the panel draws them in", () => {
 
   it("puts the newest first among those that finished", () => {
     const held = [
-      view("older", { state: "done", startedAt: "2026-09-11T09:00:00Z" }),
-      view("newer", { state: "done", startedAt: "2026-09-11T10:00:00Z" }),
+      view("older", { state: "done", endedAt: "2026-09-11T09:00:00Z" }),
+      view("newer", { state: "done", endedAt: "2026-09-11T10:00:00Z" }),
     ];
 
     expect(ordered(held).map((job): string => job.id)).toEqual(["newer", "older"]);
+  });
+
+  /**
+   * Of two jobs that are over, the one somebody just watched finish is the one
+   * that ended last — whichever of them was started first. A long backup begun
+   * in the morning and a short one begun at noon can end in either order.
+   */
+  it("orders what has finished by when it ended, not by when it began", () => {
+    const held = [
+      view("started first, ended last", {
+        state: "done",
+        startedAt: "2026-09-11T09:00:00Z",
+        endedAt: "2026-09-11T12:00:00Z",
+      }),
+      view("started last, ended first", {
+        state: "done",
+        startedAt: "2026-09-11T11:00:00Z",
+        endedAt: "2026-09-11T11:05:00Z",
+      }),
+    ];
+
+    expect(ordered(held).map((job): string => job.id)).toEqual([
+      "started first, ended last",
+      "started last, ended first",
+    ]);
+  });
+
+  /**
+   * A job cancelled before it ever started has no beginning at all, so
+   * ordering the finished half by one would send it to the bottom of the list
+   * whatever time it was actually called off at.
+   */
+  it("does not banish a job that never started", () => {
+    const held = [
+      view("ran and finished", {
+        state: "done",
+        startedAt: "2026-09-11T09:00:00Z",
+        endedAt: "2026-09-11T09:30:00Z",
+      }),
+      view("called off before it began", {
+        state: "cancelled",
+        startedAt: "",
+        endedAt: "2026-09-11T10:00:00Z",
+      }),
+    ];
+
+    expect(ordered(held)[0]?.id).toBe("called off before it began");
   });
 
   it("leaves the list it was given alone", () => {

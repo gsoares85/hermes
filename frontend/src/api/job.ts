@@ -135,6 +135,15 @@ export function duration(ms: number): string {
  * Decided here rather than in Go, because it is a question about what somebody
  * is looking for rather than about what the queue holds — and the queue
  * deliberately answers unordered so that this choice is made in one place.
+ *
+ * What is running is ordered by when it began, and what has ended by when it
+ * ended. They are different questions: of two jobs still going, the one that
+ * started first has been going longest, and of two that are over, the one that
+ * ended last is the one somebody just watched finish. Ordering the finished
+ * half by its beginning also puts a job cancelled before it ever started at
+ * the very bottom, because it has no beginning to compare at all.
+ *
+ * Every time crosses in UTC, so comparing them as text compares the instants.
  */
 export function ordered(held: readonly JobView[]): JobView[] {
   return [...held].sort((left, right): number => {
@@ -143,7 +152,9 @@ export function ordered(held: readonly JobView[]): JobView[] {
       return leftOver ? 1 : -1;
     }
 
-    return right.startedAt.localeCompare(left.startedAt);
+    return leftOver
+      ? right.endedAt.localeCompare(left.endedAt)
+      : right.startedAt.localeCompare(left.startedAt);
   });
 }
 
