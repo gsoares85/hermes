@@ -36,7 +36,7 @@ func (c *Command) prepare() {
 // process may already have been collected — and then the identifier belongs to
 // whoever the kernel gave it to next.
 func (c *Command) adopt() error {
-	c.group = uintptr(c.cmd.Process.Pid) //nolint:gosec // a pid is not a signed quantity
+	c.group = uintptr(c.cmd.Process.Pid)
 
 	return nil
 }
@@ -58,7 +58,7 @@ func (c *Command) letGo() {}
 // may choose to ignore would make the deadline on that cleanup the only thing
 // standing between a person and a button that did nothing.
 func (c *Command) killGroup() error {
-	group := int(c.group) //nolint:gosec // it is the pid this package wrote down at Start
+	group := int(c.group)
 
 	if err := syscall.Kill(-group, syscall.SIGKILL); err != nil {
 		// The same race, one step later.

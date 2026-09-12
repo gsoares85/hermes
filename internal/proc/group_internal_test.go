@@ -224,12 +224,15 @@ func TestWhatTheCallerAsksForOnTheProcessSurvives(t *testing.T) {
 	command := sleeping(t)
 	command.Cmd().SysProcAttr = attrWithSomethingElse()
 
-	if err := command.Start(); err != nil {
-		t.Fatalf("Start() = %v, want no error", err)
-	}
-	t.Cleanup(func() { _ = command.Kill() })
+	// Prepared rather than started, because what a caller legitimately sets
+	// here is mostly about terminals and sessions, and a machine running this
+	// in a pipeline has no terminal to detach from: starting would fail for
+	// the fixture rather than for the thing being tested. What is asked is
+	// whether preparing keeps what it was given, and preparing is where the
+	// answer is.
+	command.prepare()
 
 	if !somethingElseSurvived(command.Cmd().SysProcAttr) {
-		t.Error("what the caller set on the process was written over by starting it")
+		t.Error("what the caller set on the process was written over by preparing it")
 	}
 }
