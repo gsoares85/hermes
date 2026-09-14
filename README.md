@@ -12,7 +12,7 @@
 
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange)](#project-status)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
-[![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8)](go.mod)
+[![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8)](go.mod)
 [![PostgreSQL](https://img.shields.io/badge/postgresql-12%2B-336791)](#requirements)
 [![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macos%20%7C%20windows-blue)](#installation)
 
@@ -104,7 +104,7 @@ about.
 
 ### From source
 
-Requires [Go 1.25+](https://go.dev/dl/), [Node.js 22.13+](https://nodejs.org/), and the
+Requires [Go 1.26+](https://go.dev/dl/), [Node.js 22.13+](https://nodejs.org/), and the
 [Wails v3](https://wails.io/) CLI.
 
 ```sh
