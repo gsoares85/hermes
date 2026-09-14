@@ -278,18 +278,25 @@ func TestWhatIsAttachedBeforeStartingSurvives(t *testing.T) {
 		_ = command.Kill()
 	})
 
-	waitFor(t, "the child to write its marker", func() bool {
-		_, err := os.Stat(marker)
+	// Waiting for the content, not for the file. The child rewrites the marker
+	// every 20ms and os.WriteFile truncates before it writes, so the name
+	// exists for a moment with nothing behind it — and a reader that waits for
+	// the name and then opens it reads that nothing. Reading inside the wait is
+	// also what stops a second read from landing in the next truncation.
+	var kept string
 
-		return err == nil
+	waitFor(t, "the child to write its marker", func() bool {
+		written, err := os.ReadFile(marker)
+		if err != nil {
+			return false
+		}
+
+		kept = strings.TrimSpace(string(written))
+
+		return kept != ""
 	})
 
-	kept, err := os.ReadFile(marker)
-	if err != nil {
-		t.Fatalf("reading the marker: %v", err)
-	}
-
-	if _, err := strconv.Atoi(strings.TrimSpace(string(kept))); err != nil {
+	if _, err := strconv.Atoi(kept); err != nil {
 		t.Errorf("the marker holds %q, want the child's process identifier", kept)
 	}
 }
