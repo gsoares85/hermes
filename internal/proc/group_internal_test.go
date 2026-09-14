@@ -127,9 +127,8 @@ func sleeping(t *testing.T) *Command {
 	return command
 }
 
-// waitUntilGone fails unless the process stops existing. Signal 0 is the
-// portable "is it there" on Unix; on Windows os.FindProcess answers for a
-// process that has ended, so the check is what exec already knows.
+// waitUntilGone fails unless the process stops existing. How that is asked
+// differs by system and is answered by running, next to this file.
 func waitUntilGone(t *testing.T, pid int) {
 	t.Helper()
 
