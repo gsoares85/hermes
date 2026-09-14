@@ -12,9 +12,11 @@ import {
   type SavedView,
   type StatusView,
 } from "./api/connection";
+import { isOver, jobs as listJobs, watchJobs } from "./api/job";
 import type { ObjectRef } from "./api/object";
 import { Icon } from "./ui/Icon";
 import { ConnectionDialog } from "./features/connection/ConnectionDialog";
+import { JobsPanel } from "./features/jobs/JobsPanel";
 import { ConnectionForm } from "./features/connection/ConnectionForm";
 import { SavedConnections } from "./features/connection/SavedConnections";
 import { ObjectPanel } from "./features/tree/ObjectPanel";
@@ -70,6 +72,12 @@ export function App(): React.JSX.Element {
   const [editing, setEditing] = useState<SavedView | null>(null);
   const [opened, setOpened] = useState(0);
   const [dialog, setDialog] = useState(false);
+  // Whether the jobs panel is showing, and how many jobs are working. The
+  // count lives here rather than in the panel because the button that opens
+  // the panel wears it, and a count only the open panel knows is a count
+  // nobody sees until they have already looked.
+  const [jobsOpen, setJobsOpen] = useState(false);
+  const [running, setRunning] = useState(0);
   // What each open server reports itself to be, by connection — the same
   // argument as the selection above, and the same shape.
   const [versions, setVersions] = useState<ReadonlyMap<string, string>>(new Map());
@@ -127,6 +135,38 @@ export function App(): React.JSX.Element {
 
     return (): void => {
       active = false;
+    };
+  }, []);
+
+  // How many jobs are working, kept in step the same way the panel is: the
+  // events move it, and a full read corrects it. The button carries the number
+  // whether or not anybody has opened the panel, so it cannot be left to the
+  // panel to count.
+  useEffect((): (() => void) => {
+    function recount(): void {
+      listJobs()
+        .then((held): void => {
+          setRunning(held.filter((one): boolean => !isOver(one.state)).length);
+        })
+        .catch((): void => {
+          // Running outside the desktop shell. A count of nothing is the right
+          // answer when there is no Go side to ask.
+        });
+    }
+
+    recount();
+    window.addEventListener("focus", recount);
+
+    const stop = watchJobs({
+      state: recount,
+      // Progress moves a bar and never changes how many jobs there are.
+      progress: (): void => undefined,
+      log: (): void => undefined,
+    });
+
+    return (): void => {
+      window.removeEventListener("focus", recount);
+      stop();
     };
   }, []);
 
@@ -349,6 +389,10 @@ export function App(): React.JSX.Element {
       toolbar={
         <Toolbar
           connection={connection}
+          running={running}
+          onJobs={(): void => {
+            setJobsOpen((showing): boolean => !showing);
+          }}
           onNew={(): void => {
             openDialog(null);
           }}
@@ -433,6 +477,14 @@ export function App(): React.JSX.Element {
               }}
               onClose={(id): void => {
                 close(id);
+              }}
+            />
+          )}
+
+          {jobsOpen && (
+            <JobsPanel
+              onClose={(): void => {
+                setJobsOpen(false);
               }}
             />
           )}

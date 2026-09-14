@@ -18,12 +18,17 @@ import { ConnectionMarks } from "../connection/ConnectionMarks";
  */
 export function Toolbar({
   connection,
+  running,
   onNew,
   onDisconnect,
+  onJobs,
 }: {
   connection: StatusView | null;
+  /** How many jobs are working, so the button can say there is something to see. */
+  running: number;
   onNew: () => void;
   onDisconnect: () => void;
+  onJobs: () => void;
 }): React.JSX.Element {
   return (
     <>
@@ -53,6 +58,17 @@ export function Toolbar({
           Disconnect
         </button>
       )}
+
+      {/*
+        Always here, whether or not anything is running and whether or not
+        there is a connection. A backup outlives the connection it was taken
+        from, and a panel that appears only while something is working is one
+        nobody can open to read what the last thing said.
+      */}
+      <button type="button" onClick={onJobs}>
+        Jobs
+        {running > 0 && <span className="workspace__count">{running}</span>}
+      </button>
 
       {connection !== null && (
         <p className="workspace__connection">

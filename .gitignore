@@ -6,6 +6,9 @@ CLAUDE.md
 # Build output
 /bin/
 *.exe
+# The pipeline builds the headless binary once more with cgo switched off, to
+# prove it still compiles without a C toolchain. Run locally, it leaves this.
+/hermes-cli-static
 # Task runner fingerprint cache
 .task/
 *.dll
