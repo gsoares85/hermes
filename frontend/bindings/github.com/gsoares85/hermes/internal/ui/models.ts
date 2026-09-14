@@ -104,6 +104,90 @@ export interface DiagnosisView {
 }
 
 /**
+ * HistoryView says whether what runs is being remembered, and warns when it is
+ * not.
+ * 
+ * The warning is prose because it is shown to a person and has to name the file
+ * it is about. It is empty exactly when the history is being written, which is
+ * what the window decides whether to draw a banner from.
+ */
+export interface HistoryView {
+    "warning": string;
+}
+
+/**
+ * JobCursor is where a page of the history stopped, as the window holds it.
+ * 
+ * The time crosses as the string it was drawn from rather than as a number,
+ * so that the window hands back exactly what it was given and nothing has to
+ * be reassembled from two halves that could disagree.
+ */
+export interface JobCursor {
+    "endedAt": string;
+    "id": string;
+}
+
+/**
+ * JobLogView is what a job has said: either the whole of it, or what is new
+ * since the window was last told.
+ * 
+ * Seq is how many lines the job has said in total up to the end of these,
+ * counting from the moment it started — including the ones the log's ceiling
+ * has since dropped. It is what lets the window put the whole log and the
+ * lines that keep arriving in one order without repeating any: the two are
+ * read from the same buffer at different moments, and without a number that
+ * spans both, whatever arrives while the whole log is being fetched is either
+ * counted twice or lost.
+ */
+export interface JobLogView {
+    "id": string;
+    "lines": string[] | null;
+    "seq": number;
+}
+
+/**
+ * JobProgressView is how far along a job is, as the window reads it.
+ * 
+ * Durations cross as milliseconds. A Go duration marshals as a count of
+ * nanoseconds, which the window would have to know to divide by a billion —
+ * and dividing by the wrong power of ten is invisible until an ETA reads three
+ * hours for a job with three seconds left.
+ */
+export interface JobProgressView {
+    "step": string;
+    "unit": string;
+    "done": number;
+    "total": number;
+    "fraction": number;
+    "indeterminate": boolean;
+    "elapsedMs": number;
+    "remainingMs": number;
+}
+
+/**
+ * JobView is a job as the window draws it.
+ * 
+ * The state crosses as its name. A number would make the frontend carry a copy
+ * of an enumeration whose order is an implementation detail of a Go file, and
+ * reordering the constants would silently relabel every row.
+ * 
+ * The times cross as strings, and an empty one means there is none. A job that
+ * has not ended has no end, and the zero time rendered by a date formatter is
+ * 1 January year 1 — which it will print rather than refuse.
+ */
+export interface JobView {
+    "id": string;
+    "kind": string;
+    "title": string;
+    "state": string;
+    "error": string;
+    "progress": JobProgressView;
+    "dropped": number;
+    "startedAt": string;
+    "endedAt": string;
+}
+
+/**
  * NodeRef says which node of the tree is being opened.
  * 
  * It is a place rather than a query: the frontend names where it is and gets

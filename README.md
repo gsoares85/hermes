@@ -12,7 +12,7 @@
 
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange)](#project-status)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
-[![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8)](go.mod)
+[![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8)](go.mod)
 [![PostgreSQL](https://img.shields.io/badge/postgresql-12%2B-336791)](#requirements)
 [![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macos%20%7C%20windows-blue)](#installation)
 
@@ -30,10 +30,13 @@ The bet is focus: do for **one** engine what the competition tries to do for twe
 
 **Pre-alpha — under active development.** You can open several servers at once and save each
 connection — with its password in your system keychain where there is one, and held for the
-session where there is not — mark one as production or as read-only, and browse what is on it — databases, schemas, tables, views and sequences, with an object's
-properties and its DDL in a pane of their own. There is no SQL editor and no backup yet. This
-README grows with every feature shipped: anything documented below with an example works.
-Anything in the *Roadmap* section does not.
+session where there is not — mark one as production or as read-only, and browse what is on it:
+databases, schemas, tables, views and sequences, with an object's properties and its DDL in a
+pane of their own. Every long operation the product will do has somewhere to run — a **Jobs**
+panel with progress, a live log, a Stop that undoes what the work started, and a history that
+is still there after a restart — but nothing puts work in it yet: there is no SQL editor and no
+backup. This README grows with every feature shipped: anything documented below with an example
+works. Anything in the *Roadmap* section does not.
 
 Reading a schema out of `pg_catalog` and writing it back as DDL is what the *DDL* tab shows,
 and it is what the structure diff will be built on. The diff itself does not exist yet: it is
@@ -101,7 +104,7 @@ about.
 
 ### From source
 
-Requires [Go 1.25+](https://go.dev/dl/), [Node.js 22.13+](https://nodejs.org/), and the
+Requires [Go 1.26+](https://go.dev/dl/), [Node.js 22.13+](https://nodejs.org/), and the
 [Wails v3](https://wails.io/) CLI.
 
 ```sh
@@ -123,7 +126,7 @@ Four regions, and each answers one question.
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│ Hermes   New connection   Disconnect      billing  PRODUCTION      │
+│ Hermes  New connection  Disconnect  Jobs 1   billing  PRODUCTION   │
 ├───────────────────┬────────────────────────────┬───────────────────┤
 │ CONNECTIONS     + │ ▣ billing ×  ▢ staging ×   │ Table             │
 │                   ├────────────────────────────┤ daily_revenue     │
@@ -152,6 +155,8 @@ describes and what the status bar says.
 - **The toolbar** carries the connection in front and what can be done to it. Only actions that
   exist: no greyed-out buttons standing in for features nobody has built. A production
   connection colours it and puts a band across the top of the window, and neither scrolls away.
+  **Jobs** is the exception to "the connection in front": it is always there, wearing a count of
+  what is working, because a backup outlives the connection it was taken from.
 - **The navigator** lists the connections you have saved and, under the one that is open, its
   objects. Its foot says which server those objects came from.
 - **The workspace** holds one tab per open connection. It is where a query editor and its
@@ -518,6 +523,161 @@ the script. That is the object described truthfully rather than a script you can
 anywhere — the whole-schema script the structure sync produces is a different thing, and it
 carries everything it refers to.
 
+### What is running, and how to stop it
+
+Anything that takes long enough to watch is a **job**: it works in the background, says how far
+along it is, keeps what it printed, and can be stopped. Backups, restores and transfers will all
+be jobs — **nothing submits one yet**, so the panel opens empty until the query editor and the
+backup wizard arrive. Everything described below is built and runs today; what is missing is the
+work to put in it.
+
+The **Jobs** button in the toolbar is always there, whether or not anything is working and
+whether or not a connection is open, because a backup outlives the connection it was taken from
+and a panel you can only open while something runs is one nobody can open to read what the last
+thing said. It wears a count while jobs are working, and it opens this:
+
+```
+┌─ Jobs ──────────────────────────────────────────────────────────── × ┐
+│ backup   shop on db.example.com           running    [Stop]  [Log]   │
+│ ██████████████████░░░░░░░░░░░  63%  ·  1m 12s left                   │
+│                                                                      │
+│ restore  staging from last night          failed     [Forget] [Log]  │
+│ pg_restore exited with status 1                                      │
+│                                                                      │
+│ backup   billing nightly                  done       [Forget] [Log]  │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+One row per job: what kind of thing it is, what it is operating on, where it has got to, and
+the two or three things you can do about it. The bar **fills** when the work knows how much
+there is to do and **moves** when it cannot — a bar sitting at nought per cent says the work has
+failed to advance, which is a different and worse thing to be told. A time remaining appears
+only when it can be worked out from progress that has actually happened; nothing here guesses,
+because a guess is something you plan around.
+
+The panel is filled from the truth when it opens and again whenever the window comes back from
+the background, so an update that went missing while you were somewhere else cannot leave a bar
+stuck at forty per cent for a job that finished ten minutes ago.
+
+#### Stop asks; it does not pull the plug
+
+**Stop** tells the work to wind down and comes straight back — how long stopping takes is the
+work's business, and holding the window until a subprocess notices is the thing being cancelled
+in the first place. The row reads `cancelling` until the work has actually stopped, because a
+`pg_dump` that is still writing has not stopped, and saying it has is how a half-written file
+gets treated as no file at all.
+
+Then what the job left behind is dealt with:
+
+- **What it started is undone.** Work that has something to take back — a partial file it
+  opened, a process it launched — says how, and that runs *after* the work has actually stopped
+  rather than beside the cancellation: removing a half-written file while the thing writing it
+  is still writing races one against the other.
+- **A subprocess is killed with its whole process group.** `pg_restore -j 4` is one process with
+  four workers under it; killing only the one Hermes started leaves the workers writing into
+  your database after you pressed Stop. On Linux and macOS the child gets a process group of its
+  own and the group is signalled; on Windows it goes into a Job Object that takes the tree with
+  it. There is a test on all three that starts a process which starts another, kills the group,
+  and requires the grandchild to be gone.
+- **It is over within two seconds.** Undoing gets that long and a deadline it has to answer to.
+  One that overruns — a filesystem that has stopped replying, a server that will not — does not
+  leave the row stuck at `cancelling` for ever: the job is reported as failed, which is the
+  honest answer, because whatever it was undoing may still be there.
+
+A job stopped before it ever started never runs at all: there is nothing to wind down and
+nothing to clean up, and a backup you called off does not begin anyway. And a job that fails
+takes nothing with it — not the window, not the other jobs. The failure becomes the state of
+that one row, with the reason written beside it.
+
+#### The log
+
+Press **Log** on any row to read what the job printed, as it prints it:
+
+```
+backup · shop on db.example.com
+… 2,481 earlier lines were dropped
+pg_dump: dumping contents of table "reporting.daily_revenue"
+pg_dump: dumping contents of table "reporting.invoices"
+```
+
+A log is the one thing here whose size somebody else decides, so it is capped — 5,000 lines or
+a megabyte, whichever comes first — and the **beginning** is what goes, because the end of a log
+is where the failure is. The panel draws the last 500 lines of what it holds, for the same
+reason. Both say how much they are not showing rather than quietly presenting the rest as the
+whole story.
+
+Lines keep arriving while you watch, whatever the job is doing and however long it has been
+doing it — including after the cap has been reached and the log has started losing its
+beginning, which is exactly when a verbose restore has the most to say.
+
+Passwords are taken out on the way **in**, not on the way to the screen, so a connection string
+that arrives inside the stderr of `pg_dump` never reaches memory or the history with its secret
+intact:
+
+```
+pg_dump: error: connection to server at "db.example.com" failed:
+  postgres://reporting:xxxxx@db.example.com:5432/analytics
+```
+
+#### It is still there tomorrow
+
+Jobs that have ended are written to a small local database, so the panel of the next session
+shows what the last one did — including what failed while nobody was watching. **Forget** takes
+a row out of the panel and out of that file, so a row you dismissed does not come back.
+
+The panel opens on what is running plus the most recent page of what has run. **Show earlier
+jobs** at the foot of the list walks back through the rest, a page at a time, and stops
+offering itself when you reach the beginning of what happened.
+
+| Platform | Job history |
+|---|---|
+| Linux | `~/.config/hermes/hermes.db` |
+| macOS | `~/Library/Application Support/hermes/hermes.db` |
+| Windows | `%AppData%\hermes\hermes.db` |
+
+The file is created private to you — and so are the two SQLite keeps beside it, which is where
+the newest rows live until they are moved across.
+
+Losing it is never a reason to refuse to start. A history that cannot be opened — a disk that
+filled mid-write, a restore that half-copied it, a file whose header was damaged — leaves
+Hermes running with a history that lasts the session, and the panel says so at the top rather
+than opening empty tomorrow with no reason given:
+
+```
+The job history at ~/.config/hermes/hermes.db could not be opened, so this session will not be
+remembered: reading the version of ~/.config/hermes/hermes.db: file is not a database
+```
+
+Nothing is moved, renamed or deleted, so the file is still there to look at.
+
+The same history reads from a terminal, which is where you are when a profile ran overnight in
+a pipeline:
+
+```console
+$ hermes-cli jobs
+2026-09-11 03:12  failed    backup   shop on db.example.com
+2026-09-10 03:09  done      backup   shop on db.example.com
+2026-09-09 03:09  done      backup   shop on db.example.com
+```
+
+It prints the 50 most recent by default. `-n` asks for a different number, and walks back
+through the history a page at a time to reach it:
+
+```console
+$ hermes-cli jobs -n 3
+2026-09-11 03:12  failed    backup   shop on db.example.com
+2026-09-10 03:09  done      backup   shop on db.example.com
+2026-09-09 03:09  done      backup   shop on db.example.com
+```
+
+A history nothing has been written to says so, on standard error, and leaves standard output
+empty for whatever you were piping it into:
+
+```console
+$ hermes-cli jobs
+no jobs have run yet
+```
+
 ### Failures that tell you what to do
 
 When a connection fails, Hermes does not show you the driver's message. It shows what happened,
@@ -587,8 +747,10 @@ passwords in the keychain of the system
 
 What is being built, in order:
 
-**Foundation** — a cancelable job engine with progress reporting. Connecting, actionable failure
-diagnostics, keychain-backed passwords and lazy object-tree navigation are done.
+**Foundation** — done. Connecting, actionable failure diagnostics, keychain-backed passwords,
+lazy object-tree navigation, and the engine every long operation runs on: cancellable jobs with
+progress, a live log, a stop that takes a whole process group with it, and a history that
+survives a restart. What is missing is work to put in it, which is what everything below adds.
 
 **Query and data** — SQL editor with cancelable execution, a virtualized grid using keyset
 pagination (no `OFFSET` on large tables), and inline editing that shows the `UPDATE` before it

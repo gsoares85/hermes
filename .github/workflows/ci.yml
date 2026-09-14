@@ -254,6 +254,40 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # The headless binary is the reason the local database uses a driver
+      # written in Go rather than one bound to C (ADR-0014): it exists to run
+      # profiles in a pipeline, and a binary needing a C toolchain where it is
+      # built and a C library where it runs does not go into an image that has
+      # neither. Now that it keeps a history, that has to be checked rather
+      # than remembered — a single import is all it would take to lose it, and
+      # nothing else in this pipeline would notice.
+      - name: Build the headless binary without cgo
+        env:
+          CGO_ENABLED: 0
+        run: go build -o hermes-cli-static ./cmd/hermes-cli
+
+      # And the check above is only worth anything while the driver is really
+      # in there: a CLI that had stopped linking SQLite would pass it by not
+      # containing the thing it is about.
+      #
+      # Read with cgo off, like the build it is about. Build constraints choose
+      # different files depending on it — the standard library alone swaps
+      # several — so a graph read with cgo on is a graph of a binary nobody
+      # ships, and the check would be answering about the wrong one.
+      - name: Prove the headless binary carries the database it was built for
+        shell: bash
+        env:
+          CGO_ENABLED: 0
+        run: |
+          go list -deps ./cmd/hermes-cli | grep -q '^modernc.org/sqlite$' || {
+            echo "cmd/hermes-cli no longer links the SQLite driver, so the cgo-free build proves nothing"
+            exit 1
+          }
+          if go list -deps ./cmd/hermes-cli | grep -E 'wails|keybase|godbus|wincred'; then
+            echo "cmd/hermes-cli reached a package that needs cgo"
+            exit 1
+          fi
+
   # The one job that talks to a real keychain. Everything else in the pipeline
   # runs against the in-memory vault, which is exactly the double the
   # implementations here have to be proven not to be more forgiving than.
@@ -345,6 +379,31 @@ jobs:
 
       - name: Hand a credential to a real child process
         run: go test -race -count=1 -timeout=5m ./internal/credential/...
+
+  # A process group is three different mechanisms wearing one name: Setpgid on
+  # Linux and macOS, a Job Object on Windows. The test starts a process that
+  # starts another, kills the group and proves the grandchild died — which is
+  # the whole reason the package exists, and which nothing but a real process
+  # tree on a real system can say.
+  processes:
+    name: Process groups (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Kill a real process tree
+        run: go test -race -count=1 -timeout=5m ./internal/proc/...
 
   integration:
     name: Integration tests

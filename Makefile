@@ -20,12 +20,13 @@ COVERAGE_MINIMUM ?= 85
 # three runners and feeds no profile. It is the subpackage and not internal/vault
 # — excluding the whole tree also excused the choosing, the fallback and the
 # deferred opening, which are platform-independent, have a suite of their own
-# and hold the concurrency worth counting. The conformance suite of the vault is
-# test code that had to be an ordinary package, because Go cannot share a helper
-# written in a _test.go file with another package's tests, and more than half of
-# it is the branch that reports a failure.
+# and hold the concurrency worth counting. The conformance suites of the vault
+# and of the job history are test code that had to be ordinary packages, because
+# Go cannot share a helper written in a _test.go file with another package's
+# tests, and more than half of each is the branch that reports a failure — which
+# only runs when an implementation is broken.
 # Every run prints what was ignored, and ignoring everything is refused.
-COVERAGE_IGNORE ?= github.com/gsoares85/hermes/internal/driver/postgres,github.com/gsoares85/hermes/internal/vault/system,github.com/gsoares85/hermes/internal/core/secret/secrettest
+COVERAGE_IGNORE ?= github.com/gsoares85/hermes/internal/driver/postgres,github.com/gsoares85/hermes/internal/vault/system,github.com/gsoares85/hermes/internal/core/secret/secrettest,github.com/gsoares85/hermes/internal/core/store/storetest
 INTEGRATION_TAGS ?= integration
 GOVULNCHECK_VERSION ?= v1.7.0
 

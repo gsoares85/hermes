@@ -4,10 +4,12 @@
 import * as AppInfoService from "./appinfoservice.js";
 import * as CatalogService from "./catalogservice.js";
 import * as ConnectionService from "./connectionservice.js";
+import * as JobService from "./jobservice.js";
 export {
     AppInfoService,
     CatalogService,
-    ConnectionService
+    ConnectionService,
+    JobService
 };
 
 export type {
@@ -15,6 +17,11 @@ export type {
     ConnectionForm,
     ConnectionView,
     DiagnosisView,
+    HistoryView,
+    JobCursor,
+    JobLogView,
+    JobProgressView,
+    JobView,
     NodeRef,
     NodeView,
     ObjectRef,

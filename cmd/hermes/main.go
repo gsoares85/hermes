@@ -15,10 +15,13 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/gsoares85/hermes/frontend"
+	"github.com/gsoares85/hermes/internal/core/job"
 	"github.com/gsoares85/hermes/internal/core/secret"
+	"github.com/gsoares85/hermes/internal/core/store"
 	"github.com/gsoares85/hermes/internal/credential"
 	"github.com/gsoares85/hermes/internal/driver/postgres"
 	"github.com/gsoares85/hermes/internal/filestore"
+	"github.com/gsoares85/hermes/internal/sqlitestore"
 	"github.com/gsoares85/hermes/internal/ui"
 	"github.com/gsoares85/hermes/internal/vault"
 	"github.com/gsoares85/hermes/internal/version"
@@ -104,6 +107,49 @@ func run() error {
 		VaultStatus: vaultStatus(opened),
 	})
 
+	// Where the history is kept is decided here, like everything else with a
+	// file behind it. Opening never fails: a file that has gone wrong leaves
+	// the person with a history that dies with this session and a sentence
+	// saying so, which beats an application that will not start because of its
+	// own bookkeeping.
+	historyPath, err := sqlitestore.DefaultPath()
+	if err != nil {
+		return err
+	}
+
+	history := sqlitestore.OpenJobHistory(historyPath)
+	defer func() { _ = history.Close() }()
+
+	// Said in the log for whoever is reading one, and handed to the window so
+	// that it can say it to the person in front of it. A history that stopped
+	// being kept in silence is the one outcome the fallback must not produce:
+	// nobody finds out until the morning they look for what ran overnight.
+	if history.Warning != "" {
+		slog.Warn(history.Warning)
+	}
+
+	// The emitter is built before the queue because the queue is told where to
+	// announce a state change, and the window is where. It reaches for the
+	// application at the moment it emits rather than now: nothing has been
+	// announced before there is an application to announce it to.
+	emitter := windowEvents{}
+
+	// The recorder reads the log of a job that has just ended, so it needs the
+	// queue; the queue needs its observers before it exists. The knot is tied
+	// with a closure, and it is safe by construction: nothing is observed
+	// before a job runs, and no job can run before the queue is built.
+	var jobs *job.Queue
+	recorder := store.NewRecorder(history.Jobs, func(id string) ([]string, error) {
+		return jobs.Log(id)
+	}, func(err error) { slog.Warn("the job history was not written", "error", err) })
+
+	jobs = job.NewQueue(
+		job.WithObserver(ui.Observing(emitter)),
+		job.WithObserver(recorder.Observe),
+	)
+	jobService := ui.NewJobService(jobs, history.Jobs, ui.WithHistoryWarning(history.Warning))
+	jobWatcher := ui.NewJobWatcher(jobs, emitter)
+
 	app := application.New(application.Options{
 		Name:        "Hermes",
 		Description: "A native, open source database manager for PostgreSQL",
@@ -116,6 +162,7 @@ func run() error {
 			// outermost place that can name a driver, a keychain or a file.
 			application.NewService(connectionService),
 			application.NewService(ui.NewCatalogService(connectionService)),
+			application.NewService(jobService),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(frontend.Dist()),
@@ -138,11 +185,36 @@ func run() error {
 		BackgroundColour: application.NewRGB(255, 255, 255),
 	})
 
+	// Sampling starts before the window opens and stops when it closes. The
+	// panel is told where the jobs are ten times a second while there is
+	// somebody to tell; the goroutine goes with the application rather than
+	// outliving it.
+	watching, stopWatching := context.WithCancel(context.Background())
+	defer stopWatching()
+
+	go jobWatcher.Watch(watching)
+
 	if err := app.Run(); err != nil {
 		return fmt.Errorf("running the application: %w", err)
 	}
 
 	return nil
+}
+
+// windowEvents is the window, for whoever has something to push to it.
+//
+// It exists here and not in internal/ui because application.Get() is a global
+// this process owns and that package must not reach for — the same rule the
+// dependency gate already applies to the vault and to the engine.
+type windowEvents struct{}
+
+func (windowEvents) Emit(name string, data any) {
+	// Before the application exists there is no window to tell, and nothing
+	// has happened worth telling it about: the queue is empty until a service
+	// puts something in it, and services run after Run.
+	if app := application.Get(); app != nil {
+		app.Event.Emit(name, data)
+	}
 }
 
 // vaultStatus translates what the vault reports into what the window renders.

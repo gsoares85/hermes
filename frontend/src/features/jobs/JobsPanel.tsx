@@ -1,0 +1,416 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import {
+  advanced,
+  appended,
+  cancelJob,
+  forgetJob,
+  isOver,
+  isStoppable,
+  jobLog,
+  historyStatus,
+  jobs as listJobs,
+  merged,
+  olderJobs,
+  ordered,
+  remaining,
+  watchJobs,
+  type JobLogView,
+  type JobView,
+} from "../../api/job";
+import { Icon } from "../../ui/Icon";
+
+/**
+ * Everything the window has running, and what it has run.
+ *
+ * The panel holds two things that arrive by different routes and must not be
+ * confused. Events are the fast path: they move a bar without a round trip.
+ * The full listing is the truth: it is read when the panel mounts and whenever
+ * the window comes back, and it is what corrects a window that missed an
+ * event. Without the second, one lost event is a bar stuck at forty per cent
+ * for a job that finished ten minutes ago, and nothing in the application ever
+ * puts it right. (ADR-0015)
+ */
+export function JobsPanel({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const [held, setHeld] = useState<JobView[]>([]);
+  const [opened, setOpened] = useState<string>("");
+  // Which job's log is on screen, readable from inside the subscription below
+  // without resubscribing every time somebody opens a different one. A ref
+  // rather than the state itself: resubscribing would drop events in the gap.
+  const openedRef = useRef("");
+  // The open log: the lines on screen, and how far along the job's own count
+  // they reach. The second is what lets an event that repeats what is already
+  // there be put on once.
+  const [read, setRead] = useState<Read>(nothingRead);
+  // Events that arrived while the whole log was being fetched, and the flag
+  // that says the fetch is still out. Refs rather than state: nothing is drawn
+  // from either, and a render per line arriving would be a render per line.
+  const pending = useRef<JobLogView[]>([]);
+  const awaiting = useRef(false);
+  const [notice, setNotice] = useState("");
+  // Whether there may be more history further back. It starts as a maybe,
+  // because the only way to find out is to ask, and it becomes a no when an
+  // asking comes back empty.
+  const [earlier, setEarlier] = useState(true);
+  // What to say about the history itself, which is empty on a machine where it
+  // is being kept — most of them, most of the time.
+  const [history, setHistory] = useState("");
+
+  // The reconciliation. Declared above the effects that call it, for the
+  // reason the window's own reload is: a function declaration hoists, so
+  // written underneath, nothing would show that the effect captures the copy
+  // from the first render.
+  const reconcile = useCallback((): void => {
+    listJobs()
+      .then((truth): void => {
+        // What was read is what is running plus the newest page of what has
+        // run, so anything fetched from further back is dropped: the truth
+        // replaces the panel rather than being merged into it, and the walk
+        // back begins again from the row this ends on.
+        setHeld(truth);
+        setEarlier(true);
+      })
+      .catch((err: unknown): void => {
+        // Running outside the desktop shell, or the Go side is gone. An empty
+        // panel that says why beats a panel that looks like nothing is
+        // running.
+        setNotice(String(err));
+      });
+  }, []);
+
+  // The walk back through what has already run. The page is asked for by the
+  // oldest row on screen rather than by a count of rows to skip, so a job
+  // ending while somebody reads does not shift what comes next.
+  function showEarlier(): void {
+    const oldest = ordered(held)
+      .filter((job): boolean => isOver(job.state))
+      .at(-1);
+    if (oldest === undefined) {
+      setEarlier(false);
+
+      return;
+    }
+
+    olderJobs(oldest)
+      .then((older): void => {
+        if (older.length === 0) {
+          // The beginning of the history. There is nothing older to ask for.
+          setEarlier(false);
+
+          return;
+        }
+
+        setHeld((current): JobView[] => [...current, ...older]);
+      })
+      .catch((err: unknown): void => {
+        setNotice(String(err));
+      });
+  }
+
+  useEffect((): void => {
+    reconcile();
+  }, [reconcile]);
+
+  // Asked once, because it is settled before the window opens: where the
+  // history is kept is decided when the application starts.
+  useEffect((): void => {
+    historyStatus()
+      .then((status): void => {
+        setHistory(status.warning);
+      })
+      .catch((): void => {
+        // Running outside the desktop shell. The panel has nothing to say
+        // about a history it cannot ask about.
+      });
+  }, []);
+
+  // The window coming back is the moment a missed event matters most: it is
+  // exactly when the panel was not being drawn and the events went nowhere.
+  useEffect((): (() => void) => {
+    window.addEventListener("focus", reconcile);
+
+    return (): void => {
+      window.removeEventListener("focus", reconcile);
+    };
+  }, [reconcile]);
+
+  useEffect((): (() => void) => {
+    return watchJobs({
+      state: (view): void => {
+        setHeld((current): JobView[] => merged(current, view));
+      },
+      // Progress carries what moved and not the whole job. Merging it as a
+      // whole job would blank the title and the times, and the row would go
+      // empty for a job that is simply advancing.
+      progress: (view): void => {
+        setHeld((current): JobView[] => advanced(current, view));
+      },
+      log: (view): void => {
+        if (view.id !== openedRef.current) {
+          return;
+        }
+
+        // Held until the whole log has arrived, because until then there is
+        // nothing to say where these lines belong: the whole log is read at
+        // its own moment and the events come from wherever the sampling had
+        // got to, which is usually further back.
+        if (awaiting.current) {
+          pending.current.push(view);
+
+          return;
+        }
+
+        setRead((current): Read => appended(current.lines, current.seq, view));
+      },
+    });
+  }, []);
+
+  function open(id: string): void {
+    const next = id === opened ? "" : id;
+    setOpened(next);
+    openedRef.current = next;
+    pending.current = [];
+    awaiting.current = next !== "";
+    setRead(nothingRead);
+
+    if (next === "") {
+      return;
+    }
+
+    jobLog(next)
+      .then((whole): void => {
+        // Somebody opened another job while this was being asked for, or
+        // closed this one. Two answers are in flight and the older of them
+        // must not land in the newer one's place.
+        if (openedRef.current !== next) {
+          return;
+        }
+
+        // The whole log, and then whatever arrived while it was on its way —
+        // each put after it by its own count, so the lines the two readings
+        // have in common go on once.
+        let read: Read = { lines: whole.lines, seq: whole.seq };
+        for (const arrived of pending.current) {
+          read = appended(read.lines, read.seq, arrived);
+        }
+
+        pending.current = [];
+        awaiting.current = false;
+        setRead(read);
+      })
+      .catch((): void => {
+        // The job was forgotten while the log was being asked for. An empty
+        // log is the truth about a job that is gone.
+        awaiting.current = false;
+      });
+  }
+
+  function stop(id: string): void {
+    cancelJob(id).catch((err: unknown): void => {
+      setNotice(String(err));
+    });
+  }
+
+  function forget(id: string): void {
+    forgetJob(id)
+      .then((): void => {
+        setHeld((current): JobView[] => current.filter((job): boolean => job.id !== id));
+        if (id === opened) {
+          setOpened("");
+          setRead(nothingRead);
+        }
+      })
+      .catch((err: unknown): void => {
+        setNotice(String(err));
+      });
+  }
+
+  // Kept in step for anything that changes what is open without going through
+  // open() — closing the panel on a job that was forgotten, for one. open()
+  // writes it itself, because the answer it is waiting for has to be checked
+  // against what is open now rather than against what it was a render ago.
+  useEffect((): void => {
+    openedRef.current = opened;
+  }, [opened]);
+
+  const shown = ordered(held);
+
+  return (
+    <section className="jobs" aria-label="Jobs">
+      <header className="jobs__head">
+        <h2 className="jobs__title">Jobs</h2>
+        <button type="button" className="jobs__close" aria-label="Close jobs" onClick={onClose}>
+          <Icon name="close" />
+        </button>
+      </header>
+
+      {/*
+        What is wrong with the history itself, which outlasts anything else the
+        panel has to say: a session that is not being remembered is not being
+        remembered all day. Above the notices for the same reason.
+      */}
+      {history !== "" && (
+        <p className="jobs__warning" role="status">
+          {history}
+        </p>
+      )}
+
+      {notice !== "" && <p className="jobs__notice">{notice}</p>}
+
+      {shown.length === 0 ? (
+        <p className="jobs__empty">
+          Nothing is running. Backups, restores and transfers appear here while they work, and stay
+          afterwards so you can read what they said.
+        </p>
+      ) : (
+        <ul className="jobs__list">
+          {shown.map((job): React.JSX.Element => (
+            <li key={job.id} className={`jobs__job jobs__job--${job.state}`}>
+              <div className="jobs__row">
+                <span className="jobs__kind">{job.kind}</span>
+                <span className="jobs__name">{job.title}</span>
+                <span className="jobs__state">{job.state}</span>
+
+                {isStoppable(job.state) && (
+                  <button
+                    type="button"
+                    aria-label={`Stop ${job.title}`}
+                    onClick={(): void => {
+                      stop(job.id);
+                    }}
+                  >
+                    Stop
+                  </button>
+                )}
+
+                {isOver(job.state) && (
+                  <button
+                    type="button"
+                    aria-label={`Forget ${job.title}`}
+                    onClick={(): void => {
+                      forget(job.id);
+                    }}
+                  >
+                    Forget
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  aria-expanded={opened === job.id}
+                  aria-label={`Log of ${job.title}`}
+                  onClick={(): void => {
+                    open(job.id);
+                  }}
+                >
+                  Log
+                </button>
+              </div>
+
+              <Bar job={job} />
+
+              {job.error !== "" && <p className="jobs__error">{job.error}</p>}
+
+              {opened === job.id && <Log job={job} lines={read.lines} />}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/*
+        The way back through what has already run. It is here rather than a
+        scroll that fetches as it reaches the bottom, because a person reading
+        a log at the bottom of the panel is not asking for the next page — and
+        a page fetched behind them is a row that moves while they read.
+      */}
+      {earlier && shown.some((job): boolean => isOver(job.state)) && (
+        <button type="button" className="jobs__earlier" onClick={showEarlier}>
+          Show earlier jobs
+        </button>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The open log as the panel holds it: the lines, and how far along what the
+ * job has said they reach.
+ */
+interface Read {
+  lines: readonly string[];
+  seq: number;
+}
+
+/** Nothing read yet, which is where every opening starts. */
+const nothingRead: Read = { lines: [], seq: 0 };
+
+/**
+ * How much of a log is drawn at once.
+ *
+ * The end of it, because that is where a failure is and where a running job
+ * is. A full log is five thousand lines, and drawing the whole of one means
+ * rejoining and reconciling all of them on every event that arrives — ten
+ * times a second for a verbose restore — to show a thousand lines nobody is
+ * reading. What a person wants from a log that long is to follow it.
+ */
+const shownLines = 500;
+
+/**
+ * What a job said, as much of it as is worth drawing.
+ *
+ * It says when it is showing only the end, for the same reason the queue says
+ * how many lines it dropped: a log that silently begins in the middle reads as
+ * an operation that began there.
+ */
+function Log({ job, lines }: { job: JobView; lines: readonly string[] }): React.JSX.Element {
+  const shown = lines.slice(-shownLines);
+  const hidden = lines.length - shown.length;
+
+  const said = [
+    ...(job.dropped > 0 ? [`… ${String(job.dropped)} earlier lines were dropped`] : []),
+    ...(hidden > 0 ? [`… ${String(hidden)} earlier lines are not shown`] : []),
+    ...shown,
+  ];
+
+  return <pre className="jobs__log">{said.join("\n")}</pre>;
+}
+
+/**
+ * The bar, and what it says beside itself.
+ *
+ * A job whose progress cannot be known draws a bar that moves rather than one
+ * that fills. Drawing nought per cent instead would say the work has failed to
+ * advance, which is a different and worse thing to tell somebody.
+ */
+function Bar({ job }: { job: JobView }): React.JSX.Element | null {
+  if (isOver(job.state)) {
+    return null;
+  }
+
+  const left = remaining(job.progress);
+
+  return (
+    <div className="jobs__progress">
+      <div
+        className={job.progress.indeterminate ? "jobs__bar jobs__bar--unknown" : "jobs__bar"}
+        role="progressbar"
+        aria-label={`Progress of ${job.title}`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        {...(job.progress.indeterminate
+          ? {}
+          : { "aria-valuenow": Math.round(job.progress.fraction * 100) })}
+      >
+        <span
+          className="jobs__fill"
+          style={{ width: `${String(Math.round(job.progress.fraction * 100))}%` }}
+        />
+      </div>
+
+      <span className="jobs__said">
+        {job.progress.step}
+        {left !== "" && ` · ${left}`}
+      </span>
+    </div>
+  );
+}

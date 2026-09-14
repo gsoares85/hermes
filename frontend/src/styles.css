@@ -1457,3 +1457,229 @@ body {
   background: var(--surface-raised);
   color: var(--text);
 }
+
+/*
+  The jobs panel.
+
+  It sits in the central area rather than floating over the window, because a
+  backup's log is something people read alongside what they are doing rather
+  than a message to dismiss — and because a floating panel over a tree that is
+  already scrolling is two scrolling surfaces competing for the same wheel.
+*/
+.jobs {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  /* The panel scrolls; the window does not grow. Without this a hundred
+     finished jobs push the empty state off the bottom of the screen. */
+  max-height: 45%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.jobs__head {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.jobs__title {
+  flex: 1;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.jobs__close {
+  align-items: center;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  padding: 0.25rem;
+}
+
+.jobs__close:hover {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+/* What is wrong with the history itself. Warmer than a notice, because it is
+   not about something somebody just did: it is a standing fact about the
+   session, and it stays until the application is started again. */
+.jobs__warning {
+  background: var(--warning-surface, rgba(255, 176, 32, 0.12));
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.8rem;
+  margin: 0;
+  padding: 0.85rem 0.75rem;
+}
+
+.jobs__empty,
+.jobs__notice {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin: 0;
+  padding: 0.85rem 0.75rem;
+}
+
+.jobs__list {
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  margin: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0;
+}
+
+/* The way back through what has already run. Plain, and at the foot of the
+   list where somebody arrives at the end of what is on screen. */
+.jobs__earlier {
+  align-self: center;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+}
+
+.jobs__earlier:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.jobs__job {
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
+}
+
+.jobs__row {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.jobs__kind {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.jobs__name {
+  flex: 1;
+  /* A long title shortens rather than pushing the buttons off the row: the
+     controls are what somebody came here for. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jobs__state {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.jobs__job--failed .jobs__state {
+  color: var(--production);
+}
+
+.jobs__progress {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+}
+
+.jobs__bar {
+  background: var(--surface-raised);
+  border-radius: 999px;
+  flex: 1;
+  height: 4px;
+  overflow: hidden;
+}
+
+.jobs__fill {
+  background: var(--accent);
+  display: block;
+  height: 100%;
+}
+
+/*
+  A job that cannot say how far along it is gets a bar that travels rather than
+  one that fills. Nought per cent would say the work has failed to advance,
+  which is a different and worse thing to tell somebody.
+*/
+.jobs__bar--unknown .jobs__fill {
+  animation: jobs-travel 1.4s ease-in-out infinite;
+  width: 35%;
+}
+
+@keyframes jobs-travel {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(300%);
+  }
+}
+
+/* Somebody who turned animation off is told so by the system, and a bar that
+   keeps travelling is the kind of motion the setting exists to stop. */
+@media (prefers-reduced-motion: reduce) {
+  .jobs__bar--unknown .jobs__fill {
+    animation: none;
+    width: 100%;
+    opacity: 0.35;
+  }
+}
+
+.jobs__said {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.jobs__error {
+  color: var(--production);
+  font-size: 0.75rem;
+  margin: 0;
+}
+
+.jobs__log {
+  background: var(--panel);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  margin: 0;
+  max-height: 14rem;
+  overflow: auto;
+  padding: 0.5rem 0.6rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* The count on the Jobs button: how many are working, where somebody already
+   looks for what the window is doing. */
+.workspace__count {
+  background: var(--accent);
+  border-radius: 999px;
+  color: var(--accent-text);
+  font-size: 0.68rem;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.35rem;
+}

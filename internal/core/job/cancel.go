@@ -1,0 +1,112 @@
+package job
+
+import (
+	"context"
+	"fmt"
+	"time"
+)
+
+// How long a cleanup is given before the job is closed without it.
+//
+// A cleanup removes a partial file and kills a process group, and both of
+// those can block on a filesystem or an operating system that is not
+// answering. The person pressed Stop: a button that does nothing visible while
+// something else waits for ever is the state this package exists to prevent.
+const defaultCleanupTimeout = 2 * time.Second
+
+// Cleaner is work that has something to undo when it is cancelled.
+//
+// Optional, and found by asking the Runner rather than declared beside it,
+// because what there is to undo is known by the work and by nothing else: the
+// partial file it opened, the process group it started, the backend it left
+// running on the server. A Runner that implements nothing here is work with
+// nothing to undo, which is most of it.
+//
+// It runs when the work stopped because it was cancelled, and not when the
+// work reached its own end first — a backup that finished in the moment
+// between Stop being pressed and the work noticing is a backup that exists,
+// and there is nothing partial to take back. So this is the place to undo what
+// was half done, and not the place to release what the work holds: whatever
+// has to go whether or not the job was cancelled goes in the work's own
+// deferred cleanup, which runs on every path out of it.
+//
+// The context carries the deadline. A cleanup that ignores it is a cleanup the
+// queue will stop waiting for, and the job is then reported as failed rather
+// than as cleanly cancelled — because the partial file may still be there.
+type Cleaner interface {
+	Cleanup(ctx context.Context) error
+}
+
+// Cancel asks a job to stop.
+//
+// It returns as soon as the work has been told, never when the work has
+// stopped: how long that takes is the work's business, and holding the window
+// until a subprocess notices is the thing being cancelled here in the first
+// place. Whoever needs the end waits for it.
+//
+// Cancelling a job that is already stopping, or one that has already ended, is
+// not an error. Two people pressing Stop is one cancellation, and a button
+// pressed a moment too late should not report a problem.
+func (q *Queue) Cancel(id string) error {
+	q.mu.RLock()
+	held, found := q.jobs[id]
+	q.mu.RUnlock()
+
+	if !found {
+		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+
+	// A job that never started has nothing to wind down and nothing to clean
+	// up, so it goes straight to the end. Doing it here rather than letting
+	// the work notice is what stops a backup somebody already called off from
+	// starting at all.
+	//
+	// Through finish rather than by hand, because ending a job is more than
+	// writing the state: it closes the job out and tells everybody waiting to
+	// hear about ends — and the history is written by one of those. A job that
+	// ended without anybody being told is a job nothing recorded.
+	//
+	// Only from Pending, and the reading and the ending happen together: a job
+	// read as waiting and ended a moment later is a job whose work started in
+	// between. Cancelling to Cancelled is a legal move, so asking for it
+	// unconditionally would end a job whose work is still winding down, before
+	// the cleanup that removes what it left behind has run.
+	q.endIfWaiting(held)
+
+	// Said before it is done, and that order is the whole of it. Work told to
+	// stop returns the moment it notices, and what it returns is
+	// context.Canceled; a queue that had not yet written down that it was
+	// cancelling reads that as a job that failed, reports "context canceled"
+	// as the reason, and skips the cleanup that removes what the work left
+	// behind. Somebody is told their backup failed because they pressed Stop.
+	q.moveTo(held, Cancelling)
+
+	// Outside the lock: cancelling a context runs whatever is waiting on it,
+	// and holding the queue's lock while other people's code runs is how a
+	// window stops repainting.
+	held.stop()
+
+	return nil
+}
+
+// cleanup gives the work a bounded chance to undo what it started.
+//
+// Answers the error to report, or nil when there was nothing to do or it was
+// done. A cleanup that fails, or that runs out of time, is reported: it is the
+// partial file nobody removed, and saying the job cancelled cleanly would
+// claim it is gone.
+func (q *Queue) cleanup(run Runner) error {
+	cleaner, has := run.(Cleaner)
+	if !has {
+		return nil
+	}
+
+	ctx, give := context.WithTimeout(context.Background(), q.cleanupTimeout)
+	defer give()
+
+	if err := cleaner.Cleanup(ctx); err != nil {
+		return fmt.Errorf("cleaning up after the job was cancelled: %w", err)
+	}
+
+	return nil
+}
